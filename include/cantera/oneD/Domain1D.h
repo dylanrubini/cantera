@@ -28,6 +28,7 @@ class MultiJac;
 class OneDim;
 class Refiner;
 class AnyMap;
+class Solution;
 
 /**
  * Base class for one-dimensional domains.
@@ -323,6 +324,12 @@ public:
      */
     virtual void restore(const AnyMap& state, double* soln, int loglevel);
 
+    //! Return thermo/kinetics/transport manager used in the domain
+    //! @since  New in Cantera 3.0.
+    shared_ptr<Solution> solution() const {
+        return m_solution;
+    }
+
     size_t size() const {
         return m_nv*m_points;
     }
@@ -498,6 +505,9 @@ protected:
     std::vector<std::string> m_name;
     int m_bw;
     bool m_force_full_update;
+
+    //! Composite thermo/kinetics/transport handler
+    std::shared_ptr<Solution> m_solution;
 };
 }
 

@@ -13,6 +13,18 @@ cdef class PreconditionerBase:
     def __cinit__(self, *args, **kwargs):
         self.pbase = newPreconditioner(stringify(self.precon_type))
 
+    property side:
+        """
+        Get/Set the side of the system matrix where the preconditioner is applied.
+        Options are "none", "left", "right", or "both". Not all options are supported
+        by all solver types.
+        """
+        def __get__(self):
+            return pystr(self.pbase.get().preconditionerSide())
+
+        def __set__(self, side):
+            self.pbase.get().setPreconditionerSide(stringify(side))
+
 cdef class AdaptivePreconditioner(PreconditionerBase):
     precon_type = "Adaptive"
     precon_linear_solver_type = "GMRES"
@@ -33,7 +45,7 @@ cdef class AdaptivePreconditioner(PreconditionerBase):
         Update the threshold to a desired value as:
             >>> precon.threshold = 1e-8
 
-        Default is 1e-8.
+        Default is 0.0.
         """
         def __get__(self):
             return self.preconditioner.threshold()

@@ -26,28 +26,24 @@ namespace Cantera
 class AdaptivePreconditioner : public PreconditionerBase
 {
 public:
-    AdaptivePreconditioner() {}
+    AdaptivePreconditioner();
 
-    void initialize(size_t networkSize);
+    void initialize(size_t networkSize) override;
 
-    void reset() {
+    void reset() override {
         m_precon_matrix.setZero();
         m_jac_trips.clear();
     };
 
-    void setup();
+    void setup() override;
 
-    void solve(const size_t stateSize, double* rhs_vector, double* output);
+    void solve(const size_t stateSize, double* rhs_vector, double* output) override;
 
-    PreconditionerType preconditionerType() {
-        return PreconditionerType::LEFT_PRECONDITION;
-    }
+    void setValue(size_t row, size_t col, double value) override;
 
-    void setValue(size_t row, size_t col, double value);
+    virtual void stateAdjustment(vector_fp& state) override;
 
-    virtual void stateAdjustment(vector_fp& state);
-
-    virtual void updatePreconditioner();
+    virtual void updatePreconditioner() override;
 
     //! Prune preconditioner elements
     void prunePreconditioner();
@@ -96,7 +92,7 @@ public:
     }
 
     //! Print preconditioner contents
-    void printPreconditioner();
+    void printPreconditioner() override;
 
     //! Print jacobian contents
     void printJacobian();
@@ -122,7 +118,7 @@ protected:
 
     //! Minimum value a non-diagonal element must be to be included in
     //! the preconditioner
-    double m_threshold = 1e-8;
+    double m_threshold = 0.0;
 
     //! Bool set whether to prune the matrix or not
     double m_prune_precon = true;

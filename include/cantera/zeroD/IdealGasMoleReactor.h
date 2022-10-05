@@ -26,6 +26,8 @@ public:
 
     virtual size_t componentIndex(const std::string& nm) const;
 
+    virtual std::string componentName(size_t k);
+
     virtual void setThermoMgr(ThermoPhase& thermo);
 
     virtual void getState(double* y);
@@ -36,7 +38,12 @@ public:
 
     virtual void updateState(double* y);
 
-    virtual Eigen::SparseMatrix<double> jacobian(double t, double* y);
+    //! Calculate an approximate Jacobian to accelerate preconditioned solvers
+
+    //! Neglects derivatives with respect to mole fractions that would generate a
+    //! fully-dense Jacobian. Currently, also neglects terms related to interactions
+    //! between reactors, for example via inlets and outlets.
+    virtual Eigen::SparseMatrix<double> jacobian();
 
 protected:
     vector_fp m_uk; //!< Species molar internal energies

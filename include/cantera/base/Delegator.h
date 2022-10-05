@@ -8,7 +8,9 @@
 
 #include "cantera/base/global.h"
 #include "cantera/base/ctexceptions.h"
+#include "cantera/base/ExtensionManager.h"
 #include <array>
+#include <list>
 
 namespace Cantera
 {
@@ -133,6 +135,21 @@ public:
         *m_funcs_v_d[name] = makeDelegate(func, when, *m_funcs_v_d[name]);
     }
 
+    //! set delegates for member functions with the signature
+    //! `void(AnyMap&, UnitStack&)`
+    void setDelegate(const std::string& name,
+                     const std::function<void(const AnyMap&, const UnitStack&)>& func,
+                     const std::string& when)
+    {
+        if (!m_funcs_v_cAMr_cUSr.count(name)) {
+            throw NotImplementedError("Delegator::setDelegate",
+                "for function named '{}' with signature "
+                "'void(const AnyMap&, const UnitStack&)'.",
+                name);
+        }
+        *m_funcs_v_cAMr_cUSr[name] = makeDelegate(func, when, *m_funcs_v_cAMr_cUSr[name]);
+    }
+
     //! Set delegates for member functions with the signature `void(double*)`
     void setDelegate(const std::string& name,
                      const std::function<void(std::array<size_t, 1>, double*)>& func,
@@ -189,6 +206,18 @@ public:
         *m_funcs_v_dp_dp_dp[name] = makeDelegate(func, when, *m_funcs_v_dp_dp_dp[name]);
     }
 
+    //! set delegates for member functions with the signature `double(void*)`
+    void setDelegate(const std::string& name,
+                     const std::function<int(double&, void*)>& func,
+                     const std::string& when)
+    {
+        if (!m_funcs_d_vp.count(name)) {
+            throw NotImplementedError("Delegator::setDelegate",
+                "for function named '{}' with signature 'double(void*)'.", name);
+        }
+        *m_funcs_d_vp[name] = makeDelegate(func, when, m_base_d_vp[name]);
+    }
+
     //! Set delegates for member functions with the signature `string(size_t)`
     void setDelegate(const std::string& name,
                      const std::function<int(std::string&, size_t)>& func,
@@ -215,6 +244,10 @@ public:
         *m_funcs_sz_csr[name] = makeDelegate(func, when, m_base_sz_csr[name]);
     }
 
+    void holdExternalHandle(const shared_ptr<ExternalHandle>& handle) {
+        m_handles.push_back(handle);
+    }
+
 protected:
     //! Install a function with the signature `void()` as being delegatable
     void install(const std::string& name, std::function<void()>& target,
@@ -239,6 +272,18 @@ protected:
         target = func;
         m_funcs_v_d[name] = &target;
     }
+
+    //! Install a function with the signature `void(const AnyMap&, const UnitStack&)`
+    //! as being delegatable
+    void install(const std::string& name,
+                 std::function<void(const AnyMap&, const UnitStack&)>& target,
+                 const std::function<void(const AnyMap&, const UnitStack&)>& func)
+    {
+        target = func;
+        m_funcs_v_cAMr_cUSr[name] = &target;
+    }
+
+
 
     //! Install a function with the signature `void(double*)` as being delegatable
     void install(const std::string& name,
@@ -276,6 +321,14 @@ protected:
     {
         target = base;
         m_funcs_v_dp_dp_dp[name] = &target;
+    }
+
+    //! Install a function with the signature `double(void*)` as being delegatable
+    void install(const std::string& name, std::function<double(void*)>& target,
+                 const std::function<double(void*)>& func)
+    {
+        target = func;
+        m_funcs_d_vp[name] = &target;
     }
 
     //! Install a function with the signature `string(size_t)` as being delegatable
@@ -394,6 +447,8 @@ protected:
     //! - `d` for `double`
     //! - `s` for `std::string`
     //! - `sz` for `size_t`
+    //! - `AM` for `AnyMap`
+    //! - `US` for `UnitStack`
     //! - prefix `c` for `const` arguments
     //! - suffix `r` for reference arguments
     //! - suffix `p` for pointer arguments
@@ -404,6 +459,8 @@ protected:
     std::map<std::string, std::function<void(bool)>*> m_funcs_v_b;
     std::map<std::string, std::function<void(double)>*> m_funcs_v_d;
     std::map<std::string,
+        std::function<void(const AnyMap&, const UnitStack&)>*> m_funcs_v_cAMr_cUSr;
+    std::map<std::string,
         std::function<void(std::array<size_t, 1>, double*)>*> m_funcs_v_dp;
     std::map<std::string,
         std::function<void(std::array<size_t, 1>, double, double*)>*> m_funcs_v_d_dp;
@@ -413,6 +470,9 @@ protected:
         std::function<void(std::array<size_t, 3>, double*, double*, double*)>*> m_funcs_v_dp_dp_dp;
 
     // Delegates with a return value
+    std::map<std::string, std::function<double(void*)>> m_base_d_vp;
+    std::map<std::string, std::function<double(void*)>*> m_funcs_d_vp;
+
     std::map<std::string,
         std::function<std::string(size_t)>> m_base_s_sz;
     std::map<std::string,
@@ -423,6 +483,9 @@ protected:
     std::map<std::string,
         std::function<size_t(const std::string&)>*> m_funcs_sz_csr;
     //! @}
+
+    //! Cleanup functions to be called from the destructor
+    std::list<shared_ptr<ExternalHandle>> m_handles;
 };
 
 }

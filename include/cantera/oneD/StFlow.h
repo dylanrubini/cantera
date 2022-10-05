@@ -8,6 +8,7 @@
 
 #include "Domain1D.h"
 #include "cantera/base/Array.h"
+#include "cantera/base/Solution.h"
 #include "cantera/thermo/IdealGasPhase.h"
 #include "cantera/kinetics/Kinetics.h"
 
@@ -18,13 +19,16 @@ namespace Cantera
 //   constants
 //------------------------------------------
 
-// Offsets of solution components in the solution array.
-const size_t c_offset_U = 0; // axial velocity
-const size_t c_offset_V = 1; // strain rate
-const size_t c_offset_T = 2; // temperature
-const size_t c_offset_L = 3; // (1/r)dP/dr
-const size_t c_offset_E = 4; // electric poisson's equation
-const size_t c_offset_Y = 5; // mass fractions
+//! Offsets of solution components in the 1D solution array.
+enum offset
+{
+    c_offset_U   //! axial velocity
+    , c_offset_V //! strain rate
+    , c_offset_T //! temperature
+    , c_offset_L //! (1/r)dP/dr
+    , c_offset_E //! electric poisson's equation
+    , c_offset_Y //! mass fractions
+};
 
 class Transport;
 
@@ -52,6 +56,8 @@ public:
         StFlow(th.get(), nsp, points) {
     }
 
+    StFlow(shared_ptr<Solution> sol, size_t nsp = 1, size_t points = 1);
+
     //! @name Problem Specification
     //! @{
 
@@ -59,10 +65,10 @@ public:
 
     virtual void resetBadValues(double* xg);
 
-
     ThermoPhase& phase() {
         return *m_thermo;
     }
+
     Kinetics& kinetics() {
         return *m_kin;
     }
@@ -70,18 +76,26 @@ public:
     /**
      * Set the thermo manager. Note that the flow equations assume
      * the ideal gas equation.
+     *
+     * @deprecated  To be removed after Cantera 3.0 (unused)
      */
-    void setThermo(IdealGasPhase& th) {
-        m_thermo = &th;
-    }
+    void setThermo(IdealGasPhase& th);
 
     //! Set the kinetics manager. The kinetics manager must
     void setKinetics(Kinetics& kin) {
         m_kin = &kin;
     }
 
-    //! set the transport manager
+    //! Set transport model to existing instance
     void setTransport(Transport& trans);
+
+    //! Set the transport model
+    //! @since  New in Cantera 3.0.
+    void setTransportModel(const std::string& trans);
+
+    //! Retrieve transport model
+    //! @since  New in Cantera 3.0.
+    std::string transportModel() const;
 
     //! Enable thermal diffusion, also known as Soret diffusion.
     //! Requires that multicomponent transport properties be
@@ -426,6 +440,11 @@ protected:
     IdealGasPhase* m_thermo;
     Kinetics* m_kin;
     Transport* m_trans;
+
+    // Smart pointer preventing garbage collection when the transport model of an
+    // associated Solution object changes: the transport model of the StFlow object
+    // will remain unaffected by an external change.
+    std::shared_ptr<Transport> m_trans_shared;
 
     // boundary emissivities for the radiation calculations
     doublereal m_epsilon_left;

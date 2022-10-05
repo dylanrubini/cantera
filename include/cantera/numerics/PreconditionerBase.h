@@ -16,10 +16,10 @@ namespace Cantera
 {
 
 /**
- * Specifies the preconditioner type used in the integration if any. Not all methods are
- * supported by all integrators.
+ * Specifies the side of the system on which the preconditioner is applied. Not all
+ * methods are supported by all integrators.
  */
-enum class PreconditionerType {
+enum class PreconditionerSide {
     NO_PRECONDITION, //! No preconditioning
     LEFT_PRECONDITION, //! Left side preconditioning
     RIGHT_PRECONDITION, //! Right side preconditioning
@@ -31,6 +31,8 @@ class PreconditionerBase
 {
 public:
     PreconditionerBase() {}
+
+    virtual ~PreconditionerBase() {}
 
     //! Set a value at the specified row and column of the jacobian triplet vector
     //! @param row row in the jacobian matrix
@@ -48,10 +50,14 @@ public:
         throw NotImplementedError("PreconditionerBase::stateAdjustment");
     }
 
-    //! Get preconditioner type for CVODES
-    virtual PreconditionerType preconditionerType() {
-        return PreconditionerType::NO_PRECONDITION;
-    };
+    //! Get preconditioner application side for CVODES
+    std::string preconditionerSide() const {
+        return m_precon_side;
+    }
+
+    virtual void setPreconditionerSide(const std::string& preconSide) {
+        m_precon_side = preconSide;
+    }
 
     //! Solve a linear system Ax=b where A is the preconditioner
     //! @param[in] stateSize length of the rhs and output vectors
@@ -119,6 +125,7 @@ protected:
     //! Absolute tolerance of the ODE solver
     double m_atol = 0;
 
+    std::string m_precon_side = "none";
 };
 
 }

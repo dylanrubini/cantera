@@ -212,12 +212,11 @@ class FlameBase(Sim1D):
         Get/Set the transport model used by the `Solution` object used for this
         simulation.
         """
-        return self.gas.transport_model
+        return self.flame.transport_model
 
     @transport_model.setter
     def transport_model(self, model):
-        self.gas.transport_model = model
-        self.flame.set_transport(self.gas)
+        self.flame.transport_model = model
 
     @property
     def energy_enabled(self):
@@ -563,7 +562,7 @@ class FlameBase(Sim1D):
         `SolutionArray.write_hdf` via `to_solution_array` and requires a working
         installation of *h5py* (``h5py`` can be installed using pip or conda).
         """
-        cols = ('extra', 'T', 'D', species)
+        cols = ('extra', 'T', 'P', species)
         meta = self.settings
         meta['date'] = formatdate(localtime=True)
         meta['cantera_version'] = __version__
@@ -711,7 +710,8 @@ for _attr in ['density', 'density_mass', 'density_mole', 'volume_mass',
               'entropy_mass', 'g', 'gibbs_mole', 'gibbs_mass', 'cv',
               'cv_mole', 'cv_mass', 'cp', 'cp_mole', 'cp_mass',
               'isothermal_compressibility', 'thermal_expansion_coeff',
-              'viscosity', 'thermal_conductivity', 'heat_release_rate']:
+              'viscosity', 'thermal_conductivity', 'heat_release_rate',
+              'mean_molecular_weight']:
     setattr(FlameBase, _attr, _array_property(_attr))
 FlameBase.volume = _array_property('v') # avoid confusion with velocity gradient 'V'
 FlameBase.int_energy = _array_property('u') # avoid collision with velocity 'u'
@@ -723,8 +723,13 @@ for _attr in ['X', 'Y', 'concentrations', 'partial_molar_enthalpies',
               'partial_molar_volumes', 'standard_enthalpies_RT',
               'standard_entropies_R', 'standard_int_energies_RT',
               'standard_gibbs_RT', 'standard_cp_R', 'creation_rates',
-              'destruction_rates', 'net_production_rates', 'mix_diff_coeffs',
-              'mix_diff_coeffs_mass', 'mix_diff_coeffs_mole', 'thermal_diff_coeffs']:
+              'destruction_rates', 'net_production_rates', 'creation_rates_ddC',
+              'creation_rates_ddP', 'creation_rates_ddT', 'destruction_rates_ddC',
+              'destruction_rates_ddP', 'destruction_rates_ddT',
+              'net_production_rates_ddC', 'net_production_rates_ddP',
+              'net_production_rates_ddT', 'mix_diff_coeffs', 'mix_diff_coeffs_mass',
+              'mix_diff_coeffs_mole', 'thermal_diff_coeffs', 'activities',
+              'activity_coefficients', 'mobilities', 'species_viscosities']:
     setattr(FlameBase, _attr, _array_property(_attr, 'n_species'))
 
 # Remove misleading examples and references to setters that don't exist
@@ -738,7 +743,14 @@ for _attr in ['forward_rates_of_progress', 'reverse_rates_of_progress', 'net_rat
               'equilibrium_constants', 'forward_rate_constants', 'reverse_rate_constants',
               'delta_enthalpy', 'delta_gibbs', 'delta_entropy',
               'delta_standard_enthalpy', 'delta_standard_gibbs',
-              'delta_standard_entropy', 'heat_production_rates']:
+              'delta_standard_entropy', 'heat_production_rates',
+              'third_body_concentrations', 'forward_rate_constants_ddC',
+              'forward_rate_constants_ddP', 'forward_rate_constants_ddT',
+              'forward_rates_of_progress_ddC', 'forward_rates_of_progress_ddP',
+              'forward_rates_of_progress_ddT', 'net_rates_of_progress_ddC',
+              'net_rates_of_progress_ddP', 'net_rates_of_progress_ddT',
+              'reverse_rates_of_progress_ddC', 'reverse_rates_of_progress_ddP',
+              'reverse_rates_of_progress_ddT']:
     setattr(FlameBase, _attr, _array_property(_attr, 'n_reactions'))
 
 
@@ -1436,6 +1448,18 @@ class CounterflowDiffusionFlame(FlameBase):
             vals[i] = self.gas.mixture_fraction(Yf, Yo, 'mass', m)
         return vals
 
+    @property
+    def equivalence_ratio(self):
+        Yf = [self.solution(k, 0) for k in self.gas.species_names]
+        Yo = [self.solution(k, self.flame.n_points-1) for k in self.gas.species_names]
+
+        vals = np.empty(self.flame.n_points)
+        for i in range(self.flame.n_points):
+            self.set_gas_state(i)
+            vals[i] = self.gas.equivalence_ratio(Yf, Yo, "mass")
+        return vals
+
+
 class ImpingingJet(FlameBase):
     """An axisymmetric flow impinging on a surface at normal incidence."""
     __slots__ = ('inlet', 'flame', 'surface')
@@ -1478,8 +1502,7 @@ class ImpingingJet(FlameBase):
             self.surface = Surface1D(name='surface', phase=gas)
             self.surface.T = gas.T
         else:
-            self.surface = ReactingSurface1D(name='surface', phase=gas)
-            self.surface.set_kinetics(surface)
+            self.surface = ReactingSurface1D(name='surface', phase=surface)
             self.surface.T = surface.T
 
         super().__init__((self.inlet, self.flame, self.surface), gas, grid)

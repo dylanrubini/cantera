@@ -6,6 +6,7 @@
 #include "application.h"
 #include "cantera/base/ctexceptions.h"
 #include "cantera/base/stringUtils.h"
+#include "cantera/base/ExtensionManagerFactory.h"
 
 #include <fstream>
 #include <sstream>
@@ -257,7 +258,7 @@ void Application::setDefaultDirectories()
         string s = string(getenv("CANTERA_DATA"));
         size_t start = 0;
         size_t end = s.find(pathsep);
-        while(end != npos) {
+        while (end != npos) {
             inputDirs.push_back(s.substr(start, end-start));
             start = end + 1;
             end = s.find(pathsep, start);
@@ -297,7 +298,7 @@ void Application::setDefaultDirectories()
     // build process (unix), and points to the directory specified by the
     // 'prefix' option to 'configure', or else to /usr/local/cantera.
 #ifdef CANTERA_DATA
-    string datadir = string(CANTERA_DATA);
+    string datadir = stripnonprint(string(CANTERA_DATA));
     inputDirs.push_back(datadir);
 #endif
 }
@@ -394,6 +395,16 @@ std::string Application::findInputFile(const std::string& name)
     msg += "    b) define environment variable CANTERA_DATA to\n";
     msg += "         point to the directory containing the file.";
     throw CanteraError("Application::findInputFile", msg);
+}
+
+void Application::loadExtension(const string& extType, const string& name)
+{
+    if (m_loaded_extensions.count({extType, name})) {
+        return;
+    }
+    auto manager = ExtensionManagerFactory::build(extType);
+    manager->registerRateBuilders(name);
+    m_loaded_extensions.insert({extType, name});
 }
 
 Application* Application::s_app = 0;

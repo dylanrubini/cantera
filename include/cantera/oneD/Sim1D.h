@@ -96,17 +96,55 @@ public:
 
     //! @}
 
+    //! @name Logging, saving and restoring of solutions
+    //!
+    //! @{
+
+    /**
+     * Output information on current solution for all domains to stream.
+     * @param s  Output stream
+     */
+    void showSolution(std::ostream& s);
+
+    /**
+     * Show logging information on current solution for all domains.
+     */
+    void showSolution();
+
+    /**
+     * Save the current solution to a container file.
+     * @param fname  Name of output container file
+     * @param id  Identifier of solution within the container file
+     * @param desc  Description of the solution
+     * @param loglevel  Level of diagnostic output
+     */
     void save(const std::string& fname, const std::string& id,
               const std::string& desc, int loglevel=1);
 
+    /**
+     * Save the residual of the current solution to a container file.
+     * @param fname  Name of output container file
+     * @param id  Identifier of solution within the container file
+     * @param desc  Description of the solution
+     * @param loglevel  Level of diagnostic output
+     */
     void saveResidual(const std::string& fname, const std::string& id,
                       const std::string& desc, int loglevel=1);
 
-    //! Print to stream s the current solution for all domains.
-    void showSolution(std::ostream& s);
-    void showSolution();
+    /**
+     * Initialize the solution with a previously-saved solution.
+     * @param fname  Name of container file
+     * @param id  Identifier of solution within the container file
+     * @param loglevel  Level of diagnostic output
+     */
+    void restore(const std::string& fname, const std::string& id, int loglevel=2);
 
+    //! @}
+
+    // @deprecated  To be removed after Cantera 3.0 (unused)
     const doublereal* solution() {
+        warn_deprecated("Sim1D::solution",
+            "This method is unused and will be removed after Cantera 3.0.");
         return m_x.data();
     }
 
@@ -173,9 +211,6 @@ public:
      */
     void setGridMin(int dom, double gridmin);
 
-    //! Initialize the solution with a previously-saved solution.
-    void restore(const std::string& fname, const std::string& id, int loglevel=2);
-
     //! Set the current solution vector to the last successful time-stepping
     //! solution. This can be used to examine the solver progress after a failed
     //! integration.
@@ -188,11 +223,17 @@ public:
 
     void getInitialSoln();
 
+    // @deprecated  To be removed after Cantera 3.0 (unused)
     void setSolution(const doublereal* soln) {
+        warn_deprecated("Sim1D::setSolution",
+            "This method is unused and will be removed after Cantera 3.0.");
         std::copy(soln, soln + m_x.size(), m_x.data());
     }
 
+    // @deprecated  To be removed after Cantera 3.0 (unused)
     const doublereal* solution() const {
+        warn_deprecated("Sim1D::solution",
+            "This method is unused and will be removed after Cantera 3.0.");
         return m_x.data();
     }
 

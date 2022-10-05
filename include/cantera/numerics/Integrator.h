@@ -112,21 +112,24 @@ public:
         warn("setLinearSolverType");
     }
 
-    //! Set the preconditioner type.
-    /*!
-     * @param prectype    Type of the problem
-     */
-    virtual void setPreconditionerType(PreconditionerType prectype) {
-        warn("setPreconditionerType");
-    }
-
     //! Set preconditioner used by the linear solver
     /*!
      * @param preconditioner preconditioner object used for the linear solver
      */
     virtual void setPreconditioner(shared_ptr<PreconditionerBase> preconditioner) {
         m_preconditioner = preconditioner;
-        m_prec_type = m_preconditioner->preconditionerType();
+        if (preconditioner->preconditionerSide() == "none") {
+            m_prec_side = PreconditionerSide::NO_PRECONDITION;
+        } else if (preconditioner->preconditionerSide() == "left") {
+            m_prec_side = PreconditionerSide::LEFT_PRECONDITION;
+        } else if (preconditioner->preconditionerSide() == "right") {
+            m_prec_side = PreconditionerSide::RIGHT_PRECONDITION;
+        } else if (preconditioner->preconditionerSide() == "both") {
+            m_prec_side = PreconditionerSide::BOTH_PRECONDITION;
+        } else {
+            throw CanteraError("Integrator::setPreconditioner",
+                "Invalid option '{}'", preconditioner->preconditionerSide());
+        }
     }
 
     //! Solve a linear system Ax=b where A is the preconditioner
@@ -139,9 +142,9 @@ public:
         m_preconditioner->solve(stateSize, rhs, output);
     }
 
-    //! Return the preconditioner type
-    virtual PreconditionerType preconditionerType() {
-        return m_prec_type;
+    //! Return the side of the system on which the preconditioner is applied
+    virtual PreconditionerSide preconditionerSide() {
+        return m_prec_side;
     }
 
     //! Return preconditioner reference to object
@@ -278,17 +281,10 @@ public:
         return 0.0;
     }
 
-    //! Get nonlinear solver stats from integrator
-    virtual AnyMap nonlinearSolverStats() const {
+    //! Get solver stats from integrator
+    virtual AnyMap solverStats() const {
         AnyMap stats;
-        warn("nonlinearSolverStats");
-        return stats;
-    }
-
-    //! Get linear solver stats from integrator
-    virtual AnyMap linearSolverStats() const {
-        AnyMap stats;
-        warn("linearSolverStats");
+        warn("solverStats");
         return stats;
     }
 
@@ -298,7 +294,7 @@ protected:
     //! ReactorNet::initialize()
     shared_ptr<PreconditionerBase> m_preconditioner;
     //! Type of preconditioning used in applyOptions
-    PreconditionerType m_prec_type = PreconditionerType::NO_PRECONDITION;
+    PreconditionerSide m_prec_side = PreconditionerSide::NO_PRECONDITION;
 
 private:
     doublereal m_dummy;

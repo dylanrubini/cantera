@@ -115,7 +115,7 @@ void ReactorNet::initialize()
         writelog("Maximum time step:   {:14.6g}\n", m_maxstep);
     }
     m_integ->initialize(m_time, *this);
-    if (m_integ->preconditionerType() != PreconditionerType::NO_PRECONDITION) {
+    if (m_integ->preconditionerSide() != PreconditionerSide::NO_PRECONDITION) {
         checkPreconditionerSupported();
     }
     m_integrator_init = true;
@@ -127,7 +127,7 @@ void ReactorNet::reinitialize()
     if (m_init) {
         debuglog("Re-initializing reactor network.\n", m_verbose);
         m_integ->reinitialize(m_time, *this);
-        if (m_integ->preconditionerType() != PreconditionerType::NO_PRECONDITION) {
+        if (m_integ->preconditionerSide() != PreconditionerSide::NO_PRECONDITION) {
             checkPreconditionerSupported();
         }
         m_integrator_init = true;
@@ -424,14 +424,9 @@ void ReactorNet::setDerivativeSettings(AnyMap& settings)
     }
 }
 
-AnyMap ReactorNet::nonlinearSolverStats() const
+AnyMap ReactorNet::solverStats() const
 {
-    return m_integ->nonlinearSolverStats();
-}
-
-AnyMap ReactorNet::linearSolverStats() const
-{
-    return m_integ->linearSolverStats();
+    return m_integ->solverStats();
 }
 
 std::string ReactorNet::linearSolverType() const
@@ -464,7 +459,7 @@ void ReactorNet::preconditionerSetup(double t, double* y, double gamma)
     updateState(yCopy.data());
     // Get jacobians and give elements to preconditioners
     for (size_t i = 0; i < m_reactors.size(); i++) {
-        Eigen::SparseMatrix<double> rJac = m_reactors[i]->jacobian(t, y + m_start[i]);
+        Eigen::SparseMatrix<double> rJac = m_reactors[i]->jacobian();
         for (int k=0; k<rJac.outerSize(); ++k) {
             for (Eigen::SparseMatrix<double>::InnerIterator it(rJac, k); it; ++it) {
                 precon->setValue(it.row() + m_start[i], it.col() + m_start[i],
