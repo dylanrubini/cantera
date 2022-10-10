@@ -1,3 +1,5 @@
+#!/bin/sh
+
 conda activate ct-build-openblas
 # conda activate ct-build-parallel-mkl
 
