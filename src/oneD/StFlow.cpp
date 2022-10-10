@@ -55,6 +55,9 @@ StFlow::StFlow(ThermoPhase* ph, size_t nsp, size_t points) :
     // make a local copy of the species molecular weight vector
     m_wt = m_thermo->molecularWeights();
 
+    // set pressure based on associated thermo object
+    setPressure(m_thermo->pressure());
+
     // the species mass fractions are the last components in the solution
     // vector, so the total number of components is the number of species
     // plus the offset of the first mass fraction.
@@ -101,6 +104,28 @@ StFlow::StFlow(ThermoPhase* ph, size_t nsp, size_t points) :
     m_kRadiating.resize(2, npos);
     m_kRadiating[0] = m_thermo->speciesIndex("CO2");
     m_kRadiating[1] = m_thermo->speciesIndex("H2O");
+}
+
+StFlow::StFlow(std::shared_ptr<Solution> sol, size_t nsp, size_t points) :
+    StFlow(sol->thermo().get(), nsp, points)
+{
+    m_solution = sol;
+    m_kin = m_solution->kinetics().get();
+    m_trans_shared = m_solution->transport();
+    m_trans = m_trans_shared.get();
+    if (m_trans->transportModel() == "None") {
+        // @deprecated
+        warn_deprecated("StFlow",
+            "An appropriate transport model\nshould be set when instantiating the "
+            "Solution ('gas') object.\nImplicit setting of the transport model "
+            "is deprecated and\nwill be removed after Cantera 3.0.");
+        setTransportModel("Mix");
+    }
+}
+
+void StFlow::setThermo(IdealGasPhase& th) {
+    warn_deprecated("StFlow::setThermo", "To be removed after Cantera 3.0.");
+    m_thermo = &th;
 }
 
 void StFlow::resize(size_t ncomponents, size_t points)
@@ -152,10 +177,31 @@ void StFlow::resetBadValues(double* xg)
     }
 }
 
+void StFlow::setTransportModel(const std::string& trans)
+{
+    if (!m_solution) {
+        throw CanteraError("StFlow::setTransportModel",
+            "Unable to set Transport manager by name as object was not initialized\n"
+            "from a Solution manager: set Transport object directly instead.");
+    }
+    m_solution->setTransportModel(trans);
+    m_trans_shared = m_solution->transport();
+    m_trans = m_trans_shared.get();
+    setTransport(*m_trans);
+}
+
+std::string StFlow::transportModel() const {
+    return m_trans->transportModel();
+}
+
 void StFlow::setTransport(Transport& trans)
 {
     m_trans = &trans;
-    m_do_multicomponent = (m_trans->transportType() == "Multi" || m_trans->transportType() == "CK_Multi");
+    if (m_trans->transportModel() == "None") {
+        throw CanteraError("StFlow::setTransport",
+            "Invalid Transport model 'None'.");
+    }
+    m_do_multicomponent = (m_trans->transportModel() == "Multi" || m_trans->transportModel() == "CK_Multi");
 
     m_diff.resize(m_nsp*m_points);
     if (m_do_multicomponent) {
@@ -638,6 +684,7 @@ AnyMap StFlow::serialize(const double* soln) const
     AnyMap state = Domain1D::serialize(soln);
     state["type"] = flowType();
     state["pressure"] = m_press;
+    state["transport-model"] = m_trans->transportModel();
 
     state["phase"]["name"] = m_thermo->name();
     AnyValue source = m_thermo->input().getMetadata("filename");
@@ -725,6 +772,8 @@ void StFlow::restore(const AnyMap& state, double* soln, int loglevel)
             m_do_energy = ee.asVector<bool>(nPoints());
         }
     }
+
+    setTransportModel(state.getString("transport-model", "Mix"));
 
     if (state.hasKey("Soret-enabled")) {
         m_do_soret = state["Soret-enabled"].asBool();

@@ -157,13 +157,24 @@ public:
     void setAdvanceLimit(const std::string& nm, const double limit);
 
     //! Method to calculate the reactor specific jacobian
-    //! @param t current time of the simulation
-    //! @param y pointer to state vector
+    //! @warning Depending on the particular implementation, this may return an
+    //! approximate Jacobian intended only for use in forming a preconditioner for
+    //! iterative solvers.
+    //!
     //! @warning  This method is an experimental part of the %Cantera
     //! API and may be changed or removed without notice.
-    virtual Eigen::SparseMatrix<double> jacobian(double t, double* y) {
+    virtual Eigen::SparseMatrix<double> jacobian() {
         throw NotImplementedError("Reactor::jacobian");
     }
+
+    //! Calculate the reactor-specific Jacobian using a finite difference method.
+    //!
+    //! This method is used only for informational purposes. Jacobian calculations
+    //! for the full reactor system are handled internally by CVODES.
+    //!
+    //! @warning  This method is an experimental part of the %Cantera
+    //! API and may be changed or removed without notice.
+    Eigen::SparseMatrix<double> finiteDifferenceJacobian();
 
     //! Use this to set the kinetics objects derivative settings
     virtual void setDerivativeSettings(AnyMap& settings);

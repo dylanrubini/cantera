@@ -45,13 +45,8 @@ void IdealGasMoleReactor::getState(double* y)
     // set the second component to the volume
     y[1] = m_vol;
 
-    // use inverse molecular weights
-    const double* Y = m_thermo->massFractions();
-    const vector_fp& imw = m_thermo->inverseMolecularWeights();
-    double* ys = y + m_sidx;
-    for (size_t i = 0; i < m_nsp; i++) {
-        ys[i] = m_mass * imw[i] * Y[i];
-    }
+    // get moles of species in remaining state
+    getMoles(y + m_sidx);
     // set the remaining components to the surface species moles on
     // the walls
     getSurfaceInitialConditions(y + m_nsp + m_sidx);
@@ -71,6 +66,15 @@ size_t IdealGasMoleReactor::componentIndex(const string& nm) const
     }
 }
 
+std::string IdealGasMoleReactor::componentName(size_t k)
+{
+    if (k == 0) {
+        return "temperature";
+    } else {
+        return MoleReactor::componentName(k);
+    }
+}
+
 void IdealGasMoleReactor::initialize(double t0)
 {
     MoleReactor::initialize(t0);
@@ -82,12 +86,7 @@ void IdealGasMoleReactor::updateState(double* y)
     // the components of y are: [0] the temperature, [1] the volume, [2...K+1) are the
     // moles of each species, and [K+1...] are the moles of surface
     // species on each wall.
-    const vector_fp& mw = m_thermo->molecularWeights();
-    // calculate mass from moles
-    m_mass = 0;
-    for (size_t i = 0; i < m_nv - m_sidx; i++) {
-        m_mass += y[i + m_sidx] * mw[i];
-    }
+    setMassFromMoles(y + m_sidx);
     m_vol = y[1];
     // set state
     m_thermo->setMolesNoTruncate(y + m_sidx);
@@ -156,46 +155,55 @@ void IdealGasMoleReactor::eval(double time, double* LHS, double* RHS)
     }
 }
 
-Eigen::SparseMatrix<double> IdealGasMoleReactor::jacobian(double t, double* y)
+Eigen::SparseMatrix<double> IdealGasMoleReactor::jacobian()
 {
+    if (m_nv == 0) {
+        throw CanteraError("IdealGasMoleReactor::jacobian",
+                           "Reactor must be initialized first.");
+    }
     // clear former jacobian elements
     m_jac_trips.clear();
     // Determine Species Derivatives
-    // get ROP derivatives
-    double scalingFactor = m_vol/accumulate(y + m_sidx, y + m_nv, 0.0);
+    // get ROP derivatives, excluding the term molarVolume * sum_k(X_k * dwdot_j/dX_j)
+    // which is small and would completely destroy the sparsity of the Jacobian
+    double scalingFactor = m_thermo->molarVolume();
     Eigen::SparseMatrix<double> speciesDervs = scalingFactor *
         m_kin->netProductionRates_ddX();
     // add to preconditioner
     for (int k=0; k<speciesDervs.outerSize(); ++k) {
         for (Eigen::SparseMatrix<double>::InnerIterator it(speciesDervs, k); it; ++it) {
-            m_jac_trips.emplace_back(it.row() + m_sidx, it.col() + m_sidx, it.value());
+            m_jac_trips.emplace_back(
+                static_cast<int>(it.row() + m_sidx),
+                static_cast<int>(it.col() + m_sidx),
+                it.value());
         }
     }
     // Temperature Derivatives
     if (m_energy) {
         // getting perturbed state for finite difference
-        double deltaTemp = y[0] * std::sqrt(std::numeric_limits<double>::epsilon());
+        double deltaTemp = m_thermo->temperature()
+            * std::sqrt(std::numeric_limits<double>::epsilon());
         // finite difference temperature derivatives
-        vector_fp yNext(m_nv);
-        vector_fp ydotNext(m_nv);
+        vector_fp lhsPerturbed(m_nv, 1.0), lhsCurrent(m_nv, 1.0);
+        vector_fp rhsPerturbed(m_nv, 0.0), rhsCurrent(m_nv, 0.0);
         vector_fp yCurrent(m_nv);
-        vector_fp ydotCurrent(m_nv);
-        // copy y to current and next
-        copy(y, y + m_nv, yCurrent.begin());
-        copy(y, y + m_nv, yNext.begin());
+        getState(yCurrent.data());
+        vector_fp yPerturbed = yCurrent;
         // perturb temperature
-        yNext[0] += deltaTemp;
+        yPerturbed[0] += deltaTemp;
         // getting perturbed state
-        updateState(yNext.data());
-        eval(t, yNext.data(), ydotNext.data());
+        updateState(yPerturbed.data());
+        double time = (m_net != nullptr) ? m_net->time() : 0.0;
+        eval(time, lhsPerturbed.data(), rhsPerturbed.data());
         // reset and get original state
         updateState(yCurrent.data());
-        eval(t, yCurrent.data(), ydotCurrent.data());
-        // d T_dot/dT
-        m_jac_trips.emplace_back(0, 0, (ydotNext[0] - ydotCurrent[0]) / deltaTemp);
-        // d omega_dot_j/dT
-        for (size_t j = m_sidx; j < m_nv; j++) {
-            m_jac_trips.emplace_back(j, 0, (ydotNext[j] - ydotCurrent[j]) / deltaTemp);
+        eval(time, lhsCurrent.data(), rhsCurrent.data());
+        // d ydot_j/dT
+        for (size_t j = 0; j < m_nv; j++) {
+            double ydotPerturbed = rhsPerturbed[j] / lhsPerturbed[j];
+            double ydotCurrent = rhsCurrent[j] / lhsCurrent[j];
+            m_jac_trips.emplace_back(static_cast<int>(j), 0,
+                                     (ydotPerturbed - ydotCurrent) / deltaTemp);
         }
         // find derivatives d T_dot/dNj
         vector_fp specificHeat(m_nsp);
@@ -212,12 +220,17 @@ Eigen::SparseMatrix<double> IdealGasMoleReactor::jacobian(double t, double* y)
         for (size_t i = 0; i < specificHeat.size(); i++) {
             specificHeat[i] -= GasConstant;
         }
+        Eigen::VectorXd dwdot_dC(m_nsp);
+        m_kin->getNetProductionRates_ddC(dwdot_dC.data());
         // finding a sum inside the derivative
         double uknkSum = 0;
-        double NtotalCv = accumulate(y + m_sidx, y + m_nv, 0.0) * m_thermo->cv_mole();
+        double totalCv = m_mass * m_thermo->cv_mass();
+        double ukdwdCtotSum = 0;
         for (size_t i = 0; i < m_nsp; i++) {
             uknkSum += internal_energy[i] * netProductionRates[i];
+            ukdwdCtotSum += internal_energy[i] * dwdot_dC[i];
         }
+
         // finding derivatives
         // spans columns
         for (size_t j = 0; j < m_nsp; j++) {
@@ -227,8 +240,8 @@ Eigen::SparseMatrix<double> IdealGasMoleReactor::jacobian(double t, double* y)
                 ukdnkdnjSum += internal_energy[k] * speciesDervs.coeff(k, j);
             }
             // set appropriate column of preconditioner
-            m_jac_trips.emplace_back(0, j + m_sidx, (-ukdnkdnjSum * NtotalCv +
-                specificHeat[j] *  uknkSum) / (NtotalCv * NtotalCv));
+            m_jac_trips.emplace_back(0, static_cast<int>(j + m_sidx),
+                (ukdwdCtotSum - ukdnkdnjSum + specificHeat[j] * uknkSum / totalCv) / totalCv);
         }
     }
     Eigen::SparseMatrix<double> jac(m_nv, m_nv);

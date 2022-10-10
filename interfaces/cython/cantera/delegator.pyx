@@ -5,7 +5,10 @@ import inspect
 import sys
 
 from ._utils import CanteraError
-from ._utils cimport stringify, pystr
+from ._utils cimport stringify, pystr, anymap_to_dict
+from .units cimport Units
+from .reaction import ExtensibleRate
+from cython.operator import dereference as deref
 
 # ## Implementation for each delegated function type
 #
@@ -101,6 +104,19 @@ cdef void callback_v_b(PyFuncInfo& funcInfo, cbool arg):
         funcInfo.setExceptionType(<PyObject*>exc_type)
         funcInfo.setExceptionValue(<PyObject*>exc_value)
 
+# Wrapper for functions of type void(const AnyMap&, const UnitStack&)
+cdef void callback_v_cAMr_cUSr(PyFuncInfo& funcInfo, const CxxAnyMap& arg1,
+                               const CxxUnitStack& arg2):
+
+    pyArg1 = anymap_to_dict(<CxxAnyMap&>arg1)  # cast away constness
+    pyArg2 = Units.copy(arg2.product())
+    try:
+        (<object>funcInfo.func())(pyArg1, pyArg2)
+    except BaseException as e:
+        exc_type, exc_value = sys.exc_info()[:2]
+        funcInfo.setExceptionType(<PyObject*>exc_type)
+        funcInfo.setExceptionValue(<PyObject*>exc_value)
+
 # Wrapper for functions of type void(double*)
 cdef void callback_v_dp(PyFuncInfo& funcInfo, size_array1 sizes, double* arg):
     cdef double[:] view = <double[:sizes[0]]>arg if sizes[0] else None
@@ -137,6 +153,21 @@ cdef void callback_v_dp_dp_dp(PyFuncInfo& funcInfo,
         exc_type, exc_value = sys.exc_info()[:2]
         funcInfo.setExceptionType(<PyObject*>exc_type)
         funcInfo.setExceptionValue(<PyObject*>exc_value)
+
+# Wrapper for functions of type double(void*)
+cdef int callback_d_vp(PyFuncInfo& funcInfo, double& out, void* obj):
+    try:
+        ret = (<object>funcInfo.func())(deref(<double*>obj))
+        if ret is None:
+            return 0
+        else:
+            (&out)[0] = ret
+            return 1
+    except BaseException as e:
+        exc_type, exc_value = sys.exc_info()[:2]
+        funcInfo.setExceptionType(<PyObject*>exc_type)
+        funcInfo.setExceptionValue(<PyObject*>exc_value)
+    return -1
 
 # Wrapper for functions of type string(size_t)
 cdef int callback_s_sz(PyFuncInfo& funcInfo, string& out, size_t arg):
@@ -259,6 +290,9 @@ cdef int assign_delegates(obj, CxxDelegator* delegator) except -1:
         elif callback == 'void(double)':
             delegator.setDelegate(cxx_name,
                 pyOverride(<PyObject*>method, callback_v_d), cxx_when)
+        elif callback == 'void(AnyMap&,UnitStack&)':
+            delegator.setDelegate(cxx_name,
+                pyOverride(<PyObject*>method, callback_v_cAMr_cUSr), cxx_when)
         elif callback == 'void(double*)':
             delegator.setDelegate(cxx_name,
                 pyOverride(<PyObject*>method, callback_v_dp), cxx_when)
@@ -271,6 +305,9 @@ cdef int assign_delegates(obj, CxxDelegator* delegator) except -1:
         elif callback == 'void(double*,double*,double*)':
             delegator.setDelegate(cxx_name,
                 pyOverride(<PyObject*>method, callback_v_dp_dp_dp), cxx_when)
+        elif callback == 'double(void*)':
+            delegator.setDelegate(cxx_name,
+                pyOverride(<PyObject*>method, callback_d_vp), cxx_when)
         elif callback == 'string(size_t)':
             delegator.setDelegate(cxx_name,
                 pyOverride(<PyObject*>method, callback_s_sz), cxx_when)
@@ -290,3 +327,67 @@ cdef int assign_delegates(obj, CxxDelegator* delegator) except -1:
         obj._delegates.append(method)
 
     return 0
+
+# Specifications for ReactionRate delegators that have not yet been registered with
+# ReactionRateFactory. This list is read by PythonExtensionManager::registerRateBuilders
+# and then cleared.
+_rate_delegators = []
+
+def extension(*, name):
+    """
+    A decorator for declaring Cantera extensions that should be registered with
+    the corresponding factory classes to create objects with the specified *name*.
+
+    This decorator can be used in combination with an ``extensions`` section in a YAML
+    input file to trigger registration of extensions marked with this decorator,
+    For example, consider an input file containing top level ``extensions`` and
+    ``reactions`` sections such as:
+
+    .. code:: yaml
+
+        extensions:
+        - type: python
+          name: my_cool_module
+
+        ...  # phases and species sections
+
+        reactions:
+        - equation: O + H2 <=> H + OH  # Reaction 3
+          type: cool-rate
+          A: 3.87e+04
+          b: 2.7
+          Ea: 6260.0
+
+    and a Python module ``my_cool_module.py``::
+
+        import cantera as ct
+
+        @ct.extension(name="cool-rate")
+        class CoolRate(ct.ExtensibleRate):
+            def after_set_parameters(self, params, units):
+                ...
+            def replace_eval(self, T):
+                ...
+
+    Loading this input file from any Cantera user interface would cause Cantera to load
+    the ``my_cool_module.py`` module and register the ``CoolRate`` class to handle
+    reactions whose ``type`` in the YAML file is set to ``cool-rate``.
+
+    .. versionadded:: 3.0
+    """
+    def decorator(cls):
+        if issubclass(cls, ExtensibleRate):
+            cls._reaction_rate_type = name
+            # Registering immediately supports the case where the main
+            # application is Python
+            CxxPythonExtensionManager.registerPythonRateBuilder(
+                stringify(cls.__module__), stringify(cls.__name__), stringify(name))
+
+            # Deferred registration supports the case where the main application
+            # is not Python
+            _rate_delegators.append((cls.__module__, cls.__name__, name))
+        else:
+            raise TypeError(f"{cls} is not extensible")
+        return cls
+
+    return decorator

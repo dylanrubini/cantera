@@ -10,15 +10,16 @@ from ._utils cimport stringify, pystr
 from ._utils import CanteraError
 from cython.operator import dereference as deref
 
+
 # Need a pure-python class to store weakrefs to
 class _WeakrefProxy:
     pass
 
 cdef class Domain1D:
-    def __cinit__(self, *args, **kwargs):
+    def __cinit__(self, _SolutionBase phase not None, *args, **kwargs):
         self.domain = NULL
 
-    def __init__(self, _SolutionBase phase, *args, name=None, **kwargs):
+    def __init__(self, phase, *args, name=None, **kwargs):
         self._weakref_proxy = _WeakrefProxy()
         if self.domain is NULL:
             raise TypeError("Can't instantiate abstract class Domain1D.")
@@ -284,11 +285,11 @@ cdef class Boundary1D(Domain1D):
     def __cinit__(self, *args, **kwargs):
         self.boundary = NULL
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, phase, name=None):
         if self.boundary is NULL:
             raise TypeError("Can't instantiate abstract class Boundary1D.")
         self.domain = <CxxDomain1D*>(self.boundary)
-        Domain1D.__init__(self, *args, **kwargs)
+        Domain1D.__init__(self, phase, name=name)
 
     property T:
         """ The temperature [K] at this boundary. """
@@ -342,8 +343,8 @@ cdef class Inlet1D(Boundary1D):
     domain - it must be either the leftmost or rightmost domain in a
     stack.
     """
-    def __cinit__(self, *args, **kwargs):
-        self.inlet = new CxxInlet1D()
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        self.inlet = new CxxInlet1D(phase._base)
         self.boundary = <CxxBoundary1D*>(self.inlet)
 
     def __dealloc__(self):
@@ -364,8 +365,8 @@ cdef class Outlet1D(Boundary1D):
     A one-dimensional outlet. An outlet imposes a zero-gradient boundary
     condition on the flow.
     """
-    def __cinit__(self, *args, **kwargs):
-        self.outlet = new CxxOutlet1D()
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        self.outlet = new CxxOutlet1D(phase._base)
         self.boundary = <CxxBoundary1D*>(self.outlet)
 
     def __dealloc__(self):
@@ -376,8 +377,8 @@ cdef class OutletReservoir1D(Boundary1D):
     """
     A one-dimensional outlet into a reservoir.
     """
-    def __cinit__(self, *args, **kwargs):
-        self.outlet = new CxxOutletRes1D()
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        self.outlet = new CxxOutletRes1D(phase._base)
         self.boundary = <CxxBoundary1D*>(self.outlet)
 
     def __dealloc__(self):
@@ -386,8 +387,8 @@ cdef class OutletReservoir1D(Boundary1D):
 
 cdef class SymmetryPlane1D(Boundary1D):
     """A symmetry plane."""
-    def __cinit__(self, *args, **kwargs):
-        self.symm = new CxxSymm1D()
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        self.symm = new CxxSymm1D(phase._base)
         self.boundary = <CxxBoundary1D*>(self.symm)
 
     def __dealloc__(self):
@@ -396,8 +397,8 @@ cdef class SymmetryPlane1D(Boundary1D):
 
 cdef class Surface1D(Boundary1D):
     """A solid surface."""
-    def __cinit__(self, *args, **kwargs):
-        self.surf = new CxxSurf1D()
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        self.surf = new CxxSurf1D(phase._base)
         self.boundary = <CxxBoundary1D*>(self.surf)
 
     def __dealloc__(self):
@@ -405,15 +406,43 @@ cdef class Surface1D(Boundary1D):
 
 
 cdef class ReactingSurface1D(Boundary1D):
-    """A reacting solid surface."""
-    def __cinit__(self, *args, **kwargs):
-        self.surf = new CxxReactingSurf1D()
+    """A reacting solid surface.
+
+    :param phase:
+        The (surface) phase corresponding to the boundary
+
+    .. versionchanged:: 3.0
+
+        Starting in Cantera 3.0, parameter `phase` should reference surface instead of
+        gas phase.
+    """
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        if phase.phase_of_matter != "gas":
+            self.surf = new CxxReactingSurf1D(phase._base)
+        else:
+            # legacy pathway - deprecation is handled in __init__
+            self.surf = new CxxReactingSurf1D()
         self.boundary = <CxxBoundary1D*>(self.surf)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, _SolutionBase phase, name=None):
         self._weakref_proxy = _WeakrefProxy()
-        super().__init__(*args, **kwargs)
-        self.surface = None
+        if phase.phase_of_matter == "gas":
+            warnings.warn("Starting in Cantera 3.0, parameter 'phase' should "
+                "reference surface instead of gas phase.", DeprecationWarning)
+            super().__init__(phase, name=name)
+        else:
+            sol = phase
+            gas = None
+            for val in sol._adjacent.values():
+                if val.phase_of_matter == "gas":
+                    gas = val
+                    break
+            if gas is None:
+                raise CanteraError("ReactingSurface1D needs an adjacent gas phase")
+            super().__init__(gas, name=name)
+
+        self.surface = phase
+        self.surface._references[self._weakref_proxy] = True
 
     def __dealloc__(self):
         del self.surf
@@ -426,7 +455,15 @@ cdef class ReactingSurface1D(Boundary1D):
             return self.surface
 
     def set_kinetics(self, Kinetics kin):
-        """Set the kinetics manager (surface reaction mechanism object)."""
+        """Set the kinetics manager (surface reaction mechanism object).
+
+        .. deprecated:: 3.0
+
+            Method to be removed after Cantera 3.0; set `Kinetics` when instantiating
+            `ReactingSurface1D` instead.
+        """
+        warnings.warn("Method to be removed after Cantera 3.0; set 'Kinetics' when "
+            "instantiating 'ReactingSurface1D' instead.", DeprecationWarning)
         if pystr(kin.kinetics.kineticsType()) not in ("Surf", "Edge"):
             raise TypeError('Kinetics object must be derived from '
                             'InterfaceKinetics.')
@@ -450,14 +487,6 @@ cdef class _FlowBase(Domain1D):
     def __init__(self, *args, **kwargs):
         self.domain = <CxxDomain1D*>(self.flow)
         super().__init__(*args, **kwargs)
-        if self.gas.transport_model == "None":
-            warnings.warn(
-                "An appropriate transport model\nshould be set when instantiating the "
-                "Solution ('gas') object.\nImplicit setting of the transport model "
-                "may be deprecated in the future.", FutureWarning)
-            self.gas.transport_model = "Mix"
-        self.flow.setKinetics(deref(self.gas.kinetics))
-        self.flow.setTransport(deref(self.gas.transport))
         self.P = self.gas.P
         self.flow.solveEnergyEqn()
 
@@ -468,10 +497,29 @@ cdef class _FlowBase(Domain1D):
         def __set__(self, P):
             self.flow.setPressure(P)
 
+    property transport_model:
+        """
+        Get/set the transport model used for calculating transport properties.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return pystr(self.flow.transportModel())
+        def __set__(self, model):
+            self.flow.setTransportModel(stringify(model))
+            # ensure that transport remains accessible
+            self.gas.transport = self.gas.base.transport().get()
+
     def set_transport(self, _SolutionBase phase):
         """
         Set the `Solution` object used for calculating transport properties.
+
+        .. deprecated:: 3.0
+
+            Method to be removed after Cantera 3.0. Replaceable by `transport_model`
         """
+        warnings.warn("Method to be removed after Cantera 3.0; use property "
+                      "'transport_model' instead.", DeprecationWarning)
         self._weakref_proxy = _WeakrefProxy()
         self.gas._references[self._weakref_proxy] = True
         self.gas = phase
@@ -629,12 +677,6 @@ cdef class _FlowBase(Domain1D):
             return pystr(self.flow.flowType())
 
 
-cdef CxxIdealGasPhase* getIdealGasPhase(ThermoPhase phase) except *:
-    if pystr(phase.thermo.type()) != "IdealGas":
-        raise TypeError('ThermoPhase object is not an IdealGasPhase')
-    return <CxxIdealGasPhase*>(phase.thermo)
-
-
 cdef class IdealGasFlow(_FlowBase):
     """
     An ideal gas flow domain. Functions `set_free_flow` and
@@ -665,9 +707,8 @@ cdef class IdealGasFlow(_FlowBase):
     equations assume an ideal gas mixture.  Arbitrary chemistry is allowed, as
     well as arbitrary variation of the transport properties.
     """
-    def __cinit__(self, _SolutionBase thermo, *args, **kwargs):
-        gas = getIdealGasPhase(thermo)
-        self.flow = new CxxStFlow(gas, thermo.n_species, 2)
+    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
+        self.flow = new CxxStFlow(phase._base, phase.n_species, 2)
 
 
 cdef class IonFlow(_FlowBase):
@@ -677,8 +718,7 @@ cdef class IonFlow(_FlowBase):
     In an ion flow domain, the electric drift is added to the diffusion flux
     """
     def __cinit__(self, _SolutionBase thermo, *args, **kwargs):
-        gas = getIdealGasPhase(thermo)
-        self.flow = <CxxStFlow*>(new CxxIonFlow(gas, thermo.n_species, 2))
+        self.flow = <CxxStFlow*>(new CxxIonFlow(thermo._base, thermo.n_species, 2))
 
     def set_solving_stage(self, stage):
         """
@@ -1152,10 +1192,9 @@ cdef class Sim1D:
             return
 
         def set_transport(multi):
-            self.gas.transport_model = multi
             for dom in self.domains:
                 if isinstance(dom, _FlowBase):
-                    dom.set_transport(self.gas)
+                    dom.transport_model = multi
 
         # Do initial solution steps with default tolerances
         have_user_tolerances = any(dom.have_user_tolerances for dom in self.domains)
@@ -1187,8 +1226,8 @@ cdef class Sim1D:
         set_soret(False)
 
         # Do initial solution steps without multicomponent transport
-        transport = self.gas.transport_model
-        solve_multi = self.gas.transport_model == 'Multi'
+        transport = self.transport_model
+        solve_multi = self.transport_model == 'Multi'
         if solve_multi:
             set_transport('Mix')
 

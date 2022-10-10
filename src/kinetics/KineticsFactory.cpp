@@ -83,6 +83,8 @@ void addReactions(Kinetics& kin, const AnyMap& phaseNode, const AnyMap& rootNode
     kin.skipUndeclaredThirdBodies(
         phaseNode.getBool("skip-undeclared-third-bodies", false));
 
+    loadExtensions(rootNode);
+
     // Find sections containing reactions to add
     vector<string> sections, rules;
 
@@ -152,12 +154,17 @@ void addReactions(Kinetics& kin, const AnyMap& phaseNode, const AnyMap& rootNode
             string node(slash.end(), sections[i].end());
             AnyMap reactions = AnyMap::fromYamlFile(fileName,
                 rootNode.getString("__file__", ""));
+            loadExtensions(reactions);
             for (const auto& R : reactions[node].asVector<AnyMap>()) {
-                try {
+                #ifdef NDEBUG
+                    try {
+                        kin.addReaction(newReaction(R, kin), false);
+                    } catch (CanteraError& err) {
+                        fmt_append(add_rxn_err, "{}", err.what());
+                    }
+                #else
                     kin.addReaction(newReaction(R, kin), false);
-                } catch (CanteraError& err) {
-                    fmt_append(add_rxn_err, "{}", err.what());
-                }
+                #endif
             }
         } else {
             // specified section is in the current file
@@ -175,11 +182,10 @@ void addReactions(Kinetics& kin, const AnyMap& phaseNode, const AnyMap& rootNode
         }
     }
 
-    kin.checkDuplicates();
     if (add_rxn_err.size()) {
         throw CanteraError("addReactions", to_string(add_rxn_err));
     }
-
+    kin.checkDuplicates();
     kin.resizeReactions();
 }
 

@@ -42,6 +42,8 @@ cdef extern from "cantera/zerodim.h" namespace "Cantera":
         string componentName(size_t) except +translate_exception
         size_t neq()
         void getState(double*) except +translate_exception
+        CxxSparseMatrix jacobian() except +translate_exception
+        CxxSparseMatrix finiteDifferenceJacobian() except +translate_exception
         void addSurface(CxxReactorSurface*)
         void setAdvanceLimit(string&, double) except +translate_exception
         void addSensitivityReaction(size_t) except +translate_exception
@@ -162,8 +164,7 @@ cdef extern from "cantera/zerodim.h" namespace "Cantera":
         string linearSolverType()
         void setPreconditioner(shared_ptr[CxxPreconditionerBase] preconditioner)
         void setDerivativeSettings(CxxAnyMap&)
-        CxxAnyMap linearSolverStats()
-        CxxAnyMap nonlinearSolverStats()
+        CxxAnyMap solverStats()
 
 cdef extern from "cantera/zeroD/ReactorDelegator.h" namespace "Cantera":
     cdef cppclass CxxReactorAccessor "Cantera::ReactorAccessor":
@@ -192,10 +193,16 @@ cdef class Reactor(ReactorBase):
     cdef CxxReactor* reactor
     cdef object _kinetics
 
+cdef class MoleReactor(Reactor):
+    pass
+
 cdef class Reservoir(ReactorBase):
     pass
 
 cdef class ConstPressureReactor(Reactor):
+    pass
+
+cdef class ConstPressureMoleReactor(Reactor):
     pass
 
 cdef class IdealGasReactor(Reactor):

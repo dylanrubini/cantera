@@ -301,7 +301,7 @@ void CVodesIntegrator::initialize(double t0, FuncEval& func)
     m_func = &func;
     func.clearErrors();
     // Initialize preconditioner if applied
-    if (m_prec_type != PreconditionerType::NO_PRECONDITION) {
+    if (m_prec_side != PreconditionerSide::NO_PRECONDITION) {
         m_preconditioner->initialize(m_neq);
     }
     if (m_y) {
@@ -399,7 +399,7 @@ void CVodesIntegrator::reinitialize(double t0, FuncEval& func)
     m_func = &func;
     func.clearErrors();
     // reinitialize preconditioner if applied
-    if (m_prec_type != PreconditionerType::NO_PRECONDITION) {
+    if (m_prec_side != PreconditionerSide::NO_PRECONDITION) {
         m_preconditioner->initialize(m_neq);
     }
     int result = CVodeReInit(m_cvode_mem, m_t0, m_y);
@@ -455,14 +455,14 @@ void CVodesIntegrator::applyOptions()
         }
 
         // throw preconditioner error for DENSE + NOJAC
-        if (m_prec_type != PreconditionerType::NO_PRECONDITION) {
+        if (m_prec_side != PreconditionerSide::NO_PRECONDITION) {
             throw CanteraError("CVodesIntegrator::applyOptions",
                 "Preconditioning is not available with the specified problem type.");
         }
     } else if (m_type == "DIAG") {
         CVDiag(m_cvode_mem);
         // throw preconditioner error for DIAG
-        if (m_prec_type != PreconditionerType::NO_PRECONDITION) {
+        if (m_prec_side != PreconditionerSide::NO_PRECONDITION) {
             throw CanteraError("CVodesIntegrator::applyOptions",
                 "Preconditioning is not available with the specified problem type.");
         }
@@ -479,16 +479,16 @@ void CVodesIntegrator::applyOptions()
         #endif
         // set preconditioner if used
         #if CT_SUNDIALS_VERSION >= 40
-            if (m_prec_type != PreconditionerType::NO_PRECONDITION) {
+            if (m_prec_side != PreconditionerSide::NO_PRECONDITION) {
                 SUNLinSol_SPGMRSetPrecType((SUNLinearSolver) m_linsol,
-                    static_cast<int>(m_prec_type));
+                    static_cast<int>(m_prec_side));
                 CVodeSetPreconditioner(m_cvode_mem, cvodes_prec_setup,
                     cvodes_prec_solve);
             }
         #else
-            if (m_prec_type != PreconditionerType::NO_PRECONDITION) {
+            if (m_prec_side != PreconditionerSide::NO_PRECONDITION) {
                 SUNSPGMRSetPrecType((SUNLinearSolver) m_linsol,
-                    static_cast<int>(m_prec_type));
+                    static_cast<int>(m_prec_side));
                 CVSpilsSetPreconditioner(m_cvode_mem, cvodes_prec_setup,
                     cvodes_prec_solve);
             }
@@ -621,36 +621,28 @@ int CVodesIntegrator::nEvals() const
     return ne;
 }
 
-AnyMap CVodesIntegrator::nonlinearSolverStats() const
+AnyMap CVodesIntegrator::solverStats() const
 {
-    long int iters = 0, conv_fails = 0;
     // AnyMap to return stats
     AnyMap stats;
-    #if CT_SUNDIALS_VERSION >= 40
-        CVodeGetNonlinSolvStats(m_cvode_mem, &iters, &conv_fails);
-    #else
-        warn_user("CVodesIntegrator::nonlinearSolverStats", "Function not"
-                  "supported with sundials versions less than 4.");
-    #endif
-    // Add values to AnyMap
-    stats["nonlinear_iters"] = iters;
-    stats["nonlinear_conv_fails"] = conv_fails;
-    return stats;
-}
 
-AnyMap CVodesIntegrator::linearSolverStats() const
-{
     // long int linear solver stats provided by CVodes
-    long int jacEvals = 0, linRhsEvals = 0, linIters = 0, linConvFails = 0,
-             precEvals = 0, precSolves = 0, jtSetupEvals = 0, jTimesEvals = 0;
-    // AnyMap to return stats
-    AnyMap stats;
-    #if CT_SUNDIALS_VERSION >= 60
-        CVodeGetLinSolveStats(m_cvode_mem, &jacEvals, &linRhsEvals, &linIters,
-            &linConvFails, &precEvals, &precSolves, &jtSetupEvals, &jTimesEvals);
-    #elif CT_SUNDIALS_VERSION >= 40
+    long int steps = 0, rhsEvals = 0, errTestFails = 0, jacEvals = 0, linSetup = 0,
+             linRhsEvals = 0, linIters = 0, linConvFails = 0, precEvals = 0,
+             precSolves = 0, jtSetupEvals = 0, jTimesEvals = 0, nonlinIters = 0,
+             nonlinConvFails = 0, orderReductions = 0;
+    int lastOrder = 0;
+;
+    #if CT_SUNDIALS_VERSION >= 40
+        CVodeGetNumSteps(m_cvode_mem, &steps);
+        CVodeGetNumRhsEvals(m_cvode_mem, &rhsEvals);
+        CVodeGetNonlinSolvStats(m_cvode_mem, &nonlinIters, &nonlinConvFails);
+        CVodeGetNumErrTestFails(m_cvode_mem, &errTestFails);
+        CVodeGetLastOrder(m_cvode_mem, &lastOrder);
+        CVodeGetNumStabLimOrderReds(m_cvode_mem, &orderReductions);
         CVodeGetNumJacEvals(m_cvode_mem, &jacEvals);
         CVodeGetNumLinRhsEvals(m_cvode_mem, &linRhsEvals);
+        CVodeGetNumLinSolvSetups(m_cvode_mem, &linSetup);
         CVodeGetNumLinIters(m_cvode_mem, &linIters);
         CVodeGetNumLinConvFails(m_cvode_mem, &linConvFails);
         CVodeGetNumPrecEvals(m_cvode_mem, &precEvals);
@@ -658,11 +650,26 @@ AnyMap CVodesIntegrator::linearSolverStats() const
         CVodeGetNumJTSetupEvals(m_cvode_mem, &jtSetupEvals);
         CVodeGetNumJtimesEvals(m_cvode_mem, &jTimesEvals);
     #else
-        warn_user("CVodesIntegrator::linearSolverStats", "Function not"
+        warn_user("CVodesIntegrator::solverStats", "Function not"
                   "supported with sundials versions less than 4.");
     #endif
-    // Add data to AnyMap
+
+    #if CT_SUNDIALS_VERION >= 60
+        long int stepSolveFails = 0;
+        CVodeGetNumStepSolveFails(m_cvode_mem, &stepSolveFails);
+        stats["step_solve_fails"] = stepSolveFails;
+    #endif
+
+    stats["steps"] = steps;
+    stats["rhs_evals"] = rhsEvals;
+    stats["nonlinear_iters"] = nonlinIters;
+    stats["nonlinear_conv_fails"] = nonlinConvFails;
+    stats["err_test_fails"] = errTestFails;
+    stats["last_order"] = lastOrder;
+    stats["stab_order_reductions"] = orderReductions;
+
     stats["jac_evals"] = jacEvals;
+    stats["lin_solve_setups"] = linSetup;
     stats["lin_rhs_evals"] = linRhsEvals;
     stats["lin_iters"] = linIters;
     stats["lin_conv_fails"] = linConvFails;

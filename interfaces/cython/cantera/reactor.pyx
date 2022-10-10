@@ -333,6 +333,31 @@ cdef class Reactor(ReactorBase):
         self.reactor.getState(&y[0])
         return y
 
+    property jacobian:
+        """
+        Get the local, reactor-specific Jacobian or an approximation thereof
+
+        **Warning**: Depending on the particular implementation, this may return an
+        approximate Jacobian intended only for use in forming a preconditioner for
+        iterative solvers, excluding terms that would generate a fully-dense Jacobian.
+
+        **Warning**: This method is an experimental part of the Cantera API and may be
+        changed or removed without notice.
+        """
+        def __get__(self):
+            return get_from_sparse(self.reactor.jacobian(), self.n_vars, self.n_vars)
+
+    property finite_difference_jacobian:
+        """
+        Get the reactor-specific Jacobian, calculated using a finite difference method.
+
+        **Warning:** this property is an experimental part of the Cantera API and
+        may be changed or removed without notice.
+        """
+        def __get__(self):
+            return get_from_sparse(self.reactor.finiteDifferenceJacobian(),
+                                   self.n_vars, self.n_vars)
+
     def set_advance_limit(self, name, limit):
         """
         Limit absolute change of component ``name`` during `ReactorNet.advance`.
@@ -344,6 +369,16 @@ cdef class Reactor(ReactorBase):
             limit = -1.
         self.reactor.setAdvanceLimit(stringify(name), limit)
 
+cdef class MoleReactor(Reactor):
+    """
+    A homogeneous zero-dimensional reactor with a mole based state vector. By default,
+    they are closed (no inlets or outlets), have fixed volume, and have adiabatic,
+    chemically-inert walls. These properties may all be changed by adding
+    appropriate components such as `Wall`, `MassFlowController` and `Valve`.
+
+    .. versionadded:: 3.0
+    """
+    reactor_type = "MoleReactor"
 
 cdef class Reservoir(ReactorBase):
     """
@@ -360,6 +395,15 @@ cdef class ConstPressureReactor(Reactor):
     pressure constant.
     """
     reactor_type = "ConstPressureReactor"
+
+cdef class ConstPressureMoleReactor(Reactor):
+    """A homogeneous, constant pressure, zero-dimensional reactor with a mole based
+    state vector. The volume of the reactor changes as a function of time in order to
+    keep the pressure constant.
+
+    .. versionadded:: 3.0
+    """
+    reactor_type = "ConstPressureMoleReactor"
 
 
 cdef class IdealGasReactor(Reactor):
@@ -424,7 +468,7 @@ cdef class ExtensibleReactor(Reactor):
     The following methods of the C++ :ct:`Reactor` class can be modified by a
     Python class which inherits from this class. For each method, the name below
     should be prefixed with ``before_``, ``after_``, or ``replace_``, indicating
-    whether the this method should be called before, after, or instead of the
+    whether this method should be called before, after, or instead of the
     corresponding method from the base class.
 
     For methods that return a value and have a ``before`` method specified, if
@@ -586,6 +630,46 @@ cdef class ExtensibleIdealGasConstPressureReactor(ExtensibleReactor):
     `IdealGasConstPressureReactor` class.
     """
     reactor_type = "ExtensibleIdealGasConstPressureReactor"
+
+
+cdef class ExtensibleMoleReactor(ExtensibleReactor):
+    """
+    A variant of `ExtensibleReactor` where the base behavior corresponds to the
+    `MoleReactor` class.
+
+    .. versionadded:: 3.0
+    """
+    reactor_type = "ExtensibleMoleReactor"
+
+
+cdef class ExtensibleIdealGasMoleReactor(ExtensibleReactor):
+    """
+    A variant of `ExtensibleReactor` where the base behavior corresponds to the
+    `IdealGasMoleReactor` class.
+
+    .. versionadded:: 3.0
+    """
+    reactor_type = "ExtensibleIdealGasMoleReactor"
+
+
+cdef class ExtensibleConstPressureMoleReactor(ExtensibleReactor):
+    """
+    A variant of `ExtensibleReactor` where the base behavior corresponds to the
+    `ConstPressureMoleReactor` class.
+
+    .. versionadded:: 3.0
+    """
+    reactor_type = "ExtensibleConstPressureMoleReactor"
+
+
+cdef class ExtensibleIdealGasConstPressureMoleReactor(ExtensibleReactor):
+    """
+    A variant of `ExtensibleReactor` where the base behavior corresponds to the
+    `IdealGasConstPressureMoleReactor` class.
+
+    .. versionadded:: 3.0
+    """
+    reactor_type = "ExtensibleIdealGasConstPressureMoleReactor"
 
 
 cdef class ReactorSurface:
@@ -1503,18 +1587,11 @@ cdef class ReactorNet:
             return pystr(self.net.linearSolverType())
 
 
-    property linear_solver_stats:
-        """Linear solver stats from integrator"""
+    property solver_stats:
+        """ODE solver stats from integrator"""
         def __get__(self):
             cdef CxxAnyMap stats
-            stats = self.net.linearSolverStats()
-            return anymap_to_dict(stats)
-
-    property nonlinear_solver_stats:
-        """Nonlinear solver stats from integrator"""
-        def __get__(self):
-            cdef CxxAnyMap stats
-            stats = self.net.nonlinearSolverStats()
+            stats = self.net.solverStats()
             return anymap_to_dict(stats)
 
     property derivative_settings:

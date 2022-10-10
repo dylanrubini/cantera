@@ -26,7 +26,7 @@ jobs:
     strategy:
       matrix:
         python-version: [ '3.7', '3.9', '3.10' ]
-        os: ['ubuntu-18.04', 'ubuntu-20.04']
+        os: ['ubuntu-20.04', 'ubuntu-22.04']
       fail-fast: false
     steps:
     - uses: actions/checkout@v2
@@ -41,7 +41,8 @@ jobs:
     - name: Install Apt dependencies
       run: |
         sudo apt update
-        sudo apt install libboost-dev gfortran libopenmpi-dev
+        sudo apt install libboost-dev gfortran libopenmpi-dev libpython3-dev \
+        libblas-dev liblapack-dev
     - name: Upgrade pip
       run: python3 -m pip install -U pip setuptools wheel
     - name: Install Python dependencies
@@ -58,7 +59,7 @@ jobs:
 
   clang-compiler:
     name: LLVM/Clang with Python 3.8
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v2
@@ -73,7 +74,7 @@ jobs:
     - name: Install Apt dependencies
       run: |
         sudo apt update
-        sudo apt install libboost-dev gfortran libomp-dev libomp5
+        sudo apt install libboost-dev gfortran libomp-dev libomp5 libopenblas-dev
     - name: Upgrade pip
       run: python3 -m pip install -U pip setuptools wheel
     - name: Install Python dependencies
@@ -108,26 +109,22 @@ jobs:
       name: Checkout the repository
       with:
         submodules: recursive
-    - name: Setup Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-        architecture: x64
     - name: Install Brew dependencies
-      run: brew install boost libomp
+      run: |
+        brew install boost libomp scons python@${{ matrix.python-version }}
     - name: Upgrade pip
       run: python3 -m pip install -U pip 'setuptools>=47.0.0,<48' wheel
     - name: Install Python dependencies
-      run: python3 -m pip install ruamel.yaml scons numpy cython h5py pandas pytest
+      run: python3 -m pip install ruamel.yaml numpy cython h5py pandas pytest
         pytest-github-actions-annotate-failures
     - name: Install typing_extensions for Python 3.7
       if: matrix.python-version == '3.7'
       run: python3 -m pip install typing_extensions
     - name: Build Cantera
-      run: python3 `which scons` build env_vars=all -j3 debug=n --debug=time
+      run: scons build env_vars=all -j3 debug=n --debug=time
     - name: Test Cantera
       run:
-        python3 `which scons` test show_long_tests=yes verbose_tests=yes --debug=time
+        scons test show_long_tests=yes verbose_tests=yes --debug=time
 
   # Coverage is its own job because macOS builds of the samples
   # use Homebrew gfortran which is not compatible for coverage
@@ -155,7 +152,7 @@ jobs:
       run: python3 -m pip install -U pip setuptools wheel
     - name: Install Python dependencies
       run: python3 -m pip install ruamel.yaml scons numpy cython h5py pandas scipy pytest
-        pytest-github-actions-annotate-failures gcovr
+        pytest-github-actions-annotate-failures pytest-cov gcovr
     - name: Build Cantera
       run: |
         python3 `which scons` build blas_lapack_libs=lapack,blas coverage=y \
@@ -170,17 +167,23 @@ jobs:
         --exclude-directories '\.sconf_temp' --exclude-directories 'build/ext$' \
         --exclude '.*ext.*' --exclude '(.+/)?_cantera\.cpp$' --exclude '^test.*' \
         --xml coverage.xml --html-details htmlcoverage.html --txt
-    - name: Archive code coverage results
+    - name: Archive C++ coverage results
       uses: actions/upload-artifact@v2
       with:
-        name: code-coverage-report
+        name: cxx-coverage-report
         path: htmlcoverage*
         retention-days: 5
+    - name: Archive Python coverage results
+      uses: actions/upload-artifact@v2
+      with:
+        name: python-coverage-report
+        path: build/python-coverage*
+        retention-days: 5
     - name: Upload Coverage to Codecov
-      uses: codecov/codecov-action@v2
+      uses: codecov/codecov-action@v3
       with:
         verbose: true
-        files: ./coverage.xml
+        files: ./coverage.xml,./build/pycov.xml
         fail_ci_if_error: true
 
   example-keywords:
@@ -268,7 +271,7 @@ jobs:
 
   run-examples:
     name: Run the Python examples using bash
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     timeout-minutes: 60
     strategy:
       matrix:
@@ -287,7 +290,7 @@ jobs:
       - name: Install Apt dependencies
         run: |
           sudo apt update
-          sudo apt install libboost-dev gfortran graphviz liblapack-dev libblas-dev gcc-5 g++-5
+          sudo apt install libboost-dev gfortran graphviz liblapack-dev libblas-dev gcc-9 g++-9
       - name: Upgrade pip
         run: python3 -m pip install -U pip setuptools wheel
       - name: Install Python dependencies
@@ -296,16 +299,18 @@ jobs:
         if: matrix.python-version == '3.7'
         run: python3 -m pip install typing_extensions
       - name: Build Cantera
-        # compile with GCC 5.5.0 on ubuntu-18.04
-        run: python3 `which scons` build -j2 debug=n CC=gcc-5 CXX=g++-5
+        # compile with GCC 9.4.0 on ubuntu-20.04 as an alternative to the default
+        # (GCC 7.5.0 is both default and oldest supported version)
+        run: python3 `which scons` build -j2 debug=n CC=gcc-9 CXX=g++-9
       - name: Run the examples
         # See https://unix.stackexchange.com/a/392973 for an explanation of the -exec part
         run: |
-          find interfaces/cython/cantera/examples -type f -iname "*.py" \
+          find samples/python -type f -iname "*.py" \
           -exec sh -c 'for n; do echo "$n" | tee -a results.txt && python3 "$n" >> results.txt || exit 1; done' sh {} +
         env:
           PYTHONPATH: build/python
-          PYTHONWARNINGS: error
+          # The ignore setting here is due to a new warning introduced in Matplotlib==3.6.0
+          PYTHONWARNINGS: "error,ignore:warn_name_set_on_empty_Forward::pyparsing"
           MPLBACKEND: Agg
       - name: Save the results file for inspection
         uses: actions/upload-artifact@v2
@@ -364,6 +369,7 @@ jobs:
           test -f ${CONDA_PREFIX}/bin/ck2yaml
           test -f ${CONDA_PREFIX}/share/cantera/data/gri30.yaml
           test -d ${CONDA_PREFIX}/share/cantera/samples
+          test -d ${CONDA_PREFIX}/share/cantera/samples/python
           test -d ${CONDA_PREFIX}/lib/python${{ env.PYTHON_VERSION }}/site-packages/cantera
       - name: Test Essentials
         # ensure that Python package loads and converter scripts work
@@ -406,8 +412,8 @@ jobs:
     - name: Install conda dependencies
       # See https://github.com/conda-forge/boost-cpp-feedstock/issues/41 for why we
       # use boost-cpp rather than boost from conda-forge
-      run: |
-        mamba install -q scons numpy cython ruamel.yaml boost-cpp eigen yaml-cpp h5py pandas pytest
+      run: mamba install -q scons numpy cython ruamel.yaml boost-cpp eigen yaml-cpp
+        h5py pandas pytest mkl mkl-devel
       shell: pwsh
     - name: Install typing_extensions for Python 3.7
       if: matrix.python-version == '3.7'
@@ -428,6 +434,7 @@ jobs:
         test -f ${CONDA_PREFIX}/Scripts/ck2yaml
         test -f ${CONDA_PREFIX}/share/cantera/data/gri30.yaml
         test -d ${CONDA_PREFIX}/share/cantera/samples
+        test -d ${CONDA_PREFIX}/share/cantera/samples/python
         test -d ${CONDA_PREFIX}/Lib/site-packages/cantera
     - name: Test Essentials
       # ensure that Python package loads and converter scripts work
@@ -488,7 +495,7 @@ jobs:
         shell: bash
       - name: Build Cantera
         run: scons build -j2 boost_inc_dir=%BOOST_ROOT% debug=n logging=debug
-          python_package=full env_vars=PYTHONPATH,GITHUB_ACTIONS
+          python_package=full env_vars=USERPROFILE,GITHUB_ACTIONS
           msvc_version=${{ matrix.vs-toolset }} f90_interface=n --debug=time
         shell: cmd
       - name: Test Cantera
@@ -535,7 +542,8 @@ jobs:
         source /opt/intel/oneapi/setvars.sh
         printenv >> $GITHUB_ENV
     - name: Build Cantera
-      run: python3 `which scons` build env_vars=all CC=icx CXX=icpx FORTRAN=ifx -j2 debug=n --debug=time
+      run: python3 `which scons` build env_vars=all CC=icx CXX=icpx -j2 debug=n
+        --debug=time f90_interface=n # FORTRAN=ifx
     - name: Test Cantera
       run:
         python3 `which scons` test show_long_tests=yes verbose_tests=yes --debug=time
@@ -580,7 +588,8 @@ jobs:
         source /opt/intel/oneapi/setvars.sh
         printenv >> $GITHUB_ENV
     - name: Build Cantera
-      run: python3 `which scons` build env_vars=all CC=icc CXX=icpc FORTRAN=ifort -j2 debug=n --debug=time
+      run: python3 `which scons` build env_vars=all CC=icc CXX=icpc -j2 debug=n
+        --debug=time f90_interface=n # FORTRAN=ifort
     - name: Test Cantera
       run:
         python3 `which scons` test show_long_tests=yes verbose_tests=yes --debug=time

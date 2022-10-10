@@ -6,7 +6,7 @@
 #ifndef CT_IDEALGASCONSTPRESSMOLE_REACTOR_H
 #define CT_IDEALGASCONSTPRESSMOLE_REACTOR_H
 
-#include "cantera/zeroD/MoleReactor.h"
+#include "cantera/zeroD/ConstPressureMoleReactor.h"
 
 namespace Cantera
 {
@@ -15,7 +15,7 @@ namespace Cantera
  * IdealGasConstPressureMoleReactor is a class for ideal gas constant-pressure reactors
  * which use a state of moles.
  */
-class IdealGasConstPressureMoleReactor : public MoleReactor
+class IdealGasConstPressureMoleReactor : public ConstPressureMoleReactor
 {
 public:
     IdealGasConstPressureMoleReactor() {}
@@ -38,12 +38,15 @@ public:
 
     virtual void updateState(double* y);
 
-    virtual Eigen::SparseMatrix<double> jacobian(double t, double* y);
+    //! Calculate an approximate Jacobian to accelerate preconditioned solvers
+
+    //! Neglects derivatives with respect to mole fractions that would generate a
+    //! fully-dense Jacobian. Currently also neglects terms related to interactions
+    //! between reactors, for example via inlets and outlets.
+    virtual Eigen::SparseMatrix<double> jacobian();
 
 protected:
     vector_fp m_hk; //!< Species molar enthalpies
-
-    const int m_sidx = 1;
 };
 
 }

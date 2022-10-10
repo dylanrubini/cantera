@@ -159,9 +159,8 @@ void SurfPhase::getCp_R(doublereal* cpr) const
 
 void SurfPhase::getStandardVolumes(doublereal* vol) const
 {
-    _updateThermo();
     for (size_t k = 0; k < m_kk; k++) {
-        vol[k] = 1.0/standardConcentration(k);
+        vol[k] = 0.0;
     }
 }
 
@@ -211,6 +210,7 @@ void SurfPhase::setSiteDensity(doublereal n0)
                            "Site density must be positive. Got {}", n0);
     }
     m_n0 = n0;
+    assignDensity(n0 * meanMolecularWeight());
     m_logn0 = log(m_n0);
 }
 
@@ -218,32 +218,47 @@ void SurfPhase::setCoverages(const doublereal* theta)
 {
     double sum = 0.0;
     for (size_t k = 0; k < m_kk; k++) {
-        sum += theta[k];
+        sum += theta[k] / size(k);
     }
     if (sum <= 0.0) {
         throw CanteraError("SurfPhase::setCoverages",
                            "Sum of Coverage fractions is zero or negative");
     }
     for (size_t k = 0; k < m_kk; k++) {
-        m_work[k] = m_n0*theta[k]/(sum*size(k));
+        m_work[k] = theta[k] / (sum * size(k));
     }
-    // Call the Phase:: class function setConcentrations.
-    setConcentrations(m_work.data());
+    setMoleFractions(m_work.data());
 }
 
 void SurfPhase::setCoveragesNoNorm(const doublereal* theta)
 {
+    double sum = 0.0;
+    double sum2 = 0.0;
     for (size_t k = 0; k < m_kk; k++) {
-        m_work[k] = m_n0*theta[k]/size(k);
+        sum += theta[k] / size(k);
+        sum2 += theta[k];
     }
-    setConcentrationsNoNorm(m_work.data());
+    if (sum <= 0.0) {
+        throw CanteraError("SurfPhase::setCoverages",
+                           "Sum of Coverage fractions is zero or negative");
+    }
+    for (size_t k = 0; k < m_kk; k++) {
+        m_work[k] = theta[k] * sum2 / (sum * size(k));
+    }
+    setMoleFractions_NoNorm(m_work.data());
 }
 
 void SurfPhase::getCoverages(doublereal* theta) const
 {
-    getConcentrations(theta);
+    double sum_X = 0.0;
+    double sum_X_s = 0.0;
+    getMoleFractions(theta);
     for (size_t k = 0; k < m_kk; k++) {
-        theta[k] *= size(k)/m_n0;
+        sum_X += theta[k];
+        sum_X_s += theta[k] * size(k);
+    }
+    for (size_t k = 0; k < m_kk; k++) {
+        theta[k] *= size(k) * sum_X / sum_X_s;
     }
 }
 
@@ -279,6 +294,12 @@ void SurfPhase::setState(const AnyMap& state) {
         }
     }
     ThermoPhase::setState(state);
+}
+
+void SurfPhase::compositionChanged()
+{
+    ThermoPhase::compositionChanged();
+    assignDensity(m_n0 * meanMolecularWeight());
 }
 
 void SurfPhase::_updateThermo(bool force) const

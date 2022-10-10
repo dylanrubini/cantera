@@ -9,9 +9,14 @@
 namespace Cantera
 {
 
+AdaptivePreconditioner::AdaptivePreconditioner()
+{
+    setPreconditionerSide("right");
+}
+
 void AdaptivePreconditioner::setValue(size_t row, size_t col, double value)
 {
-    m_jac_trips.emplace_back(row, col, value);
+    m_jac_trips.emplace_back(static_cast<int>(row), static_cast<int>(col), value);
 }
 
 void AdaptivePreconditioner::stateAdjustment(vector_fp& state) {
@@ -42,7 +47,7 @@ void AdaptivePreconditioner::initialize(size_t networkSize)
         setIlutDropTol(1e-10);
     }
     if (m_drop_tol == 0) {
-        setIlutFillFactor(m_dim/4);
+        setIlutFillFactor(static_cast<int>(m_dim) / 4);
     }
     // update initialized status
     m_init = true;

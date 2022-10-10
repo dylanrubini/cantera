@@ -51,7 +51,11 @@ void Solution::setTransport(shared_ptr<Transport> transport) {
     m_transport = transport;
 }
 
-void Solution::setTransport(const std::string& model) {
+void Solution::setTransportModel(const std::string& model) {
+    if (!m_thermo) {
+        throw CanteraError("Solution::setTransportModel",
+            "Unable to set Transport model without valid ThermoPhase object.");
+    }
     if (model == "") {
         setTransport(shared_ptr<Transport>(
             newDefaultTransportMgr(m_thermo.get())));
@@ -89,7 +93,7 @@ AnyMap Solution::parameters(bool withInput) const
     }
     if (!m_transport) {
         out["transport"] = empty;
-    } else if (m_transport->transportType() == "None") {
+    } else if (m_transport->transportModel() == "None") {
         out["transport"] = empty;
     } else {
         out.update(m_transport->parameters());
@@ -268,7 +272,7 @@ shared_ptr<Solution> newSolution(const AnyMap& phaseNode,
     sol->setKinetics(newKinetics(phases, phaseNode, rootNode));
 
     // set transport model by name
-    sol->setTransport(transport);
+    sol->setTransportModel(transport);
 
     // save root-level information (YAML header)
     AnyMap header;
