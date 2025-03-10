@@ -3,32 +3,22 @@
 
 from .interrupts import no_op
 import warnings
-from collections import OrderedDict
 import numpy as np
 
-from ._utils cimport stringify, pystr
+from ._utils cimport stringify, pystr, anymap_to_py
 from ._utils import CanteraError
 from cython.operator import dereference as deref
 
-
-# Need a pure-python class to store weakrefs to
-class _WeakrefProxy:
-    pass
-
 cdef class Domain1D:
+    _domain_type = "none"
     def __cinit__(self, _SolutionBase phase not None, *args, **kwargs):
         self.domain = NULL
 
-    def __init__(self, phase, *args, name=None, **kwargs):
-        self._weakref_proxy = _WeakrefProxy()
+    def __init__(self, phase, *args, **kwargs):
         if self.domain is NULL:
             raise TypeError("Can't instantiate abstract class Domain1D.")
 
-        if name is not None:
-            self.name = name
-
         self.gas = phase
-        self.gas._references[self._weakref_proxy] = True
         self.set_default_tolerances()
 
     property phase:
@@ -46,6 +36,13 @@ cdef class Domain1D:
         def __get__(self):
             return self.domain.domainIndex()
 
+    property domain_type:
+        """
+        String indicating the domain implemented.
+        """
+        def __get__(self):
+            return pystr(self.domain.domainType())
+
     property n_components:
         """Number of solution components at each grid point."""
         def __get__(self):
@@ -55,6 +52,26 @@ cdef class Domain1D:
         """Number of grid points belonging to this domain."""
         def __get__(self):
             return self.domain.nPoints()
+
+    def _to_array(self, SolutionArrayBase dest, cbool normalize):
+        """
+        Retrieve domain data as a `SolutionArray` object. Service method used by
+        `FlameBase.to_array`, which adds information not available in Cython.
+
+        .. versionadded:: 3.0
+        """
+        dest._base = self.domain.toArray(normalize)
+        dest.base = dest._base.get()
+        return dest
+
+    def _from_array(self, SolutionArrayBase arr):
+        """
+        Restore domain data from a `SolutionArray` object. Service method used by
+        `FlameBase.from_array`.
+
+        .. versionadded:: 3.0
+        """
+        self.domain.fromArray(arr._base)
 
     def component_name(self, int n):
         """Name of the nth component."""
@@ -241,7 +258,7 @@ cdef class Domain1D:
             cdef np.ndarray[np.double_t, ndim=1] grid = np.empty(self.n_points)
             cdef int i
             for i in range(self.n_points):
-                grid[i] = self.domain.grid(i)
+                grid[i] = self.domain.z(i)
             return grid
 
         def __set__(self, grid):
@@ -264,15 +281,17 @@ cdef class Domain1D:
 
     property settings:
         """
-        Return comprehensive dictionary describing type, name, and simulation
-        settings that are specific to domain types.
+        Return comprehensive dictionary describing type, name, and simulation settings
+        that are specific to domain types.
+
+        .. versionchanged:: 3.0
+
+            Added missing domain-specific simulation settings and updated structure.
         """
         def __get__(self):
-            out = {
-                'Domain1D_type': type(self).__name__,
-                'name': self.name}
-
-            return out
+            cdef shared_ptr[CxxSolutionArray] arr
+            arr = self.domain.toArray(False)
+            return anymap_to_py(arr.get().meta())
 
 
 cdef class Boundary1D(Domain1D):
@@ -282,13 +301,18 @@ cdef class Boundary1D(Domain1D):
     :param phase:
         The (gas) phase corresponding to the adjacent flow domain
     """
-    def __cinit__(self, *args, **kwargs):
-        self.boundary = NULL
+    def __cinit__(self, _SolutionBase phase, *args, name="", **kwargs):
+        if self._domain_type in {"None"}:
+            self.boundary = NULL
+        else:
+            self._domain = CxxNewDomain1D(
+                stringify(self._domain_type), phase._base, stringify(name))
+            self.domain = self._domain.get()
+            self.boundary = <CxxBoundary1D*>self.domain
 
     def __init__(self, phase, name=None):
         if self.boundary is NULL:
             raise TypeError("Can't instantiate abstract class Boundary1D.")
-        self.domain = <CxxDomain1D*>(self.boundary)
         Domain1D.__init__(self, phase, name=name)
 
     property T:
@@ -336,28 +360,22 @@ cdef class Boundary1D(Domain1D):
             self.gas.TPY = self.gas.T, self.gas.P, Y
             self.X = self.gas.X
 
-
-cdef class Inlet1D(Boundary1D):
-    """
-    A one-dimensional inlet. Note that an inlet can only be a terminal
-    domain - it must be either the leftmost or rightmost domain in a
-    stack.
-    """
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        self.inlet = new CxxInlet1D(phase._base)
-        self.boundary = <CxxBoundary1D*>(self.inlet)
-
-    def __dealloc__(self):
-        del self.inlet
-
     property spread_rate:
         """
         Get/set the tangential velocity gradient [1/s] at this boundary.
         """
         def __get__(self):
-            return self.inlet.spreadRate()
+            return self.boundary.spreadRate()
         def __set__(self, s):
-            self.inlet.setSpreadRate(s)
+            self.boundary.setSpreadRate(s)
+
+
+cdef class Inlet1D(Boundary1D):
+    """
+    A one-dimensional inlet. Note that an inlet can only be a terminal
+    domain - it must be either the leftmost or rightmost domain in a stack.
+    """
+    _domain_type = "inlet"
 
 
 cdef class Outlet1D(Boundary1D):
@@ -365,44 +383,24 @@ cdef class Outlet1D(Boundary1D):
     A one-dimensional outlet. An outlet imposes a zero-gradient boundary
     condition on the flow.
     """
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        self.outlet = new CxxOutlet1D(phase._base)
-        self.boundary = <CxxBoundary1D*>(self.outlet)
-
-    def __dealloc__(self):
-        del self.outlet
+    _domain_type = "outlet"
 
 
 cdef class OutletReservoir1D(Boundary1D):
     """
     A one-dimensional outlet into a reservoir.
     """
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        self.outlet = new CxxOutletRes1D(phase._base)
-        self.boundary = <CxxBoundary1D*>(self.outlet)
-
-    def __dealloc__(self):
-        del self.outlet
+    _domain_type = "outlet-reservoir"
 
 
 cdef class SymmetryPlane1D(Boundary1D):
     """A symmetry plane."""
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        self.symm = new CxxSymm1D(phase._base)
-        self.boundary = <CxxBoundary1D*>(self.symm)
-
-    def __dealloc__(self):
-        del self.symm
+    _domain_type = "symmetry-plane"
 
 
 cdef class Surface1D(Boundary1D):
     """A solid surface."""
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        self.surf = new CxxSurf1D(phase._base)
-        self.boundary = <CxxBoundary1D*>(self.surf)
-
-    def __dealloc__(self):
-        del self.surf
+    _domain_type = "surface"
 
 
 cdef class ReactingSurface1D(Boundary1D):
@@ -416,36 +414,19 @@ cdef class ReactingSurface1D(Boundary1D):
         Starting in Cantera 3.0, parameter `phase` should reference surface instead of
         gas phase.
     """
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        if phase.phase_of_matter != "gas":
-            self.surf = new CxxReactingSurf1D(phase._base)
-        else:
-            # legacy pathway - deprecation is handled in __init__
-            self.surf = new CxxReactingSurf1D()
-        self.boundary = <CxxBoundary1D*>(self.surf)
+    _domain_type = "reacting-surface"
 
     def __init__(self, _SolutionBase phase, name=None):
-        self._weakref_proxy = _WeakrefProxy()
-        if phase.phase_of_matter == "gas":
-            warnings.warn("Starting in Cantera 3.0, parameter 'phase' should "
-                "reference surface instead of gas phase.", DeprecationWarning)
-            super().__init__(phase, name=name)
-        else:
-            sol = phase
-            gas = None
-            for val in sol._adjacent.values():
-                if val.phase_of_matter == "gas":
-                    gas = val
-                    break
-            if gas is None:
-                raise CanteraError("ReactingSurface1D needs an adjacent gas phase")
-            super().__init__(gas, name=name)
+        gas = None
+        for val in phase._adjacent.values():
+            if val.phase_of_matter == "gas":
+                gas = val
+                break
+        if gas is None:
+            raise CanteraError("ReactingSurface1D needs an adjacent gas phase")
+        super().__init__(gas, name=name)
 
         self.surface = phase
-        self.surface._references[self._weakref_proxy] = True
-
-    def __dealloc__(self):
-        del self.surf
 
     property phase:
         """
@@ -454,38 +435,23 @@ cdef class ReactingSurface1D(Boundary1D):
         def __get__(self):
             return self.surface
 
-    def set_kinetics(self, Kinetics kin):
-        """Set the kinetics manager (surface reaction mechanism object).
-
-        .. deprecated:: 3.0
-
-            Method to be removed after Cantera 3.0; set `Kinetics` when instantiating
-            `ReactingSurface1D` instead.
-        """
-        warnings.warn("Method to be removed after Cantera 3.0; set 'Kinetics' when "
-            "instantiating 'ReactingSurface1D' instead.", DeprecationWarning)
-        if pystr(kin.kinetics.kineticsType()) not in ("Surf", "Edge"):
-            raise TypeError('Kinetics object must be derived from '
-                            'InterfaceKinetics.')
-        self.surf.setKineticsMgr(<CxxInterfaceKinetics*>kin.kinetics)
-        self.surface = kin
-        self.surface._references[self._weakref_proxy] = True
-
     property coverage_enabled:
         """Controls whether or not to solve the surface coverage equations."""
         def __set__(self, value):
-            self.surf.enableCoverageEquations(<cbool>value)
+            (<CxxReactingSurf1D*>self.domain).enableCoverageEquations(<cbool>value)
         def __get__(self):
-            return self.surf.coverageEnabled()
+            return (<CxxReactingSurf1D*>self.domain).coverageEnabled()
 
 
-cdef class _FlowBase(Domain1D):
+cdef class FlowBase(Domain1D):
     """ Base class for 1D flow domains """
-    def __cinit__(self, *args, **kwargs):
-        self.flow = NULL
+    def __cinit__(self, _SolutionBase phase, *args, name="", **kwargs):
+        self._domain = CxxNewDomain1D(
+            stringify(self._domain_type), phase._base, stringify(name))
+        self.domain = self._domain.get()
+        self.flow = <CxxFlow1D*>self.domain
 
     def __init__(self, *args, **kwargs):
-        self.domain = <CxxDomain1D*>(self.flow)
         super().__init__(*args, **kwargs)
         self.P = self.gas.P
         self.flow.solveEnergyEqn()
@@ -510,20 +476,23 @@ cdef class _FlowBase(Domain1D):
             # ensure that transport remains accessible
             self.gas.transport = self.gas.base.transport().get()
 
-    def set_transport(self, _SolutionBase phase):
+    def set_default_tolerances(self):
         """
-        Set the `Solution` object used for calculating transport properties.
-
-        .. deprecated:: 3.0
-
-            Method to be removed after Cantera 3.0. Replaceable by `transport_model`
+        Set all tolerances to their default values
         """
-        warnings.warn("Method to be removed after Cantera 3.0; use property "
-                      "'transport_model' instead.", DeprecationWarning)
-        self._weakref_proxy = _WeakrefProxy()
-        self.gas._references[self._weakref_proxy] = True
-        self.gas = phase
-        self.flow.setTransport(deref(self.gas.transport))
+        super().set_default_tolerances()
+        if self.transport_model != "ionized-gas":
+            return
+
+        chargetol = {}
+        for S in self.gas.species():
+            if S.composition == {'E': 1.0}:
+                chargetol[S.name] = (1e-5, 1e-20)
+            elif S.charge != 0:
+                chargetol[S.name] = (1e-5, 1e-16)
+        self.set_steady_tolerances(**chargetol)
+        self.set_transient_tolerances(**chargetol)
+        self.have_user_tolerances = False
 
     property soret_enabled:
         """
@@ -535,6 +504,27 @@ cdef class _FlowBase(Domain1D):
             return self.flow.withSoret()
         def __set__(self, enable):
             self.flow.enableSoret(<cbool>enable)
+
+    property flux_gradient_basis:
+        """
+        Get/Set whether or not species diffusive fluxes are computed with
+        respect to their mass fraction gradients ('mass')
+        or mole fraction gradients ('molar', default) when
+        using the mixture-averaged transport model.
+        """
+        def __get__(self):
+            if self.flow.fluxGradientBasis() == ThermoBasis.molar:
+                return 'molar'
+            else:
+                return 'mass'
+        def __set__(self, basis):
+            if basis == 'molar':
+                self.flow.setFluxGradientBasis(ThermoBasis.molar)
+            elif basis == 'mass':
+                self.flow.setFluxGradientBasis(ThermoBasis.mass)
+            else:
+                raise ValueError("Valid choices are 'mass' or 'molar'."
+                                 " Got {!r}.".format(basis))
 
     property energy_enabled:
         """ Determines whether or not to solve the energy equation."""
@@ -565,65 +555,13 @@ cdef class _FlowBase(Domain1D):
             y.push_back(t)
         self.flow.setFixedTempProfile(x, y)
 
-    def __dealloc__(self):
-        del self.flow
-
-    property settings:
+    def get_settings3(self):
         """
-        Get a dictionary describing type, name, and simulation specific to this domain
-        type.
+        Temporary method returning new behavior of settings getter.
+
+        .. versionadded:: 3.0
         """
-        def __get__(self):
-            out = super().settings
-
-            epsilon = self.boundary_emissivities
-            out.update({'emissivity_left': epsilon[0],
-                        'emissivity_right': epsilon[1]})
-
-            # add tolerance settings
-            tols = {'steady_reltol': self.steady_reltol(),
-                    'steady_abstol': self.steady_abstol(),
-                    'transient_reltol': self.transient_reltol(),
-                    'transient_abstol': self.transient_abstol()}
-            comp = np.array(self.component_names)
-            for tname, tol in tols.items():
-                # add mode (most frequent tolerance setting)
-                values, counts = np.unique(tol, return_counts=True)
-                ix = np.argmax(counts)
-                out.update({tname: values[ix]})
-
-                # add values deviating from mode
-                ix = np.logical_not(np.isclose(tol, values[ix]))
-                out.update({'{}_{}'.format(tname, c): t
-                            for c, t in zip(comp[ix], tol[ix])})
-
-            return out
-
-        def __set__(self, meta):
-            # boundary emissivities
-            if 'emissivity_left' in meta or 'emissivity_right' in meta:
-                epsilon = self.boundary_emissivities
-                epsilon = (meta.get('emissivity_left', epsilon[0]),
-                           meta.get('emissivity_right', epsilon[1]))
-                self.boundary_emissivities = epsilon
-
-            # tolerances
-            tols = ['steady_reltol', 'steady_abstol',
-                    'transient_reltol', 'transient_abstol']
-            tols = [t for t in tols if t in meta]
-            comp = np.array(self.component_names)
-            for tname in tols:
-                mode = tname.split('_')
-                tol = meta[tname] * np.ones(len(comp))
-                for i, c in enumerate(comp):
-                    key = '{}_{}'.format(tname, c)
-                    if key in meta:
-                        tol[i] = meta[key]
-                tol = {mode[1][:3]: tol}
-                if mode[0] == 'steady':
-                    self.set_steady_tolerances(**tol)
-                else:
-                    self.set_transient_tolerances(**tol)
+        return self.settings
 
     property boundary_emissivities:
         """ Set/get boundary emissivities. """
@@ -668,23 +606,114 @@ cdef class _FlowBase(Domain1D):
         """
         self.flow.setAxisymmetricFlow()
 
-    property flow_type:
+    @property
+    def type(self):
         """
-        Return the type of flow domain being represented, either "Free Flame" or
-        "Axisymmetric Stagnation".
+        Return the type of flow domain being represented.
+
+        Examples:
+        - ``free-flow``/``free-ion-flow``,
+        - ``axisymmetric-flow``/``axisymmetric-ion-flow``,
+        - ``unstrained-flow``/``unstrained-ion-flow``
         """
+        return pystr(self.flow.type())
+
+    @property
+    def solving_stage(self):
+        """
+        Solving stage mode for handling ionized species (only relevant if transport
+        model is ``ionized-gas``):
+
+        - ``stage == 1``: the fluxes of charged species are set to zero
+        - ``stage == 2``: the electric field equation is solved, and the drift flux for
+          ionized species is evaluated
+        """
+        return self.flow.getSolvingStage()
+
+    @solving_stage.setter
+    def solving_stage(self, stage):
+        self.flow.setSolvingStage(stage)
+
+    @property
+    def electric_field_enabled(self):
+        """
+        Determines whether or not to solve the electric field equation (only relevant
+        if transport model is ``ionized-gas``).
+        """
+        return self.flow.doElectricField(0)
+
+    @electric_field_enabled.setter
+    def electric_field_enabled(self, enable):
+        if enable:
+            self.flow.solveElectricField()
+        else:
+            self.flow.fixElectricField()
+
+    property left_control_point_temperature:
+        """ Get/Set the left control point temperature [K] """
         def __get__(self):
-            return pystr(self.flow.flowType())
+            return self.flow.leftControlPointTemperature()
+        def __set__(self, T):
+            self.flow.setLeftControlPointTemperature(T)
+
+    property right_control_point_temperature:
+        """ Get/Set the right control point temperature [K] """
+        def __get__(self):
+            return self.flow.rightControlPointTemperature()
+        def __set__(self, T):
+            self.flow.setRightControlPointTemperature(T)
+
+    property left_control_point_coordinate:
+        """ Get the left control point coordinate [m] """
+        def __get__(self):
+            return self.flow.leftControlPointCoordinate()
+
+    property right_control_point_coordinate:
+        """ Get the right control point coordinate [m] """
+        def __get__(self):
+            return self.flow.rightControlPointCoordinate()
+
+    property two_point_control_enabled:
+        """ Get/Set the state of the two-point flame control """
+        def __get__(self):
+            return self.flow.twoPointControlEnabled()
+        def __set__(self, enable):
+            self.flow.enableTwoPointControl(<cbool>enable)
 
 
-cdef class IdealGasFlow(_FlowBase):
+cdef class FreeFlow(FlowBase):
+    r"""A free flow domain. The equations solved are standard equations for adiabatic
+    one-dimensional flow. The solution variables are:
+
+    *velocity*
+        axial velocity
+    *T*
+        temperature
+    *Y_k*
+        species mass fractions
     """
-    An ideal gas flow domain. Functions `set_free_flow` and
-    `set_axisymmetric_flow` can be used to set different type of flow.
+    _domain_type = "free-flow"
 
-    For the type of axisymmetric flow, the equations solved are the similarity
-    equations for the flow in a finite-height gap of infinite radial extent.
-    The solution variables are:
+
+cdef class UnstrainedFlow(FlowBase):
+    r"""An unstrained flow domain. The equations solved are standard equations for
+    adiabatic one-dimensional flow. The solution variables are:
+
+    *velocity*
+        axial velocity
+    *T*
+        temperature
+    *Y_k*
+        species mass fractions
+    """
+    _domain_type = "unstrained-flow"
+
+
+cdef class AxisymmetricFlow(FlowBase):
+    r"""
+    An axisymmetric flow domain. The equations solved are the similarity equations for
+    the flow in a finite-height gap of infinite radial extent. The solution variables
+    are:
 
     *velocity*
         axial velocity
@@ -693,65 +722,20 @@ cdef class IdealGasFlow(_FlowBase):
     *T*
         temperature
     *lambda*
-        (1/r)(dP/dr)
+        :math:`(1/r)(dP/dr)`
     *Y_k*
         species mass fractions
 
-    It may be shown that if the boundary conditions on these variables are
-    independent of radius, then a similarity solution to the exact governing
-    equations exists in which these variables are all independent of radius.
-    This solution holds only in in low-Mach-number limit, in which case
-    (dP/dz) = 0, and lambda is a constant. (Lambda is treated as a spatially-
-    varying solution variable for numerical reasons, but in the final solution
-    it is always independent of z.) As implemented here, the governing
-    equations assume an ideal gas mixture.  Arbitrary chemistry is allowed, as
-    well as arbitrary variation of the transport properties.
+    It may be shown that if the boundary conditions on these variables are independent
+    of radius, then a similarity solution to the exact governing equations exists in
+    which these variables are all independent of radius. This solution holds only in
+    the low-Mach-number limit, in which case :math:`(dP/dz) = 0`, and :math:`lambda` is
+    a constant. (Lambda is treated as a spatially-varying solution variable for
+    numerical reasons, but in the final solution it is always independent of :math:`z`.)
+    As implemented here, the governing equations assume an ideal gas mixture. Arbitrary
+    chemistry is allowed, as well as arbitrary variation of the transport properties.
     """
-    def __cinit__(self, _SolutionBase phase, *args, **kwargs):
-        self.flow = new CxxStFlow(phase._base, phase.n_species, 2)
-
-
-cdef class IonFlow(_FlowBase):
-    """
-    An ion flow domain.
-
-    In an ion flow domain, the electric drift is added to the diffusion flux
-    """
-    def __cinit__(self, _SolutionBase thermo, *args, **kwargs):
-        self.flow = <CxxStFlow*>(new CxxIonFlow(thermo._base, thermo.n_species, 2))
-
-    def set_solving_stage(self, stage):
-        """
-        Set the mode for handling ionized species:
-
-        - ``stage == 1``: the fluxes of charged species are set to zero
-        - ``stage == 2``: the electric field equation is solved, and the drift flux for
-          ionized species is evaluated
-        """
-        (<CxxIonFlow*>self.flow).setSolvingStage(stage)
-
-    property electric_field_enabled:
-        """ Determines whether or not to solve the energy equation."""
-        def __get__(self):
-            return (<CxxIonFlow*>self.flow).doElectricField(0)
-        def __set__(self, enable):
-            if enable:
-                (<CxxIonFlow*>self.flow).solveElectricField()
-            else:
-                (<CxxIonFlow*>self.flow).fixElectricField()
-
-    def set_default_tolerances(self):
-        """ Set all tolerances to their default values """
-        super().set_default_tolerances()
-        chargetol = {}
-        for S in self.gas.species():
-            if S.composition == {'E': 1.0}:
-                chargetol[S.name] = (1e-5, 1e-20)
-            elif S.charge != 0:
-                chargetol[S.name] = (1e-5, 1e-16)
-        self.set_steady_tolerances(**chargetol)
-        self.set_transient_tolerances(**chargetol)
-        self.have_user_tolerances = False
+    _domain_type = "axisymmetric-flow"
 
 
 cdef class Sim1D:
@@ -767,12 +751,12 @@ cdef class Sim1D:
         self.sim = NULL
 
     def __init__(self, domains, *args, **kwargs):
-        cdef vector[CxxDomain1D*] D
+        cdef vector[shared_ptr[CxxDomain1D]] cxx_domains
         cdef Domain1D d
         for d in domains:
-            D.push_back(d.domain)
+            cxx_domains.push_back(d._domain)
 
-        self.sim = new CxxSim1D(D)
+        self.sim = new CxxSim1D(cxx_domains)
         self.domains = tuple(domains)
         self.set_interrupt(no_op)
         self._initialized = False
@@ -997,125 +981,11 @@ cdef class Sim1D:
         dom, comp = self._get_indices(domain, component)
         self.sim.setFlatProfile(dom, comp, value)
 
-    def collect_data(self, domain, other):
-        """
-        Return the underlying data specifying a ``domain``. This method is used as
-        a service function for export via `FlameBase.to_solution_array`.
-
-        Derived classes call this function with the flow domain as the ``domain`` and a
-        list of essential non-thermodynamic solution components of the configuration as
-        the ``components``. A different domain (for example, inlet or outlet) can be
-        specified either by name or as the corresponding Domain1D object itself.
-        """
-        idom = self.domain_index(domain)
-        dom = self.domains[idom]
-
-        other_cols = OrderedDict()
-        meta = dom.settings
-
-        if isinstance(dom, _FlowBase):
-            n_points = dom.n_points
-
-            # retrieve gas state
-            states = self.T, self.P, self.Y.T
-
-            # create other columns
-            for e in other:
-               if e == 'grid':
-                   other_cols[e] = self.grid
-               else:
-                   other_cols[e] = self.profile(dom, e)
-            if self.radiation_enabled:
-                other_cols['qdot'] = self.flame.radiative_heat_loss
-
-            return states, other_cols, meta
-
-        elif isinstance(dom, Inlet1D):
-            self.gas.TPY = dom.T, self.P, dom.Y
-
-            # create other columns
-            for e in other:
-               if e == 'velocity':
-                   other_cols[e] = dom.mdot / self.gas.density
-               elif e not in {'lambda'}:
-                   other_cols[e] = getattr(dom, e)
-
-            return self.gas.TPY, other_cols, meta
-
-        elif isinstance(dom, ReactingSurface1D):
-            return dom.surface.TPY, other_cols, meta
-
-        elif isinstance(dom, Boundary1D):
-            return ([], [], []), other_cols, meta
-
-        else:
-            msg = ("Export of '{}' is not implemented")
-            raise NotImplementedError(msg.format(type(self).__name__))
-
-    def restore_data(self, domain, states, other_cols, meta):
-        """
-        Restore a ``domain`` from underlying data. This method is used as
-        a service function for import via `FlameBase.from_solution_array`.
-
-        Derived classes set default values for ``domain`` and ``other``, where
-        defaults describe flow domain and essential non-thermodynamic solution
-        components of the configuration, respectively. An alternative ``domain``
-        (such as inlet, outlet, etc.), can be specified either by name or the
-        corresponding Domain1D object itself.
-        """
-        idom = self.domain_index(domain)
-        dom = self.domains[idom]
-        T, P, Y = states
-        if isinstance(P, np.ndarray) and P.size:
-            P = P[0]
-
-        if isinstance(dom, _FlowBase):
-            grid = other_cols['grid']
-            dom.grid = grid
-            xi = (grid - grid[0]) / (grid[-1] - grid[0])
-            self._get_initial_solution()
-
-            # restore temperature and 'other' profiles
-            self.set_profile('T', xi, T)
-            for key, val in other_cols.items():
-                if key in ['grid', 'qdot']:
-                    pass
-                elif key in dom.component_names:
-                    self.set_profile(key, xi, val)
-
-            # restore species profiles
-            for i, spc in enumerate(self.gas.species_names):
-                self.set_profile(spc, xi, Y[:, i])
-
-            # restore pressure
-            self.P = P
-
-            # restore settings
-            dom.settings = meta
-
-        elif isinstance(dom, Inlet1D):
-            self.gas.TPY = T, P, Y
-            dom.T = T
-            self.P = P
-            dom.Y = Y
-            dom.mdot = other_cols['velocity'] * self.gas.density
-
-        elif isinstance(dom, (Outlet1D, OutletReservoir1D,
-                              SymmetryPlane1D, Surface1D)):
-            pass
-
-        elif isinstance(dom, ReactingSurface1D):
-            dom.surface.TPY = T, P, Y
-
-        else:
-            msg = ("Import of '{}' is not implemented")
-            raise NotImplementedError(msg.format(type(self).__name__))
-
-    def show_solution(self):
+    def show(self):
         """ print the current solution. """
         if not self._initialized:
             self.set_initial_guess()
-        self.sim.showSolution()
+        self.sim.show()
 
     def set_time_step(self, stepsize, n_steps):
         """Set the sequence of time steps to try when Newton fails.
@@ -1141,6 +1011,33 @@ cdef class Sim1D:
             return self.sim.maxTimeStepCount()
         def __set__(self, nmax):
             self.sim.setMaxTimeStepCount(nmax)
+
+    def set_jacobian_perturbation(self, relative, absolute, threshold):
+        """
+        Configure perturbations used to evaluate finite difference Jacobian
+
+        :param relative:
+            Relative perturbation (multiplied by the absolute value of each component).
+            Default ``1.0e-5``.
+        :param absolute:
+            Absolute perturbation (independent of component value). Default ``1.0e-10``.
+        :param threshold:
+            Threshold below which to exclude elements from the Jacobian. Default ``0.0``.
+        """
+        self.sim.setJacobianPerturbation(relative, absolute, threshold)
+
+    @property
+    def linear_solver(self):
+        """
+        Get/Set the the linear solver used to hold the Jacobian matrix and solve linear
+        systems as part of each Newton iteration. The default is a banded, direct
+        solver. See :ref:`sec-python-jacobians` for available solvers.
+        """
+        return SystemJacobian.wrap(self.sim.linearSolver())
+
+    @linear_solver.setter
+    def linear_solver(self, SystemJacobian precon):
+        self.sim.setLinearSolver(precon._base)
 
     def set_initial_guess(self, *args, **kwargs):
         """
@@ -1193,7 +1090,7 @@ cdef class Sim1D:
 
         def set_transport(multi):
             for dom in self.domains:
-                if isinstance(dom, _FlowBase):
+                if isinstance(dom, FlowBase):
                     dom.transport_model = multi
 
         # Do initial solution steps with default tolerances
@@ -1227,15 +1124,15 @@ cdef class Sim1D:
 
         # Do initial solution steps without multicomponent transport
         transport = self.transport_model
-        solve_multi = self.transport_model == 'Multi'
+        solve_multi = self.transport_model == 'multicomponent'
         if solve_multi:
-            set_transport('Mix')
+            set_transport('mixture-averaged')
 
         def log(msg, *args):
             if loglevel:
                 print('\n{:*^78s}'.format(' ' + msg.format(*args) + ' '))
 
-        flow_domains = [D for D in self.domains if isinstance(D, _FlowBase)]
+        flow_domains = [D for D in self.domains if isinstance(D, FlowBase)]
         zmin = [D.grid[0] for D in flow_domains]
         zmax = [D.grid[-1] for D in flow_domains]
 
@@ -1277,7 +1174,10 @@ cdef class Sim1D:
             # If initial solve using energy equation fails, fall back on the
             # traditional fixed temperature solve followed by solving the energy
             # equation
-            if not solved:
+            if not solved or self.extinct():
+                if self.extinct():
+                    self.set_initial_guess(*self._initial_guess_args,
+                                           **self._initial_guess_kwargs)
                 log('Initial solve failed; Retrying with energy equation disabled')
                 self.energy_enabled = False
                 try:
@@ -1340,7 +1240,7 @@ cdef class Sim1D:
 
         if solve_multi:
             log('Solving with multicomponent transport')
-            set_transport('Multi')
+            set_transport('multicomponent')
 
         if soret_doms:
             log('Solving with Soret diffusion')
@@ -1463,40 +1363,104 @@ cdef class Sim1D:
         def __get__(self):
             return self.sim.fixedTemperatureLocation()
 
-    def save(self, filename='soln.yaml', name='solution', description='none',
-             loglevel=1):
+    def set_left_control_point(self, T):
         """
-        Save the solution in YAML format.
+        Set the left control point using the specified temperature. This user-provided
+        temperature will be used to locate the closest grid point to that temperature,
+        which will serve to locate the left control point's coordinate. Starting from
+        the left boundary, the first grid point that is equal to or exceeds the
+        specified temperature will be used to locate the left control point's
+        coordinate.
+        """
+        self.sim.setLeftControlPoint(T)
+
+    def set_right_control_point(self, T):
+        """
+        Set the right control point using a specified temperature. This user-provided
+        temperature will be used to locate the closest grid point to that temperature,
+        which will serve to locate the right control point's coordinate.Starting from
+        the right boundary, the first grid point that is equal to or exceeds the
+        specified temperature will be used to locate the right control point's
+        coordinate.
+        """
+        self.sim.setRightControlPoint(T)
+
+    def save(self, filename='soln.yaml', name='solution', description=None,
+             loglevel=None, *, overwrite=False, compression=0, basis=None):
+        """
+        Save current simulation data to a data file (CSV, YAML or HDF).
+
+        In order to save the content of the current object, individual domains are
+        converted to `SolutionArray` objects and saved using the `~SolutionArray.save`
+        method. For HDF and YAML output, all domains are written to a single container
+        file with shared header information. Simulation settings of individual domains
+        are preserved as meta data of the corresponding `SolutionArray` objects.
+        For CSV files, only state and auxiliary data of the main 1D domain are saved.
+
+        The complete state of the current object can be restored from HDF and YAML
+        container files using the `restore` method, while individual domains can be
+        loaded using `SolutionArray.restore` for further analysis. While CSV files do
+        not contain complete information, they can be used for setting initial states
+        of individual simulation objects (example: `~FreeFlame.set_initial_guess`).
 
         :param filename:
-            solution file
+            Name of output file (CSV, YAML or HDF)
         :param name:
-            solution name within the file
+            Identifier of storage location within the container file; this node/group
+            contains header information and multiple subgroups holding domain-specific
+            `SolutionArray` data (YAML/HDF only).
         :param description:
-            custom description text
+            Custom comment describing the dataset to be stored (YAML/HDF only).
+        :param overwrite:
+            Force overwrite if file and/or data entry exists; optional (default=`False`)
+        :param compression:
+            Compression level (0-9); optional (default=0; HDF only)
+        :param basis:
+            Output mass (``Y``/``mass``) or mole (``Y``/``mass``) fractions;
+            if not specified (`None`), the native basis of the underlying `ThermoPhase`
+            manager is used.
 
         >>> s.save(filename='save.yaml', name='energy_off',
         ...        description='solution with energy eqn. disabled')
 
+        .. versionchanged:: 3.0
+            Argument loglevel is no longer supported
         """
+        if loglevel is not None:
+            warnings.warn("Sim1D.save: Argument 'loglevel' is deprecated and will be "
+                "ignored.", DeprecationWarning)
         self.sim.save(stringify(str(filename)), stringify(name),
-                      stringify(description), loglevel)
+                      stringify(description), overwrite, compression, stringify(basis))
 
-    def restore(self, filename='soln.yaml', name='solution', loglevel=2):
-        """Set the solution vector to a previously-saved solution.
+    def restore(self, filename='soln.yaml', name='solution', loglevel=None):
+        """Retrieve data and settings from a previously saved simulation.
+
+        This method restores a simulation object from YAML or HDF data previously saved
+        using the `save` method.
 
         :param filename:
-            solution file
+            Name of container file (YAML or HDF)
         :param name:
-            solution name within the file
+            Identifier of location within the container file; this node/group contains
+            header information and subgroups with domain-specific `SolutionArray` data
         :param loglevel:
             Amount of logging information to display while restoring,
             from 0 (disabled) to 2 (most verbose).
+        :return:
+            Dictionary containing header information
 
         >>> s.restore(filename='save.yaml', name='energy_off')
+
+        .. versionchanged:: 3.0
+            Implemented return value for meta data; loglevel is no longer supported
         """
-        self.sim.restore(stringify(str(filename)), stringify(name), loglevel)
+        if loglevel is not None:
+            warnings.warn("Sim1D.restore: Argument 'loglevel' is deprecated and will be"
+                 " ignored.", DeprecationWarning)
+        cdef CxxAnyMap header
+        header = self.sim.restore(stringify(str(filename)), stringify(name))
         self._initialized = True
+        return anymap_to_py(header)
 
     def restore_time_stepping_solution(self):
         """

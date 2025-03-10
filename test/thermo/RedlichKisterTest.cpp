@@ -4,7 +4,7 @@
 #include "cantera/thermo/Species.h"
 #include "cantera/thermo/ConstCpPoly.h"
 #include "cantera/base/stringUtils.h"
-#include "cantera/thermo/PDSS_IdealGas.h"
+#include "cantera/thermo/PDSS_ConstVol.h"
 
 namespace Cantera
 {
@@ -27,17 +27,17 @@ public:
     RedlichKister_Test() {}
 
     void setup() {
-        test_phase.reset(newPhase("thermo-models.yaml", "Redlich-Kister-LiC6"));
+        test_phase = newThermo("thermo-models.yaml", "Redlich-Kister-LiC6");
     }
 
     void set_r(const double r) {
-        vector_fp moleFracs(2);
+        vector<double> moleFracs(2);
         moleFracs[0] = r;
         moleFracs[1] = 1-r;
         test_phase->setMoleFractions(&moleFracs[0]);
     }
 
-    std::unique_ptr<ThermoPhase> test_phase;
+    shared_ptr<ThermoPhase> test_phase;
 };
 
 TEST_F(RedlichKister_Test, chem_potentials)
@@ -49,7 +49,7 @@ TEST_F(RedlichKister_Test, chem_potentials)
     double xmax = 0.9;
     int numSteps = 9;
     double dx = (xmax-xmin)/(numSteps-1);
-    vector_fp chemPotentials(2);
+    vector<double> chemPotentials(2);
     for(int i=0; i < 9; ++i)
     {
         set_r(xmin + i*dx);
@@ -79,7 +79,7 @@ TEST_F(RedlichKister_Test, dlnActivities)
     double xmax = 0.9;
     int numSteps = 9;
     double dx = (xmax-xmin)/(numSteps-1);
-    vector_fp dlnActCoeffdx(2);
+    vector<double> dlnActCoeffdx(2);
     for(int i=0; i < 9; ++i)
     {
         const double r = xmin + i*dx;
@@ -98,24 +98,24 @@ TEST_F(RedlichKister_Test, standardConcentrations)
 
 TEST_F(RedlichKister_Test, fromScratch)
 {
-    test_phase.reset(new RedlichKisterVPSSTP());
+    test_phase = make_shared<RedlichKisterVPSSTP>();
     RedlichKisterVPSSTP& rk = dynamic_cast<RedlichKisterVPSSTP&>(*test_phase);
 
     auto sLiC6 = make_shared<Species>("Li(C6)", parseCompString("C:6 Li:1"));
     double coeffs1[] = {298.15, -11.65e6, 0.0, 0.0};
-    sLiC6->thermo.reset(new ConstCpPoly(100, 5000, 101325, coeffs1));
+    sLiC6->thermo = make_shared<ConstCpPoly>(100, 5000, 101325, coeffs1);
 
     auto sVC6 = make_shared<Species>("V(C6)", parseCompString("C:6"));
     double coeffs2[] = {298.15, 0.0, 0.0, 0.0};
-    sVC6->thermo.reset(new ConstCpPoly(250, 800, 101325, coeffs2));
+    sVC6->thermo = make_shared<ConstCpPoly>(250, 800, 101325, coeffs2);
 
     rk.addSpecies(sLiC6);
     rk.addSpecies(sVC6);
 
-    std::unique_ptr<PDSS> ssLiC6(new PDSS_IdealGas());
+    auto ssLiC6 = make_unique<PDSS_ConstVol>();
     rk.installPDSS(0, std::move(ssLiC6));
 
-    std::unique_ptr<PDSS> ssVC6(new PDSS_IdealGas());
+    auto ssVC6 = make_unique<PDSS_ConstVol>();
     rk.installPDSS(1, std::move(ssVC6));
 
     double hcoeffs[] = {-3.268E6, 3.955E6, -4.573E6, 6.147E6, -3.339E6, 1.117E7,
@@ -130,7 +130,7 @@ TEST_F(RedlichKister_Test, fromScratch)
     double xmin = 0.6;
     double xmax = 0.9;
     int numSteps = 9;
-    vector_fp chemPotentials(2);
+    vector<double> chemPotentials(2);
     for(int i=0; i < 9; ++i)
     {
         set_r(xmin + i*(xmax-xmin)/(numSteps-1));

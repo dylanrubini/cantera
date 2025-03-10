@@ -8,8 +8,6 @@
 #include "cantera/kinetics/Reaction.h"
 #include "cantera/kinetics/ReactionRateFactory.h"
 #include "cantera/kinetics/Kinetics.h"
-#include "cantera/kinetics/Arrhenius.h" // @todo: remove after Cantera 3.0
-#include "cantera/kinetics/Falloff.h" // @todo: remove after Cantera 3.0
 #include "cantera/thermo/ThermoPhase.h"
 #include "cantera/thermo/SurfPhase.h"
 #include "cantera/base/Array.h"
@@ -18,7 +16,6 @@
 #include "cantera/base/stringUtils.h"
 #include <boost/algorithm/string/predicate.hpp>
 #include <sstream>
-#include <set>
 
 #include <boost/algorithm/string.hpp>
 
@@ -36,47 +33,68 @@ Reaction::Reaction(const Composition& reactants_,
     , m_from_composition(true)
     , m_third_body(tbody_)
 {
+    if (reactants.count("M") || products.count("M")) {
+        throw CanteraError("Reaction::Reaction",
+            "Third body 'M' must not be included in either reactant or product maps.");
+    }
     setRate(rate_);
 
     // set flags ensuring correct serialization output
-    bool count = 0;
-    for (const auto& reac : reactants) {
-        if (products.count(reac.first)) {
-            count = true;
-            break;
+    Composition third;
+    for (const auto& [name, stoich] : reactants) {
+        if (products.count(name)) {
+            third[name] = products.at(name) - stoich;
         }
     }
-    if (count) {
-        if (tbody_ && tbody_->name() != "M") {
+    if (tbody_) {
+        string name = tbody_->name();
+        if (reactants.count(name) && products.count(name)) {
+            throw CanteraError("Reaction::Reaction",
+                "'{}' not acting as third body collider must not be included in both "
+                "reactant and product maps.", name);
+        }
+        if (name != "M") {
             m_third_body->explicit_3rd = true;
-        } else if (!tbody_) {
-            m_explicit_type = true;
+        }
+    } else if (!tbody_ && third.size() == 1) {
+        // implicit third body
+        string name = third.begin()->first;
+        m_third_body = make_shared<ThirdBody>(name);
+        if (name != "M") {
+            m_third_body->explicit_3rd = true;
         }
     }
+    check();
 }
 
-Reaction::Reaction(const std::string& equation,
+Reaction::Reaction(const string& equation,
                    shared_ptr<ReactionRate> rate_,
                    shared_ptr<ThirdBody> tbody_)
     : m_third_body(tbody_)
 {
-    setEquation(equation);
     setRate(rate_);
-    if (tbody_ && tbody_->name() != "M") {
+    setEquation(equation);
+    if (m_third_body && m_third_body->name() != "M") {
         m_third_body->explicit_3rd = true;
     }
+    check();
 }
 
 Reaction::Reaction(const AnyMap& node, const Kinetics& kin)
 {
-    std::string rate_type = node.getString("type", "Arrhenius");
+    string rate_type = node.getString("type", "Arrhenius");
     if (!kin.nPhases()) {
         throw InputFileError("Reaction", node,
             "Cannot instantiate Reaction with empty Kinetics object.");
     }
 
     setParameters(node, kin);
-    size_t nDim = kin.thermo(kin.reactionPhaseIndex()).nDim();
+    size_t nDim = kin.thermo(0).nDim();
+    if (!valid()) {
+        // If the reaction isn't valid (for example, contains undefined species),
+        // setting up the rate constant won't work
+        return;
+    }
     if (nDim == 3) {
         if (ba::starts_with(rate_type, "three-body-")) {
             AnyMap rateNode = node;
@@ -95,7 +113,7 @@ Reaction::Reaction(const AnyMap& node, const Kinetics& kin)
             if (!ba::starts_with(rate_type, "sticking-")) {
                 rateNode["type"] = "sticking-" + rate_type;
             }
-        } else {
+        } else if (rate_type == "Arrhenius") { // no explicitly-specified type
             throw InputFileError("Reaction::Reaction", input,
                 "Unable to infer interface reaction type.");
         }
@@ -107,21 +125,19 @@ Reaction::Reaction(const AnyMap& node, const Kinetics& kin)
 void Reaction::check()
 {
     if (!allow_nonreactant_orders) {
-        for (const auto& order : orders) {
-            if (reactants.find(order.first) == reactants.end()) {
+        for (const auto& [name, order] : orders) {
+            if (reactants.find(name) == reactants.end()) {
                 throw InputFileError("Reaction::validate", input,
-                    "Reaction order specified for non-reactant species '{}'",
-                    order.first);
+                    "Reaction order specified for non-reactant species '{}'", name);
            }
         }
     }
 
     if (!allow_negative_orders) {
-        for (const auto& order : orders) {
-            if (order.second < 0.0) {
+        for (const auto& [name, order] : orders) {
+            if (order < 0.0) {
                 throw InputFileError("Reaction::validate", input,
-                    "Negative reaction order specified for species '{}'",
-                    order.first);
+                    "Negative reaction order specified for species '{}'", name);
             }
         }
     }
@@ -135,9 +151,46 @@ void Reaction::check()
             "Reaction orders may only be given for irreversible reactions");
     }
 
+    if (!m_rate) {
+        return;
+    }
+
     // Check reaction rate evaluator to ensure changes introduced after object
     // instantiation are considered.
     m_rate->check(equation());
+
+    string rate_type = m_rate->type();
+    if (m_third_body) {
+        if (rate_type == "falloff" || rate_type == "chemically-activated") {
+            if (m_third_body->mass_action && !m_from_composition) {
+                throw InputFileError("Reaction::setRate", input,
+                    "Third-body collider does not use '(+{})' notation.",
+                    m_third_body->name());
+            }
+            m_third_body->mass_action = false;
+        } else if (rate_type == "Chebyshev") {
+            if (m_third_body->name() == "M") {
+                warn_deprecated("Chebyshev reaction equation", input, "Specifying 'M' "
+                    "in the reaction equation for Chebyshev reactions is deprecated.");
+                m_third_body.reset();
+            }
+        } else if (rate_type == "pressure-dependent-Arrhenius") {
+            if (m_third_body->name() == "M") {
+                throw InputFileError("Reaction::setRate", input,
+                    "Found superfluous '{}' in pressure-dependent-Arrhenius reaction.",
+                    m_third_body->name());
+            }
+        }
+    } else {
+        if (rate_type == "falloff" || rate_type == "chemically-activated") {
+            if (!m_from_composition) {
+                throw InputFileError("Reaction::setRate", input,
+                    "Reaction equation for falloff reaction '{}'\n does not "
+                    "contain valid pressure-dependent third body", equation());
+            }
+            m_third_body = make_shared<ThirdBody>("(+M)");
+        }
+    }
 }
 
 AnyMap Reaction::parameters(bool withInput) const
@@ -149,8 +202,8 @@ AnyMap Reaction::parameters(bool withInput) const
     }
 
     static bool reg = AnyMap::addOrderingRules("Reaction",
-        {{"head", "type"},
-         {"head", "equation"},
+        {{"head", "equation"},
+         {"head", "type"},
          {"tail", "duplicate"},
          {"tail", "orders"},
          {"tail", "negative-orders"},
@@ -173,21 +226,29 @@ void Reaction::getParameters(AnyMap& reactionNode) const
 
     if (duplicate) {
         reactionNode["duplicate"] = true;
+    } else {
+        reactionNode.exclude("duplicate");
     }
     if (orders.size()) {
         reactionNode["orders"] = orders;
+    } else {
+        reactionNode.exclude("orders");
     }
     if (allow_negative_orders) {
         reactionNode["negative-orders"] = true;
+    } else {
+        reactionNode.exclude("negative-orders");
     }
     if (allow_nonreactant_orders) {
         reactionNode["nonreactant-orders"] = true;
+    } else {
+        reactionNode.exclude("nonreactant-orders");
     }
 
     reactionNode.update(m_rate->parameters());
 
     // strip information not needed for reconstruction
-    std::string rtype = reactionNode["type"].asString();
+    string rtype = reactionNode["type"].asString();
     if (rtype == "pressure-dependent-Arrhenius") {
         // skip
     } else if (m_explicit_type && ba::ends_with(rtype, "Arrhenius")) {
@@ -198,7 +259,7 @@ void Reaction::getParameters(AnyMap& reactionNode) const
             reactionNode["type"] = "elementary";
         }
     } else if (ba::ends_with(rtype, "Arrhenius")) {
-        reactionNode.erase("type");
+        reactionNode.exclude("type");
     } else if (m_explicit_type) {
         reactionNode["type"] = type();
     } else if (ba::ends_with(rtype, "Blowers-Masel")) {
@@ -222,9 +283,9 @@ void Reaction::setParameters(const AnyMap& node, const Kinetics& kin)
     setEquation(node["equation"].asString(), &kin);
     // Non-stoichiometric reaction orders
     if (node.hasKey("orders")) {
-        for (const auto& order : node["orders"].asMap<double>()) {
-            orders[order.first] = order.second;
-            if (kin.kineticsSpeciesIndex(order.first) == npos) {
+        for (const auto& [name, order] : node["orders"].asMap<double>()) {
+            orders[name] = order;
+            if (kin.kineticsSpeciesIndex(name) == npos) {
                 setValid(false);
             }
         }
@@ -255,42 +316,22 @@ void Reaction::setRate(shared_ptr<ReactionRate> rate)
             "Reaction rate for reaction '{}' must not be empty.", equation());
     }
     m_rate = rate;
-
-    std::string rate_type = m_rate->type();
-    if (m_third_body) {
-        if (rate_type == "falloff" || rate_type == "chemically-activated") {
-            if (m_third_body->mass_action && !m_from_composition) {
-                throw InputFileError("Reaction::setRate", input,
-                    "Third-body collider does not use '(+{})' notation.",
-                    m_third_body->name());
-            }
-            m_third_body->mass_action = false;
-        } else if (rate_type == "Chebyshev") {
-            if (m_third_body->name() == "M") {
-                warn_deprecated("Chebyshev reaction equation", input, "Specifying 'M' "
-                    "in the reaction equation for Chebyshev reactions is deprecated.");
-                m_third_body.reset();
-            }
-        } else if (rate_type == "pressure-dependent-Arrhenius") {
-            if (m_third_body->name() == "M") {
-                throw InputFileError("Reaction::setRate", input,
-                    "Found superfluous '{}' in pressure-dependent-Arrhenius reaction.",
-                    m_third_body->name());
-            }
-        }
-    } else {
-        if (rate_type == "falloff" || rate_type == "chemically-activated") {
-            if (!m_from_composition) {
-                throw InputFileError("Reaction::setRate", input,
-                    "Reaction equation for falloff reaction '{}'\n does not "
-                    "contain valid pressure-dependent third body", equation());
-            }
-            m_third_body.reset(new ThirdBody("(+M)"));
-        }
+    for (const auto& [id, callback] : m_setRateCallbacks) {
+        callback();
     }
 }
 
-std::string Reaction::reactantString() const
+void Reaction::registerSetRateCallback(void* id, const function<void()>& callback)
+{
+    m_setRateCallbacks[id] = callback;
+}
+
+void Reaction::removeSetRateCallback(void* id)
+{
+    m_setRateCallbacks.erase(id);
+}
+
+string Reaction::reactantString() const
 {
     std::ostringstream result;
     for (auto iter = reactants.begin(); iter != reactants.end(); ++iter) {
@@ -308,7 +349,7 @@ std::string Reaction::reactantString() const
     return result.str();
 }
 
-std::string Reaction::productString() const
+string Reaction::productString() const
 {
     std::ostringstream result;
     for (auto iter = products.begin(); iter != products.end(); ++iter) {
@@ -326,7 +367,7 @@ std::string Reaction::productString() const
     return result.str();
 }
 
-std::string Reaction::equation() const
+string Reaction::equation() const
 {
     if (reversible) {
         return reactantString() + " <=> " + productString();
@@ -335,11 +376,10 @@ std::string Reaction::equation() const
     }
 }
 
-void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
+void Reaction::setEquation(const string& equation, const Kinetics* kin)
 {
     parseReactionEquation(*this, equation, input, kin);
-
-    std::string rate_type = input.getString("type", "");
+    string rate_type = (m_rate) ? m_rate->type() : input.getString("type", "");
     if (ba::starts_with(rate_type, "three-body")) {
         // state type when serializing
         m_explicit_type = true;
@@ -347,23 +387,26 @@ void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
         // user override
         m_explicit_type = true;
         return;
-    } else if (kin && kin->thermo(kin->reactionPhaseIndex()).nDim() != 3) {
+    } else if (kin && kin->thermo(0).nDim() != 3) {
         // interface reactions
+        return;
+    } else if (rate_type == "electron-collision-plasma") {
+        // does not support third body
         return;
     }
 
-    std::string third_body;
+    string third_body;
     size_t count = 0;
     size_t countM = 0;
-    for (const auto& reac : reactants) {
+    for (const auto& [name, stoich] : reactants) {
         // detect explicitly specified collision partner
-        if (products.count(reac.first)) {
-            third_body = reac.first;
+        if (products.count(name)) {
+            third_body = name;
             size_t generic = third_body == "M"
                 || third_body == "(+M)"  || third_body == "(+ M)";
             count++;
             countM += generic;
-            if (reac.second > 1 && products[third_body] > 1) {
+            if (stoich > 1 && products[third_body] > 1) {
                 count++;
                 countM += generic;
             }
@@ -407,7 +450,7 @@ void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
                     "Collision efficiencies need to specify single species", equation);
             }
             third_body = effs.begin()->first;
-            m_third_body.reset(new ThirdBody(third_body));
+            m_third_body = make_shared<ThirdBody>(third_body);
             m_third_body->explicit_3rd = true;
         } else if (input.hasKey("default-efficiency")) {
             // insufficient disambiguation of third bodies
@@ -435,19 +478,19 @@ void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
         size_t nprod = 0;
 
         // ensure that all reactants have integer stoichiometric coefficients
-        for (const auto& reac : reactants) {
-            if (trunc(reac.second) != reac.second) {
+        for (const auto& [name, stoich] : reactants) {
+            if (trunc(stoich) != stoich) {
                 return;
             }
-            nreac += static_cast<size_t>(reac.second);
+            nreac += static_cast<size_t>(stoich);
         }
 
         // ensure that all products have integer stoichiometric coefficients
-        for (const auto& prod : products) {
-            if (trunc(prod.second) != prod.second) {
+        for (const auto& [name, stoich] : products) {
+            if (trunc(stoich) != stoich) {
                 return;
             }
-            nprod += static_cast<size_t>(prod.second);
+            nprod += static_cast<size_t>(stoich);
         }
 
         // either reactant or product side involves exactly three species
@@ -457,7 +500,7 @@ void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
     }
 
     if (m_third_body) {
-        std::string tName = m_third_body->name();
+        string tName = m_third_body->name();
         if (tName != third_body && third_body != "M" && tName != "M") {
             throw InputFileError("Reaction::setEquation", input,
                 "Detected incompatible third body colliders in reaction '{}'\n"
@@ -465,7 +508,7 @@ void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
         }
         m_third_body->setName(third_body);
     } else {
-        m_third_body.reset(new ThirdBody(third_body));
+        m_third_body = make_shared<ThirdBody>(third_body);
     }
 
     // adjust reactant coefficients
@@ -485,14 +528,14 @@ void Reaction::setEquation(const std::string& equation, const Kinetics* kin)
     }
 }
 
-std::string Reaction::type() const
+string Reaction::type() const
 {
     if (!m_rate) {
         throw CanteraError("Reaction::type", "Empty Reaction does not have a type");
     }
 
-    std::string rate_type = m_rate->type();
-    std::string sub_type = m_rate->subType();
+    string rate_type = m_rate->type();
+    string sub_type = m_rate->subType();
     if (sub_type != "") {
         return rate_type + "-" + sub_type;
     }
@@ -513,46 +556,46 @@ UnitStack Reaction::calculateRateCoeffUnits(const Kinetics& kin)
     }
 
     // Determine the units of the rate coefficient
-    const auto& rxn_phase = kin.thermo(kin.reactionPhaseIndex());
-    UnitStack rate_units(rxn_phase.standardConcentrationUnits());
+    UnitStack rate_units(kin.thermo(0).standardConcentrationUnits());
 
     // Set output units to standardConcentrationUnits per second
     rate_units.join(1.);
     rate_units.update(Units(1.0, 0, 0, -1), 1.);
 
-    for (const auto& order : orders) {
-        const auto& phase = kin.speciesPhase(order.first);
+    for (const auto& [name, order] : orders) {
+        const auto& phase = kin.speciesPhase(name);
         // Account for specified reaction orders
-        rate_units.update(phase.standardConcentrationUnits(), -order.second);
+        rate_units.update(phase.standardConcentrationUnits(), -order);
     }
-    for (const auto& stoich : reactants) {
+    for (const auto& [name, stoich] : reactants) {
         // Order for each reactant is the reactant stoichiometric coefficient,
         // unless already overridden by user-specified orders
-        if (stoich.first == "M" || ba::starts_with(stoich.first, "(+")) {
+        if (name == "M" || ba::starts_with(name, "(+")) {
             // calculateRateCoeffUnits may be called before these pseudo-species
             // have been stripped from the reactants
             continue;
-        } else if (orders.find(stoich.first) == orders.end()) {
-            const auto& phase = kin.speciesPhase(stoich.first);
+        } else if (orders.find(name) == orders.end()) {
+            const auto& phase = kin.speciesPhase(name);
             // Account for each reactant species
-            rate_units.update(phase.standardConcentrationUnits(), -stoich.second);
+            rate_units.update(phase.standardConcentrationUnits(), -stoich);
         }
     }
 
-    if (m_third_body) {
+    if (m_third_body && m_third_body->mass_action) {
         // Account for third-body collision partner as the last entry
         rate_units.join(-1);
     }
 
+    Reaction::rate_units = rate_units.product();
     return rate_units;
 }
 
-void updateUndeclared(std::vector<std::string>& undeclared,
+void updateUndeclared(vector<string>& undeclared,
                       const Composition& comp, const Kinetics& kin)
 {
-    for (const auto& sp: comp) {
-        if (kin.kineticsSpeciesIndex(sp.first) == npos) {
-            undeclared.emplace_back(sp.first);
+    for (const auto& [name, stoich]: comp) {
+        if (kin.kineticsSpeciesIndex(name) == npos) {
+            undeclared.emplace_back(name);
         }
     }
 }
@@ -562,28 +605,25 @@ void Reaction::checkBalance(const Kinetics& kin) const
     Composition balr, balp;
 
     // iterate over products and reactants
-    for (const auto& sp : products) {
-        const ThermoPhase& ph = kin.speciesPhase(sp.first);
-        size_t k = ph.speciesIndex(sp.first);
-        double stoich = sp.second;
+    for (const auto& [name, stoich] : products) {
+        const ThermoPhase& ph = kin.speciesPhase(name);
+        size_t k = ph.speciesIndex(name);
         for (size_t m = 0; m < ph.nElements(); m++) {
             balr[ph.elementName(m)] = 0.0; // so that balr contains all species
             balp[ph.elementName(m)] += stoich * ph.nAtoms(k, m);
         }
     }
-    for (const auto& sp : reactants) {
-        const ThermoPhase& ph = kin.speciesPhase(sp.first);
-        size_t k = ph.speciesIndex(sp.first);
-        double stoich = sp.second;
+    for (const auto& [name, stoich] : reactants) {
+        const ThermoPhase& ph = kin.speciesPhase(name);
+        size_t k = ph.speciesIndex(name);
         for (size_t m = 0; m < ph.nElements(); m++) {
             balr[ph.elementName(m)] += stoich * ph.nAtoms(k, m);
         }
     }
 
-    std::string msg;
+    string msg;
     bool ok = true;
-    for (const auto& el : balr) {
-        const std::string& elem = el.first;
+    for (const auto& [elem, balance] : balr) {
         double elemsum = balr[elem] + balp[elem];
         double elemdiff = fabs(balp[elem] - balr[elem]);
         if (elemsum > 0.0 && elemdiff / elemsum > 1e-4) {
@@ -599,24 +639,24 @@ void Reaction::checkBalance(const Kinetics& kin) const
             equation(), msg);
     }
 
-    if (kin.thermo(kin.reactionPhaseIndex()).nDim() == 3) {
+    if (kin.thermo(0).nDim() == 3) {
         return;
     }
 
     // Check that the number of surface sites is balanced
     double reac_sites = 0.0;
     double prod_sites = 0.0;
-    auto& surf = dynamic_cast<const SurfPhase&>(kin.thermo(kin.surfacePhaseIndex()));
-    for (const auto& reactant : reactants) {
-        size_t k = surf.speciesIndex(reactant.first);
+    auto& surf = dynamic_cast<const SurfPhase&>(kin.thermo(0));
+    for (const auto& [name, stoich] : reactants) {
+        size_t k = surf.speciesIndex(name);
         if (k != npos) {
-            reac_sites += reactant.second * surf.size(k);
+            reac_sites += stoich * surf.size(k);
         }
     }
-    for (const auto& product : products) {
-        size_t k = surf.speciesIndex(product.first);
+    for (const auto& [name, stoich] : products) {
+        size_t k = surf.speciesIndex(name);
         if (k != npos) {
-            prod_sites += product.second * surf.size(k);
+            prod_sites += stoich * surf.size(k);
         }
     }
     if (fabs(reac_sites - prod_sites) > 1e-5 * (reac_sites + prod_sites)) {
@@ -630,7 +670,7 @@ void Reaction::checkBalance(const Kinetics& kin) const
 bool Reaction::checkSpecies(const Kinetics& kin) const
 {
     // Check for undeclared species
-    std::vector<std::string> undeclared;
+    vector<string> undeclared;
     updateUndeclared(undeclared, reactants, kin);
     updateUndeclared(undeclared, products, kin);
     if (!undeclared.empty()) {
@@ -674,22 +714,22 @@ bool Reaction::checkSpecies(const Kinetics& kin) const
 bool Reaction::usesElectrochemistry(const Kinetics& kin) const
 {
     // Check electrochemistry
-    vector_fp e_counter(kin.nPhases(), 0.0);
+    vector<double> e_counter(kin.nPhases(), 0.0);
 
     // Find the number of electrons in the products for each phase
-    for (const auto& sp : products) {
-        size_t kkin = kin.kineticsSpeciesIndex(sp.first);
+    for (const auto& [name, stoich] : products) {
+        size_t kkin = kin.kineticsSpeciesIndex(name);
         size_t i = kin.speciesPhaseIndex(kkin);
-        size_t kphase = kin.thermo(i).speciesIndex(sp.first);
-        e_counter[i] += sp.second * kin.thermo(i).charge(kphase);
+        size_t kphase = kin.thermo(i).speciesIndex(name);
+        e_counter[i] += stoich * kin.thermo(i).charge(kphase);
     }
 
     // Subtract the number of electrons in the reactants for each phase
-    for (const auto& sp : reactants) {
-        size_t kkin = kin.kineticsSpeciesIndex(sp.first);
+    for (const auto& [name, stoich] : reactants) {
+        size_t kkin = kin.kineticsSpeciesIndex(name);
         size_t i = kin.speciesPhaseIndex(kkin);
-        size_t kphase = kin.thermo(i).speciesIndex(sp.first);
-        e_counter[i] -= sp.second * kin.thermo(i).charge(kphase);
+        size_t kphase = kin.thermo(i).speciesIndex(name);
+        e_counter[i] -= stoich * kin.thermo(i).charge(kphase);
     }
 
     // If the electrons change phases then the reaction is electrochemical
@@ -702,22 +742,15 @@ bool Reaction::usesElectrochemistry(const Kinetics& kin) const
     return false;
 }
 
-ThirdBody::ThirdBody(double default_eff)
-    : default_efficiency(default_eff)
-{
-    warn_deprecated("ThirdBody",
-        "Instantiation with default efficiency is deprecated and will be removed "
-        "after Cantera 3.0. Instantiate with collider name instead.");
-}
 
-ThirdBody::ThirdBody(const std::string& third_body)
+ThirdBody::ThirdBody(const string& third_body)
 {
     setName(third_body);
 }
 
-void ThirdBody::setName(const std::string& third_body)
+void ThirdBody::setName(const string& third_body)
 {
-    std::string name = third_body;
+    string name = third_body;
     if (ba::starts_with(third_body, "(+ ")) {
         mass_action = false;
         name = third_body.substr(3, third_body.size() - 4);
@@ -745,13 +778,6 @@ void ThirdBody::setName(const std::string& third_body)
 
 ThirdBody::ThirdBody(const AnyMap& node)
 {
-    setParameters(node);
-}
-
-void ThirdBody::setEfficiencies(const AnyMap& node)
-{
-    warn_deprecated("ThirdBody::setEfficiencies", node,
-        "To be removed after Cantera 3.0. Renamed to setParameters");
     setParameters(node);
 }
 
@@ -790,12 +816,12 @@ void ThirdBody::getParameters(AnyMap& node) const
     }
 }
 
-double ThirdBody::efficiency(const std::string& k) const
+double ThirdBody::efficiency(const string& k) const
 {
     return getValue(efficiencies, k, default_efficiency);
 }
 
-std::string ThirdBody::collider() const
+string ThirdBody::collider() const
 {
     if (mass_action) {
         return " + " + m_name;
@@ -805,7 +831,7 @@ std::string ThirdBody::collider() const
 
 bool ThirdBody::checkSpecies(const Reaction& rxn, const Kinetics& kin) const
 {
-    std::vector<std::string> undeclared;
+    vector<string> undeclared;
     updateUndeclared(undeclared, efficiencies, kin);
 
     if (!undeclared.empty()) {
@@ -820,93 +846,32 @@ bool ThirdBody::checkSpecies(const Reaction& rxn, const Kinetics& kin) const
             throw InputFileError("ThirdBody::checkSpecies", rxn.input, "Reaction '{}'\n"
                 "is a three-body reaction with undeclared species: '{}'",
                 rxn.equation(), ba::join(undeclared, "', '"));
-        } else if (kin.skipUndeclaredSpecies() && m_name != "M") {
+        } else if (kin.skipUndeclaredThirdBodies() && m_name != "M") {
+            // Prevent addition of reaction silently as "skip-undeclared-third-bodies"
+            // is set to true
             return false;
         }
     }
     return true;
 }
 
-ThreeBodyReaction::ThreeBodyReaction()
-{
-    warn_deprecated("ThreeBodyReaction",
-        "To be removed after Cantera 3.0. Replaceable with Reaction.");
-    m_third_body.reset(new ThirdBody);
-    setRate(newReactionRate(type()));
-}
 
-ThreeBodyReaction::ThreeBodyReaction(const Composition& reactants,
-                                     const Composition& products,
-                                     const ArrheniusRate& rate,
-                                     const ThirdBody& tbody)
-    : Reaction(reactants,
-               products,
-               make_shared<ArrheniusRate>(rate),
-               make_shared<ThirdBody>(tbody))
+unique_ptr<Reaction> newReaction(const string& type)
 {
-    warn_deprecated("ThreeBodyReaction",
-        "To be removed after Cantera 3.0. Replaceable with Reaction.");
-}
-
-ThreeBodyReaction::ThreeBodyReaction(const AnyMap& node, const Kinetics& kin)
-    : Reaction(node, kin)
-{
-    warn_deprecated("ThreeBodyReaction",
-        "To be removed after Cantera 3.0. Replaceable with Reaction.");
-}
-
-FalloffReaction::FalloffReaction()
-{
-    warn_deprecated("FalloffReaction",
-        "To be removed after Cantera 3.0. Replaceable with Reaction.");
-    m_third_body.reset(new ThirdBody);
-    setRate(newReactionRate(type()));
-}
-
-FalloffReaction::FalloffReaction(const Composition& reactants_,
-                                 const Composition& products_,
-                                 const FalloffRate& rate_,
-                                 const ThirdBody& tbody_)
-{
-    warn_deprecated("FalloffReaction",
-        "To be removed after Cantera 3.0. Replaceable with Reaction.");
-    // cannot be delegated as std::make_shared does not work for FalloffRate
-    reactants = reactants_;
-    products = products_;
-    m_third_body = std::make_shared<ThirdBody>(tbody_);
-    AnyMap node = rate_.parameters();
-    node.applyUnits();
-    std::string rate_type = node["type"].asString();
-    setRate(newReactionRate(node));
-}
-
-FalloffReaction::FalloffReaction(const AnyMap& node, const Kinetics& kin)
-    : Reaction(node, kin)
-{
-    warn_deprecated("FalloffReaction",
-        "To be removed after Cantera 3.0. Replaceable with Reaction.");
-    if (node.empty()) {
-        m_third_body.reset(new ThirdBody);
-        setRate(newReactionRate(type()));
-    }
-}
-
-unique_ptr<Reaction> newReaction(const std::string& type)
-{
-    return unique_ptr<Reaction>(new Reaction());
+    return make_unique<Reaction>();
 }
 
 unique_ptr<Reaction> newReaction(const AnyMap& rxn_node, const Kinetics& kin)
 {
-    return unique_ptr<Reaction>(new Reaction(rxn_node, kin));
+    return make_unique<Reaction>(rxn_node, kin);
 }
 
-void parseReactionEquation(Reaction& R, const std::string& equation,
+void parseReactionEquation(Reaction& R, const string& equation,
                            const AnyBase& reactionNode, const Kinetics* kin)
 {
     // Parse the reaction equation to determine participating species and
     // stoichiometric coefficients
-    std::vector<std::string> tokens;
+    vector<string> tokens;
     tokenizeString(equation, tokens);
     tokens.push_back("+"); // makes parsing last species not a special case
 
@@ -915,7 +880,7 @@ void parseReactionEquation(Reaction& R, const std::string& equation,
     for (size_t i = 1; i < tokens.size(); i++) {
         if (tokens[i] == "+" || ba::starts_with(tokens[i], "(+") ||
             tokens[i] == "<=>" || tokens[i] == "=" || tokens[i] == "=>") {
-            std::string species = tokens[i-1];
+            string species = tokens[i-1];
 
             double stoich = 1.0;
             bool mass_action = true;
@@ -971,13 +936,11 @@ void parseReactionEquation(Reaction& R, const std::string& equation,
     }
 }
 
-std::vector<shared_ptr<Reaction>> getReactions(const AnyValue& items,
-                                               Kinetics& kinetics)
+vector<shared_ptr<Reaction>> getReactions(const AnyValue& items, Kinetics& kinetics)
 {
-    std::vector<shared_ptr<Reaction>> all_reactions;
+    vector<shared_ptr<Reaction>> all_reactions;
     for (const auto& node : items.asVector<AnyMap>()) {
-        shared_ptr<Reaction> R(new Reaction(node, kinetics));
-        R->check();
+        auto R = make_shared<Reaction>(node, kinetics);
         R->validate(kinetics);
         if (R->valid() && R->checkSpecies(kinetics)) {
             all_reactions.emplace_back(R);

@@ -1,13 +1,12 @@
-/*!
- * @file custom.cpp
- *
- * Custom Reactor
+/*
+ * Custom reactor
+ * ==============
  *
  * Solve a closed-system constant pressure ignition problem where the governing
  * equations are custom-implemented, using Cantera's interface to CVODES to
  * integrate the equations.
  *
- * Keywords: combustion, reactor network, user-defined model, ignition delay
+ * .. tags:: C++, combustion, reactor network, user-defined model, ignition delay
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -42,7 +41,7 @@ public:
         // number of chemical species in the system.
         m_nSpecies = m_gas->nSpecies();
 
-        // resize the vector_fp storage containers for species partial molar enthalpies
+        // resize the vector<double> storage containers for species partial molar enthalpies
         // and net production rates. internal values are updated and used by the solver
         // per iteration.
         m_hbar.resize(m_nSpecies);
@@ -53,16 +52,23 @@ public:
         m_nEqs = m_nSpecies + 1;
     }
 
-    /**
-     * Evaluate the ODE right-hand-side function, ydot = f(t,y).
-     *   - overridden from FuncEval, called by the integrator during simulation.
-     * @param[in] t time.
-     * @param[in] y solution vector, length neq()
-     * @param[out] ydot rate of change of solution vector, length neq()
-     * @param[in] p sensitivity parameter vector, length nparams()
-     *   - note: sensitivity analysis isn't implemented in this example
+    /* %%
+     * Evaluate the ODE right-hand-side function, :math:`\dot{y} = f(t,y)`.
+     *
+     * Overridden from :ct:`FuncEval`, called by the integrator during simulation.
+     *
+     * :param t:
+     *     time
+     * :param y:
+     *     solution vector, length neq()
+     * :param ydot:
+     *     rate of change of solution vector, length neq()
+     * :param p:
+     *     sensitivity parameter vector, length nparams()
+     *
+     * note: sensitivity analysis isn't implemented in this example
      */
-    void eval(double t, double* y, double* ydot, double* p) {
+    void eval(double t, double* y, double* ydot, double* p) override {
         // the solution vector *y* is [T, Y_1, Y_2, ... Y_K], where T is the
         // system temperature, and Y_k is the mass fraction of species k.
         // similarly, the time derivative of the solution vector, *ydot*, is
@@ -113,7 +119,7 @@ public:
      * Number of equations in the ODE system.
      *   - overridden from FuncEval, called by the integrator during initialization.
      */
-    size_t neq() {
+    size_t neq() const override {
         return m_nEqs;
     }
 
@@ -122,7 +128,7 @@ public:
      *   - overridden from FuncEval, called by the integrator during initialization.
      * @param[out] y solution vector, length neq()
      */
-    void getState(double* y) {
+    void getState(double* y) override {
         // the solution vector *y* is [T, Y_1, Y_2, ... Y_K], where T is the
         // system temperature, and Y_k is the mass fraction of species k.
         y[0] = m_gas->temperature();
@@ -133,8 +139,8 @@ private:
     // private member variables, to be used internally.
     shared_ptr<ThermoPhase> m_gas;
     shared_ptr<Kinetics> m_kinetics;
-    vector_fp m_hbar;
-    vector_fp m_wdot;
+    vector<double> m_hbar;
+    vector<double> m_wdot;
     double m_pressure;
     size_t m_nSpecies;
     size_t m_nEqs;
@@ -142,7 +148,7 @@ private:
 
 int main() {
     /* -------------------- CREATE GAS & SPECIFY STATE -------------------- */
-    auto sol = newSolution("h2o2.yaml", "ohmech", "None");
+    auto sol = newSolution("h2o2.yaml", "ohmech", "none");
     auto gas = sol->thermo();
     gas->setState_TPX(1001, OneAtm, "H2:2, O2:1, N2:4");
 
@@ -180,7 +186,7 @@ int main() {
     //     relative tolerance: 1.0e-9
     //     absolute tolerance: 1.0e-15
     //     max step size: +inf
-    std::unique_ptr<Integrator> integrator(newIntegrator("CVODE"));
+    unique_ptr<Integrator> integrator(newIntegrator("CVODE"));
 
     // initialize the integrator, specifying the start time and the RHS evaluator object.
     // internally, the integrator will apply settings, allocate needed memory, and populate

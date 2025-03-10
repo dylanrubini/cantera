@@ -7,13 +7,10 @@
 #include "cantera/numerics/polyfit.h"
 #include "cantera/base/ctexceptions.h"
 
-using namespace std;
-
 namespace Cantera
 {
 
-doublereal linearInterp(doublereal x, const vector_fp& xpts,
-                        const vector_fp& fpts)
+double linearInterp(double x, const vector<double>& xpts, const vector<double>& fpts)
 {
     if (x <= xpts[0]) {
         return fpts[0];
@@ -23,9 +20,9 @@ doublereal linearInterp(doublereal x, const vector_fp& xpts,
     }
     auto loc = lower_bound(xpts.begin(), xpts.end(), x);
     int iloc = int(loc - xpts.begin()) - 1;
-    doublereal ff = fpts[iloc] +
-                    (x - xpts[iloc])*(fpts[iloc + 1]
-                                      - fpts[iloc])/(xpts[iloc + 1] - xpts[iloc]);
+    double ff = fpts[iloc] +
+                (x - xpts[iloc])*(fpts[iloc + 1]
+                                  - fpts[iloc])/(xpts[iloc + 1] - xpts[iloc]);
     return ff;
 }
 
@@ -52,7 +49,7 @@ double trapezoidal(const Eigen::ArrayXd& f, const Eigen::ArrayXd& x)
 //! Only for odd number of points. This function is used only
 //! by calling simpson.
 /*!
- * Vector x contanins a monotonic sequence of grid points, and
+ * Vector x contains a monotonic sequence of grid points, and
  * Vector f contains function values defined at these points.
  * The size of x and f must be the same.
  *
@@ -112,7 +109,7 @@ double simpson(const Eigen::ArrayXd& f, const Eigen::ArrayXd& x)
     }
 }
 
-double numericalQuadrature(const std::string& method,
+double numericalQuadrature(const string& method,
                            const Eigen::ArrayXd& f,
                            const Eigen::ArrayXd& x)
 {

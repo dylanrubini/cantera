@@ -77,9 +77,6 @@ ideal-condensed-1:
   setup:
     file: thermo-models.yaml
     phase: IdealSolidSolnPhase
-    known-failures:
-      g_eq_h_minus_Ts: "Inconsistent result when P != 1 atm. See GitHub Issue #1301"
-      g_eq_sum_gk_Xk: "Inconsistent result when P != 1 atm. See GitHub Issue #1301"
   states:
   - {T: 300, P: 0.1 atm, X: {sp1: 1.0}}
   - {T: 300, P: 1 atm, X: {sp1: 0.6, sp2: 0.4}}
@@ -90,9 +87,6 @@ ideal-condensed-2:
   setup:
     file: thermo-models.yaml
     phase: IdealSolidSolnPhase2
-    known-failures:
-      g_eq_h_minus_Ts: "Inconsistent result when P != 1 atm. See GitHub Issue #1301"
-      g_eq_sum_gk_Xk: "Inconsistent result when P != 1 atm. See GitHub Issue #1301"
   states:
   - {T: 300, P: 0.1 atm, X: {sp1: 1.0}}
   - {T: 400, P: 0.1 atm, X: {sp1: 0.01, sp2: 0.03, sp3: 0.94}}
@@ -103,12 +97,10 @@ binary-solution-tabulated:
     file: BinarySolutionTabulatedThermo.yaml
     phase: anode
     known-failures:
-      g_eq_h_minus_Ts: "Inconsistent results when P != 1 atm. See GitHub Issue #1301"
-      g_eq_sum_gk_Xk: "Inconsistent results when P != 1 atm. See GitHub Issue #1301"
-      v_eq_sum_vk_Xk: "Inconsistent results. See GitHub Issue #1302"
-      h_eq_sum_hk_Xk: "Inconsistent results. See GitHub Issue #1302"
-      s_eq_sum_sk_Xk: "Problems near composition limit. See GitHub Issue #1303"
-      gk_eq_hk_minus_T_sk: "Problems near composition limit. See GitHub Issue #1303"
+      g_eq_h_minus_Ts/4: "Problems near composition limit. See GitHub Issue #1303"
+      g_eq_sum_gk_Xk/4: "Problems near composition limit. See GitHub Issue #1303"
+      s_eq_sum_sk_Xk/4: "Problems near composition limit. See GitHub Issue #1303"
+      gk_eq_hk_minus_T_sk/[34]: "Problems near composition limit. See GitHub Issue #1303"
       gk0_eq_hk0_minus_T_sk0/[34]:
         "Problems near composition limit. See GitHub Issue #1303"
       chem_potentials_to_activities/3:
@@ -188,11 +180,35 @@ debye-huckel-dilute:
      molalities: {Na+: 9.3549, Cl-: 9.3549, H+: 1.05e-08, OH-: 1.3765e-06,
                   NaCl(aq): 0.98492, NaOH(aq): 3.8836e-06}}
 
+debye-huckel-dilute-IAPWS:
+  setup:
+    file: debye-huckel-all.yaml
+    phase: debye-huckel-dilute-IAPWS
+    rtol_fd: 1e-5  # Good finite difference results with IAPWS are challenging
+    known-failures:
+      cv_eq_.+: cv not implemented
+      activity_coeffs: "Activity coeffs are incorrect. See GitHub Issue #1311"
+      cp_eq_.+: "cp with variable A_Debye is incorrect. See GitHub Issue #1500"
+      dsdP_const_T_eq_minus_dV_dT_const_P.+:
+        "Error with dilute limit with variable A_Debye. See GitHub Issue #1502"
+  states: *debye-huckel-states
+
 debye-huckel-B-dot-ak:
   setup:
     file: debye-huckel-all.yaml
     phase: debye-huckel-B-dot-ak
     known-failures: *debye-huckel-failures
+  states: *debye-huckel-states
+
+debye-huckel-B-dot-ak-IAPWS:
+  setup:
+    file: debye-huckel-all.yaml
+    phase: debye-huckel-B-dot-ak-IAPWS
+    rtol_fd: 1e-5  # Good finite difference results with IAPWS are challenging
+    known-failures: &debye-huckel-IAPWS-failures
+      cv_eq_.+: cv not implemented
+      activity_coeffs: "Activity coeffs are incorrect. See GitHub Issue #1311"
+      cp_eq_.+: "cp with variable A_debye is incorrect. See GitHub Issue #1500"
   states: *debye-huckel-states
 
 debye-huckel-B-dot-a:
@@ -202,6 +218,14 @@ debye-huckel-B-dot-a:
     known-failures: *debye-huckel-failures
   states: *debye-huckel-states
 
+debye-huckel-B-dot-a-IAPWS:
+  setup:
+    file: debye-huckel-all.yaml
+    phase: debye-huckel-B-dot-a-IAPWS
+    rtol_fd: 1e-5  # Good finite difference results with IAPWS are challenging
+    known-failures: *debye-huckel-IAPWS-failures
+  states: *debye-huckel-states
+
 debye-huckel-pitzer-beta_ij:
   setup:
     file: debye-huckel-all.yaml
@@ -209,11 +233,27 @@ debye-huckel-pitzer-beta_ij:
     known-failures: *debye-huckel-failures
   states: *debye-huckel-states
 
+debye-huckel-pitzer-beta_ij-IAPWS:
+  setup:
+    file: debye-huckel-all.yaml
+    phase: debye-huckel-pitzer-beta_ij-IAPWS
+    rtol_fd: 1e-5  # Good finite difference results with IAPWS are challenging
+    known-failures: *debye-huckel-IAPWS-failures
+  states: *debye-huckel-states
+
 debye-huckel-beta_ij:
   setup:
     file: debye-huckel-all.yaml
     phase: debye-huckel-beta_ij
     known-failures: *debye-huckel-failures
+  states: *debye-huckel-states
+
+debye-huckel-beta_ij-IAPWS:
+  setup:
+    file: debye-huckel-all.yaml
+    phase: debye-huckel-beta_ij-IAPWS
+    rtol_fd: 1e-5  # Good finite difference results with IAPWS are challenging
+    known-failures: *debye-huckel-IAPWS-failures
   states: *debye-huckel-states
 
 margules:
@@ -270,13 +310,6 @@ ideal-surface:
     file: surface-phases.yaml
     phase: Pt-surf
     atol_v: 1e-7
-    known-failures:
-      gk_eq_hk_minus_T_sk:
-        "Implementation of s_k is incorrect. See GitHub Issue #1313"
-      s_eq_sum_sk_Xk:
-        "Implementation of s_k is incorrect. See GitHub Issue #1313"
-      g_eq_sum_gk_Xk:
-        "chemPotentials does not protect against inf. See GitHub Issue #1314"
   states:
   - {T: 800, P: 1 atm, coverages: {Pt(s): 0.5, H(s): 0.4, O(s): 0.1}}
   - {T: 800, P: 5 atm, coverages: {H(s): 1.0}}
@@ -291,6 +324,21 @@ ideal-edge:
   states:
   - {T: 300, P: 1 atm}
   - {T: 900, P: 20 atm}
+
+coverage-dependent-surface:
+  setup:
+    file: copt_covdepsurf_example.yaml
+    phase: covdep
+    atol_v: 1e-7
+  states:
+  - {T: 700, P: 1 atm,
+     coverages: {Pt: 0.0, OC_Pt: 0.1, CO2_Pt: 0.5, C_Pt: 0.1, O_Pt: 0.3}}
+  - {T: 800, P: 5 atm,
+     coverages: {Pt: 0.12, OC_Pt: 0.07, CO2_Pt: 0.21, C_Pt: 0.17, O_Pt: 0.43}}
+  - {T: 300, P: 3 atm,
+     coverages: {Pt: 0.0, OC_Pt: 0.71, CO2_Pt: 0.08, C_Pt: 0.07, O_Pt: 0.14}}
+  - {T: 500, P: 10 atm,
+     coverages: {Pt: 0.0, OC_Pt: 0.0, CO2_Pt: 0.09, C_Pt: 0.81, O_Pt: 0.1}}
 
 liquid-water-IAPWS95:
   setup:
@@ -332,63 +380,24 @@ ideal-solution-VPSS-HKFT:
   - {T: 330, P: 10 atm, X: {H2O(L): 0.9, Na+: 0.05, Cl-: 0.05, H+: 1e-7, OH-: 1e-7}}
   - {T: 320, P: 1 atm, X: {H2O(L): 1.0, Na+: 0.01, Cl-: 0.05, H+: 0.04}}
 
-Redlich-Kister:
+Redlich-Kister-LiC6:
   setup:
     file: thermo-models.yaml
     phase: Redlich-Kister-LiC6
-    known-failures:
-      c[vp]_eq_.+: "Implementation of cv is incorrect. See GitHub Issue #1320"
   states:
   - {T: 300, P: 1 atm, X: {Li(C6): 0.85, V(C6): 0.15}}
   - {T: 440, P: 1 atm, X: {Li(C6): 0.75, V(C6): 0.25}}
   - {T: 350, P: 10 atm, X: {Li(C6): 1.0, V(C6): 0.0}}
   - {T: 350, P: 10 atm, X: {Li(C6): 0.0, V(C6): 1.0}}
 
-Maskell-solid-solution:
+Redlich-Kister-complex:
   setup:
     file: thermo-models.yaml
-    phase: MaskellSolidSoln
-    known-failures:
-      g_eq_sum_gk_Xk: "Inconsistent implementation. See GitHub Issue #1321"
-      hk0_eq_uk0_plus_p_vk0/[234]:
-        "Inconsistent except at P = 1 atm. See GitHub Issue #1321"
-      cpk0_eq_dhk0dT/[234]:
-        "Inconsistent except at P = 1 atm. See GitHub Issue #1321"
-      standard_gibbs_nondim/[234]:
-        "Inconsistent except at P = 1 atm. See GitHub Issue #1321"
-      g_eq_h_minus_Ts/[34]:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
-      dsdP_const_T_eq_minus_dV_dT_const_P/[34]:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
-      chem_potentials_to_activities/[34]:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
-      activity_coeffs/[34]:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
-      activity_concentrations/[34]:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
-      log_activity_coeffs/[34]:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
-      h_eq_u_plus_Pv/4:
-        "Generates NaN at limiting composition. See GitHub Issue #1321"
+    phase: Redlich-Kister-complex
   states:
-  - {T: 300, P: 1 atm, X: {H(s): 0.3, He(s): 0.7}}
-  - {T: 340, P: 1 atm, X: {H(s): 0.3, He(s): 0.7}}
-  - {T: 330, P: 10 atm, X: {H(s): 0.3, He(s): 0.7}}
-  - {T: 280, P: 20 atm, X: {H(s): 1.0, He(s): 0.0}}
-  - {T: 380, P: 5 atm, X: {H(s): 0.0, He(s): 1.0}}
-
-ions-from-neutral-molecule:
-  setup:
-    file: thermo-models.yaml
-    phase: ions-from-neutral-molecule
-    known-failures:
-      g_eq_h_minus_Ts: "Inconsistent results. See GitHub Issue #1322"
-      gk_eq_hk_minus_T_sk: "Inconsistent results. See GitHub Issue #1322"
-      v_eq_sum_vk_Xk: "Inconsistent results. See GitHub Issue #1322"
-      chem_potentials_to_activities: "Inconsistent results. See GitHub Issue #1322"
-  states:
-  - {T: 300, P: 1 atm, X: {K+: 0.1, Cl-: 0.1}}
-  - {T: 500, P: 5 bar, X: {K+: 0.1, Cl-: 0.1}}
+  - {T: 900, P: 1 atm, X: {KCl(l): 0.85, LiCl(l): 0.15}}
+  - {T: 950, P: 10 atm, X: {KCl(l): 0.3, LiCl(l): 0.2, NaCl(s): 0.5}}
+  - {T: 950, P: 0.1 atm, X: {KCl(l): 0.05, LiCl(l): 0.0, NaCl(s): 0.95}}
 
 HMW-electrolyte:
   setup:

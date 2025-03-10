@@ -1,16 +1,15 @@
-/*!
- * @file combustor.cpp
+/*
+ * Adiabatic combustor
+ * ===================
  *
- * Adiabatic Combustor
- *
- * Two separate stream - one pure methane and the other air, both at 300 K
+ * Two separate streams - one pure methane and the other air, both at 300 K
  * and 1 atm flow into an adiabatic combustor where they mix. We are interested
  * in the steady-state burning solution. Since at 300 K no reaction will occur
  * between methane and air, we need to use an 'igniter' to initiate the
  * chemistry. A simple igniter is a pulsed flow of atomic hydrogen. After the
  * igniter is turned off, the system approaches the steady burning solution.
  *
- * Keywords: combustion, reactor network, well-stirred reactor
+ * .. tags:: C++, combustion, reactor network, well-stirred reactor
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -24,41 +23,36 @@ using namespace Cantera;
 void runexample()
 {
     // use reaction mechanism GRI-Mech 3.0
-    auto sol = newSolution("gri30.yaml", "gri30", "None");
+    auto sol = newSolution("gri30.yaml", "gri30", "none");
     auto gas = sol->thermo();
 
     // create a reservoir for the fuel inlet, and set to pure methane.
-    Reservoir fuel_in;
     gas->setState_TPX(300.0, OneAtm, "CH4:1.0");
-    fuel_in.insert(sol);
+    Reservoir fuel_in(sol);
     double fuel_mw = gas->meanMolecularWeight();
 
-    auto air = newSolution("air.yaml", "air", "None");
+    auto air = newSolution("air.yaml", "air", "none");
     double air_mw = air->thermo()->meanMolecularWeight();
 
     // create a reservoir for the air inlet
-    Reservoir air_in;
-    air_in.insert(air);
+    Reservoir air_in(air);
 
     // to ignite the fuel/air mixture, we'll introduce a pulse of radicals.
     // The steady-state behavior is independent of how we do this, so we'll
     // just use a stream of pure atomic hydrogen.
     gas->setState_TPX(300.0, OneAtm, "H:1.0");
-    Reservoir igniter;
-    igniter.insert(sol);
+    Reservoir igniter(sol);
 
 
     // create the combustor, and fill it in initially with N2
     gas->setState_TPX(300.0, OneAtm, "N2:1.0");
-    Reactor combustor;
-    combustor.insert(sol);
+    Reactor combustor(sol);
     combustor.setInitialVolume(1.0);
 
 
     // create a reservoir for the exhaust. The initial composition
     // doesn't matter.
-    Reservoir exhaust;
-    exhaust.insert(sol);
+    Reservoir exhaust(sol);
 
 
     // lean combustion, phi = 0.5
@@ -90,7 +84,7 @@ void runexample()
     double A = 0.1;
     double FWHM = 0.2;
     double t0 = 0.5;
-    Gaussian igniter_mdot(A, t0, FWHM);
+    Gaussian1 igniter_mdot(A, t0, FWHM);
 
     MassFlowController m3;
     m3.install(igniter, combustor);
@@ -113,7 +107,7 @@ void runexample()
     double tres;
 
     std::ofstream f("combustor_cxx.csv");
-    std::vector<size_t> k_out {
+    vector<size_t> k_out {
         gas->speciesIndex("CH4"),
         gas->speciesIndex("O2"),
         gas->speciesIndex("CO2"),

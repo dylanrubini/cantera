@@ -21,24 +21,14 @@ namespace Cantera
 class KineticsFactory : public Factory<Kinetics>
 {
 public:
-    static KineticsFactory* factory() {
-        std::unique_lock<std::mutex> lock(kinetics_mutex);
-        if (!s_factory) {
-            s_factory = new KineticsFactory;
-        }
-        return s_factory;
-    }
+    static KineticsFactory* factory();
 
-    virtual void deleteFactory() {
-        std::unique_lock<std::mutex> lock(kinetics_mutex);
-        delete s_factory;
-        s_factory = 0;
-    }
+    void deleteFactory() override;
 
     /**
      * Return a new, empty kinetics manager.
      */
-    virtual Kinetics* newKinetics(const std::string& model);
+    Kinetics* newKinetics(const string& model);
 
 private:
     static KineticsFactory* s_factory;
@@ -46,26 +36,16 @@ private:
     static std::mutex kinetics_mutex;
 };
 
-/**
- *  Create a new kinetics manager.
- */
-inline Kinetics* newKineticsMgr(const std::string& model)
-{
-    return KineticsFactory::factory()->newKinetics(model);
-}
+//! @addtogroup kineticsmgr
+//! @{
 
 /**
  *  Create a new Kinetics instance.
  */
-inline shared_ptr<Kinetics> newKinetics(const std::string& model)
-{
-    shared_ptr<Kinetics> kin(KineticsFactory::factory()->newKinetics(model));
-    return kin;
-}
+shared_ptr<Kinetics> newKinetics(const string& model);
 
+//! Create a new kinetics manager, initialize it, and add reactions.
 /*!
- * Create a new kinetics manager, initialize it, and add reactions
- *
  * @param phases     Vector of phases containing species which participate in
  *     reactions, with the phase where the reactions occur (lowest-dimensional
  *     phase) listed first.
@@ -74,28 +54,26 @@ inline shared_ptr<Kinetics> newKinetics(const std::string& model)
  *     to the Kinetics object.
  * @param rootNode   The root node of the file containing the phase definition,
  *     which will be treated as the default source for reactions
+ * @param soln       The Solution object that this Kinetics object is being added to.
  */
-unique_ptr<Kinetics> newKinetics(const std::vector<ThermoPhase*>& phases,
+shared_ptr<Kinetics> newKinetics(const vector<shared_ptr<ThermoPhase>>& phases,
                                  const AnyMap& phaseNode,
-                                 const AnyMap& rootNode=AnyMap());
+                                 const AnyMap& rootNode=AnyMap(),
+                                 shared_ptr<Solution> soln={});
 
+//! Create a new kinetics manager, initialize it, and add reactions.
 /*!
- * Create a new kinetics manager, initialize it, and add reactions
- *
  * @param phases      Vector of phases containing species which participate in
  *     reactions, with the phase where the reactions occur (lowest-dimensional
  *     phase) listed first.
  * @param filename    File containing the phase definition for the phase where
- *     the reactions occur. Searches the Cantera data for this file.
- * @param phase_name  The name of the reacting phase in the input file (that is, the
- *     name of the first phase in the `phases` vector)
+ *     the reactions occur. Searches the %Cantera data for this file.
  */
-unique_ptr<Kinetics> newKinetics(const std::vector<ThermoPhase*>& phases,
-                                 const std::string& filename,
-                                 const std::string& phase_name);
+shared_ptr<Kinetics> newKinetics(const vector<shared_ptr<ThermoPhase>>& phases,
+                                 const string& filename);
 
-/*!
- * Add reactions to a Kinetics object
+/**
+ * Add reactions to a Kinetics object.
  *
  * @param kin        The Kinetics object to be initialized
  * @param phaseNode  Phase entry for the phase where the reactions occur. This
@@ -106,6 +84,8 @@ unique_ptr<Kinetics> newKinetics(const std::vector<ThermoPhase*>& phases,
  */
 void addReactions(Kinetics& kin, const AnyMap& phaseNode,
                   const AnyMap& rootNode=AnyMap());
+
+//! @}
 
 }
 

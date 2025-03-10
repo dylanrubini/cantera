@@ -6,9 +6,6 @@
 #include "cantera/kinetics/PlogRate.h"
 #include "cantera/thermo/ThermoPhase.h"
 
-//! @todo remove after Cantera 3.0 (only used for deprecation)
-#include "cantera/kinetics/Kinetics.h"
-
 namespace Cantera
 {
 
@@ -50,18 +47,16 @@ void PlogData::restore()
     m_pressure_buf = -1.;
 }
 
-PlogRate::PlogRate()
-    : logP_(-1000)
-    , logP1_(1000)
-    , logP2_(-1000)
-    , rDeltaP_(-1.0)
-{
-}
+// Methods of class PlogRate
 
 PlogRate::PlogRate(const std::multimap<double, ArrheniusRate>& rates)
-    : PlogRate()
 {
     setRates(rates);
+}
+
+PlogRate::PlogRate(const AnyMap& node, const UnitStack& rate_units)
+{
+    setParameters(node, rate_units);
 }
 
 void PlogRate::setParameters(const AnyMap& node, const UnitStack& rate_units)
@@ -80,16 +75,15 @@ void PlogRate::setParameters(const AnyMap& node, const UnitStack& rate_units)
 
 void PlogRate::getParameters(AnyMap& rateNode, const Units& rate_units) const
 {
-    std::vector<AnyMap> rateList;
-    rateNode["type"] = type();
+    vector<AnyMap> rateList;
     if (!valid()) {
         // object not fully set up
         return;
     }
-    for (const auto& r : getRates()) {
+    for (const auto& [pressure, rate] : getRates()) {
         AnyMap rateNode_;
-        rateNode_["P"].setQuantity(r.first, "Pa");
-        r.second.getRateParameters(rateNode_);
+        rateNode_["P"].setQuantity(pressure, "Pa");
+        rate.getRateParameters(rateNode_);
         rateList.push_back(std::move(rateNode_));
     }
     rateNode["rate-constants"] = std::move(rateList);
@@ -103,8 +97,8 @@ void PlogRate::setRates(const std::multimap<double, ArrheniusRate>& rates)
     m_valid = !rates.empty();
     rates_.reserve(rates.size());
     // Insert intermediate pressures
-    for (const auto& rate : rates) {
-        double logp = std::log(rate.first);
+    for (const auto& [pressure, rate] : rates) {
+        double logp = std::log(pressure);
         if (pressures_.empty() || pressures_.rbegin()->first != logp) {
             // starting a new group
             pressures_[logp] = {j, j+1};
@@ -114,7 +108,7 @@ void PlogRate::setRates(const std::multimap<double, ArrheniusRate>& rates)
         }
 
         j++;
-        rates_.push_back(rate.second);
+        rates_.push_back(rate);
     }
     if (!m_valid) {
         // ensure that reaction rate can be evaluated (but returns NaN)
@@ -128,7 +122,7 @@ void PlogRate::setRates(const std::multimap<double, ArrheniusRate>& rates)
     pressures_.insert({1000.0, pressures_.rbegin()->second});
 }
 
-void PlogRate::validate(const std::string& equation, const Kinetics& kin)
+void PlogRate::validate(const string& equation, const Kinetics& kin)
 {
     if (!valid()) {
         throw InputFileError("PlogRate::validate", m_input,
@@ -136,7 +130,7 @@ void PlogRate::validate(const std::string& equation, const Kinetics& kin)
     }
 
     fmt::memory_buffer err_reactions;
-    double T[] = {200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0};
+    double T[] = {300.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0};
     PlogData data;
 
     for (auto iter = ++pressures_.begin(); iter->first < 1000; iter++) {
@@ -155,15 +149,12 @@ void PlogRate::validate(const std::string& equation, const Kinetics& kin)
     }
     if (err_reactions.size()) {
         throw InputFileError("PlogRate::validate", m_input,
-            "\nInvalid rate coefficient for reaction '{}'\n{}",
+            "\nInvalid rate coefficient for reaction '{}'\n{}\n"
+            "To fix this error, remove this reaction or contact the author of the\n"
+            "reaction/mechanism in question, because the rate expression is\n"
+            "mathematically unsound at the temperatures and pressures noted above.\n",
             equation, to_string(err_reactions));
     }
-}
-
-void PlogRate::validate(const std::string& equation) {
-    warn_deprecated("PlogRate::validate",
-        "To be removed after Cantera 3.0; superseded by two-parameter version.");
-    validate(equation, Kinetics());
 }
 
 std::multimap<double, ArrheniusRate> PlogRate::getRates() const

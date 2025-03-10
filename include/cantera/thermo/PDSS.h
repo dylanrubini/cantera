@@ -2,7 +2,7 @@
  *  @file PDSS.h
  *    Declarations for the virtual base class PDSS (pressure dependent standard state)
  *    which handles calculations for a single species in a phase
- *    (see \ref pdssthermo and class \link Cantera::PDSS PDSS\endlink).
+ *    (see @ref pdssthermo and class @link Cantera::PDSS PDSS@endlink).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -60,18 +60,11 @@ namespace Cantera
  * The following classes inherit from PDSS. Each of these classes handles just
  * one species.
  *
- * - PDSS_IdealGas
- *   - standardState model = "IdealGas"
- *   - This model assumes that the species in the phase obeys the ideal gas law
- *     for their pressure dependence. The manager uses a SimpleThermo object to
- *     handle the calculation of the reference state. This object adds the
- *     pressure dependencies to the thermo functions.
- *
  * - PDSS_ConstVol
  *    - standardState model = "ConstVol" or "constant_incompressible"
  *    - This model assumes that the species in the phase obeys the constant
  *      partial molar volume pressure dependence. The manager uses a
- *      SimpleThermo object to handle the calculation of the reference state.
+ *      SpeciesThermoInterpType object to handle the calculation of the reference state.
  *      This object adds the pressure dependencies to these thermo functions.
  *
  * - PDSS_SSVol
@@ -81,9 +74,9 @@ namespace Cantera
  *     equation of state, but one that separates out the calculation of the
  *     standard state density and/or volume. Models include a cubic polynomial
  *     in temperature for either the standard state volume or the standard state
- *     density. The manager uses a SimpleThermo object to handle the calculation
- *     of the reference state. This object then adds the pressure dependencies
- *     and the volume terms to these thermo functions to complete the
+ *     density. The manager uses a SpeciesThermoInterpType object to handle the
+ *     calculation of the reference state. This object then adds the pressure
+ *     dependencies and the volume terms to these thermo functions to complete the
  *     representation.
  *
  * - PDSS_Water
@@ -104,7 +97,7 @@ namespace Cantera
  * The PDSS objects may or may not utilize a SpeciesThermoInterpType reference
  * state manager class to calculate the reference state thermodynamics functions
  * in their own calculation. There are some classes, such as PDSS_IdealGas and
- * PDSS+_ConstVol, which utilize the SpeciesThermoInterpType object because the
+ * PDSS_ConstVol, which utilize the SpeciesThermoInterpType object because the
  * calculation is very similar to the reference state calculation, while there
  * are other classes, PDSS_Water and PDSS_HKFT, which don't utilize the
  * reference state calculation at all, because it wouldn't make sense to. For
@@ -150,12 +143,12 @@ public:
     //! @{
 
     //! Default Constructor
-    PDSS();
+    PDSS() = default;
 
     // PDSS objects are not copyable or assignable
     PDSS(const PDSS& b) = delete;
     PDSS& operator=(const PDSS& b) = delete;
-    virtual ~PDSS() {}
+    virtual ~PDSS() = default;
 
     //! @}
     //! @name Molar Thermodynamic Properties of the Species Standard State
@@ -166,117 +159,101 @@ public:
      * @return the species standard state enthalpy in J kmol-1 at the current
      *     temperature and pressure.
      */
-    virtual doublereal enthalpy_mole() const;
+    virtual double enthalpy_mole() const;
 
     //! Return the standard state molar enthalpy divided by RT
     /*!
      * @return The dimensionless species standard state enthalpy divided at
      *     the current temperature and pressure.
      */
-    virtual doublereal enthalpy_RT() const;
+    virtual double enthalpy_RT() const;
 
     //! Return the molar internal Energy in units of J kmol-1
     /*!
      * @return The species standard state internal Energy in J kmol-1 at the
      *     current temperature and pressure.
      */
-    virtual doublereal intEnergy_mole() const;
+    virtual double intEnergy_mole() const;
 
     //! Return the molar entropy in units of J kmol-1 K-1
     /*!
      * @return The species standard state entropy in J kmol-1 K-1 at the
      *     current temperature and pressure.
      */
-    virtual doublereal entropy_mole() const;
+    virtual double entropy_mole() const;
 
     //! Return the standard state entropy divided by RT
     /*!
      * @return The species standard state entropy divided by RT at the current
      *     temperature and pressure.
      */
-    virtual doublereal entropy_R() const;
+    virtual double entropy_R() const;
 
     //! Return the molar Gibbs free energy in units of J kmol-1
     /*!
      * @return The species standard state Gibbs free energy in J kmol-1 at the
      * current temperature and pressure.
      */
-    virtual doublereal gibbs_mole() const;
+    virtual double gibbs_mole() const;
 
     //! Return the molar Gibbs free energy divided by RT
     /*!
      * @return The species standard state Gibbs free energy divided by RT at
      *     the current temperature and pressure.
      */
-    virtual doublereal gibbs_RT() const;
+    virtual double gibbs_RT() const;
 
     //! Return the molar const pressure heat capacity in units of J kmol-1 K-1
     /*!
      * @return The species standard state Cp in J kmol-1 K-1 at the current
      *     temperature and pressure.
      */
-    virtual doublereal cp_mole() const;
+    virtual double cp_mole() const;
 
     //! Return the molar const pressure heat capacity divided by RT
     /*!
      * @return The species standard state Cp divided by RT at the current
      *     temperature and pressure.
      */
-    virtual doublereal cp_R() const;
+    virtual double cp_R() const;
 
     //! Return the molar const volume heat capacity in units of J kmol-1 K-1
     /*!
      * @return The species standard state Cv in J kmol-1 K-1 at the
      * current temperature and pressure.
      */
-    virtual doublereal cv_mole() const;
+    virtual double cv_mole() const;
 
     //! Return the molar volume at standard state
     /*!
      * @return The standard state molar volume at the current temperature and
      *     pressure. Units are m**3 kmol-1.
      */
-    virtual doublereal molarVolume() const;
+    virtual double molarVolume() const;
 
     //! Return the standard state density at standard state
     /*!
      * @return The standard state density at the current temperature and
      *     pressure. units are kg m-3
      */
-    virtual doublereal density() const;
-
-    //! Get the difference in the standard state enthalpy
-    //! between the current pressure and the reference pressure, p0.
-    virtual doublereal enthalpyDelp_mole() const;
-
-    //! Get the difference in the standard state entropy between
-    //! the current pressure and the reference pressure, p0
-    virtual doublereal entropyDelp_mole() const;
-
-    //! Get the difference in the standard state Gibbs free energy
-    //! between the current pressure and the reference pressure, p0.
-    virtual doublereal gibbsDelp_mole() const;
-
-    //! Get the difference in standard state heat capacity
-    //! between the current pressure and the reference pressure, p0.
-    virtual doublereal cpDelp_mole() const;
+    virtual double density() const;
 
     //! @}
     //! @name Properties of the Reference State of the Species in the Solution
     //! @{
 
     //! Return the reference pressure for this phase.
-    doublereal refPressure() const {
+    double refPressure() const {
         return m_p0;
     }
 
     //! return the minimum temperature
-    doublereal minTemp() const {
+    double minTemp() const {
         return m_minTemp;
     }
 
     //! return the minimum temperature
-    doublereal maxTemp() const {
+    double maxTemp() const {
         return m_maxTemp;
     }
 
@@ -285,41 +262,41 @@ public:
      * @return The reference state Gibbs free energy at the current
      *     temperature, divided by RT.
      */
-    virtual doublereal gibbs_RT_ref() const;
+    virtual double gibbs_RT_ref() const;
 
     //! Return the molar enthalpy divided by RT at reference pressure
     /*!
      * @return The species reference state enthalpy at the current
      *     temperature, divided by RT.
      */
-    virtual doublereal enthalpy_RT_ref() const;
+    virtual double enthalpy_RT_ref() const;
 
     //! Return the molar entropy divided by R at reference pressure
     /*!
      * @return The species reference state entropy at the current
      *     temperature, divided by R.
      */
-    virtual doublereal entropy_R_ref() const;
+    virtual double entropy_R_ref() const;
 
     //! Return the molar heat capacity divided by R at reference pressure
     /*!
      * @return The species reference state heat capacity divided by R at the
      * current temperature.
      */
-    virtual doublereal cp_R_ref() const;
+    virtual double cp_R_ref() const;
 
     //! Return the molar volume at reference pressure
     /*!
      * @return The reference state molar volume. units are m**3 kmol-1.
      */
-    virtual doublereal molarVolume_ref() const;
+    virtual double molarVolume_ref() const;
 
     //! @}
     //! @name Mechanical Equation of State Properties
     //! @{
 
     //! Returns the pressure (Pa)
-    virtual doublereal pressure() const;
+    virtual double pressure() const;
 
     //! Sets the pressure in the object
     /*!
@@ -328,65 +305,58 @@ public:
      *
      * @param   pres   Pressure to be set (Pascal)
      */
-    virtual void setPressure(doublereal pres);
+    virtual void setPressure(double pres);
 
     //! Return the volumetric thermal expansion coefficient. Units: 1/K.
     /*!
      * The thermal expansion coefficient is defined as
-     * \f[
+     * @f[
      *     \beta = \frac{1}{v}\left(\frac{\partial v}{\partial T}\right)_P
-     * \f]
+     * @f]
      */
-    virtual doublereal thermalExpansionCoeff() const;
+    virtual double thermalExpansionCoeff() const;
     //! @}
 
     //! Set the internal temperature
     /*!
      * @param temp Temperature (Kelvin)
      */
-    virtual void setTemperature(doublereal temp);
+    virtual void setTemperature(double temp);
 
     //! Return the current stored temperature
-    virtual doublereal temperature() const;
+    virtual double temperature() const;
 
     //! Set the internal temperature and pressure
     /*!
      * @param  temp     Temperature (Kelvin)
      * @param  pres     pressure (Pascals)
      */
-    virtual void setState_TP(doublereal temp, doublereal pres);
-
-    //! Set the internal temperature and density
-    /*!
-     * @param  temp     Temperature (Kelvin)
-     * @param  rho      Density (kg m-3)
-     */
-    virtual void setState_TR(doublereal temp, doublereal rho);
+    virtual void setState_TP(double temp, double pres);
 
     //! critical temperature
-    virtual doublereal critTemperature() const;
+    virtual double critTemperature() const;
 
     //! critical pressure
-    virtual doublereal critPressure() const;
+    virtual double critPressure() const;
 
     //! critical density
-    virtual doublereal critDensity() const;
+    virtual double critDensity() const;
 
     //! saturation pressure
     /*!
      *  @param T Temperature (Kelvin)
      */
-    virtual doublereal satPressure(doublereal T);
+    virtual double satPressure(double T);
 
     //! Return the molecular weight of the species
     //! in units of kg kmol-1
-    doublereal molecularWeight() const;
+    double molecularWeight() const;
 
     //! Set the molecular weight of the species
     /*!
      * @param mw Molecular Weight in kg kmol-1
      */
-    void setMolecularWeight(doublereal mw);
+    void setMolecularWeight(double mw);
 
     //! @name Initialization of the Object
     //! @{
@@ -421,41 +391,26 @@ public:
     //! Store the parameters needed to reconstruct a copy of this PDSS object
     virtual void getParameters(AnyMap& eosNode) const {}
 
-    //! This utility function reports back the type of parameterization and
-    //! all of the parameters for the species, index.
-    /*!
-     * @param kindex    Species index (unused)
-     * @param type      Integer type of the standard type (unused)
-     * @param c         Vector of coefficients used to set the
-     *                  parameters for the standard state.
-     * @param minTemp   output - Minimum temperature
-     * @param maxTemp   output - Maximum temperature
-     * @param refPressure output - reference pressure (Pa).
-     */
-    virtual void reportParams(size_t& kindex, int& type, doublereal* const c,
-                              doublereal& minTemp, doublereal& maxTemp,
-                              doublereal& refPressure) const;
-
     //! @}
 
 protected:
     //! Current temperature used by the PDSS object
-    mutable doublereal m_temp;
+    mutable double m_temp = -1.0;
 
     //! State of the system - pressure
-    mutable doublereal m_pres;
+    mutable double m_pres = -1.0;
 
     //! Reference state pressure of the species.
-    doublereal m_p0;
+    double m_p0 = -1.0;
 
     //! Minimum temperature
-    doublereal m_minTemp;
+    double m_minTemp = -1.0;
 
     //! Maximum temperature
-    doublereal m_maxTemp;
+    double m_maxTemp = 10000.0;
 
     //! Molecular Weight of the species
-    doublereal m_mw;
+    double m_mw = 0.0;
 
     //! Input data supplied via setParameters. This may include parameters for
     //! different phase models, which will be used when initThermo() is called.
@@ -470,10 +425,10 @@ protected:
 class PDSS_Molar : public virtual PDSS
 {
 public:
-    virtual doublereal enthalpy_RT() const;
-    virtual doublereal entropy_R() const;
-    virtual doublereal gibbs_RT() const;
-    virtual doublereal cp_R() const;
+    double enthalpy_RT() const override;
+    double entropy_R() const override;
+    double gibbs_RT() const override;
+    double cp_R() const override;
 };
 
 //! Base class for PDSS classes which compute nondimensional properties directly
@@ -482,22 +437,22 @@ class PDSS_Nondimensional : public virtual PDSS
 public:
     PDSS_Nondimensional();
 
-    virtual doublereal enthalpy_mole() const;
-    virtual doublereal entropy_mole() const;
-    virtual doublereal gibbs_mole() const;
-    virtual doublereal cp_mole() const;
+    double enthalpy_mole() const override;
+    double entropy_mole() const override;
+    double gibbs_mole() const override;
+    double cp_mole() const override;
 
-    virtual double enthalpy_RT_ref() const;
-    virtual double entropy_R_ref() const;
-    virtual double gibbs_RT_ref() const;
-    virtual double cp_R_ref() const;
-    virtual double molarVolume_ref() const;
-    virtual double enthalpy_RT() const;
-    virtual double entropy_R() const;
-    virtual double gibbs_RT() const;
-    virtual double cp_R() const;
-    virtual double molarVolume() const;
-    virtual double density() const;
+    double enthalpy_RT_ref() const override;
+    double entropy_R_ref() const override;
+    double gibbs_RT_ref() const override;
+    double cp_R_ref() const override;
+    double molarVolume_ref() const override;
+    double enthalpy_RT() const override;
+    double entropy_R() const override;
+    double gibbs_RT() const override;
+    double cp_R() const override;
+    double molarVolume() const override;
+    double density() const override;
 
 protected:
     double m_h0_RT; //!< Reference state enthalpy divided by RT

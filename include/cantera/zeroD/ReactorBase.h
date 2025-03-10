@@ -9,15 +9,14 @@
 #include "cantera/base/global.h"
 #include "cantera/base/ctexceptions.h"
 
-//! Namespace for classes implementing zero-dimensional reactor networks.
 namespace Cantera
 {
 
-//! @defgroup ZeroD Zero-dimensional reactor networks
+//! @defgroup zerodGroup Zero-Dimensional Reactor Networks
 //!
-//! See https://cantera.org/science/reactors.html for a description of the governing
-//! equations for specific reactor types and the methods used for solving networks of
-// interconnected reactors.
+//! @details See the [Reactor Science](../reference/reactors/index.html) section of the
+//! %Cantera website for a description of the governing equations for specific reactor
+//! types and the methods used for solving networks of interconnected reactors.
 
 class FlowDevice;
 class WallBase;
@@ -25,6 +24,7 @@ class ReactorNet;
 class ReactorSurface;
 class Kinetics;
 class ThermoPhase;
+class Solution;
 
 enum class SensParameterType {
     reaction,
@@ -43,48 +43,51 @@ struct SensitivityParameter
  * Base class for stirred reactors. Allows using any substance model, with
  * arbitrary inflow, outflow, heat loss/gain, surface chemistry, and volume
  * change.
- * @ingroup ZeroD
+ * @ingroup reactorGroup
  */
 class ReactorBase
 {
 public:
-    explicit ReactorBase(const std::string& name = "(none)");
-    virtual ~ReactorBase() {}
+    explicit ReactorBase(const string& name="(none)");
+    //! Instantiate a ReactorBase object with Solution contents.
+    //! @param sol  Solution object to be set.
+    //! @param name  Name of the reactor.
+    //! @since New in %Cantera 3.1.
+    ReactorBase(shared_ptr<Solution> sol, const string& name="(none)");
+    virtual ~ReactorBase();
     ReactorBase(const ReactorBase&) = delete;
     ReactorBase& operator=(const ReactorBase&) = delete;
 
     //! String indicating the reactor model implemented. Usually
     //! corresponds to the name of the derived class.
-    virtual std::string type() const {
+    virtual string type() const {
         return "ReactorBase";
     }
 
     //! Return the name of this reactor
-    std::string name() const {
+    string name() const {
         return m_name;
     }
 
     //! Set the name of this reactor
-    void setName(const std::string& name) {
+    void setName(const string& name) {
         m_name = name;
     }
+
+    //! Set the default name of a reactor. Returns `false` if it was previously set.
+    bool setDefaultName(map<string, int>& counts);
+
+    //! Set the Solution specifying the ReactorBase content.
+    //! @param sol  Solution object to be set.
+    //! @since New in %Cantera 3.1.
+    void setSolution(shared_ptr<Solution> sol);
 
     //! @name Methods to set up a simulation
     //! @{
 
     //! Set the initial reactor volume. By default, the volume is 1.0 m^3.
-    void setInitialVolume(doublereal vol) {
+    void setInitialVolume(double vol) {
         m_vol = vol;
-    }
-
-    //! Specify the mixture contained in the reactor. Note that a pointer to
-    //! this substance is stored, and as the integration proceeds, the state of
-    //! the substance is modified.
-    virtual void setThermoMgr(ThermoPhase& thermo);
-
-    //! Specify chemical kinetics governing the reactor.
-    virtual void setKineticsMgr(Kinetics& kin) {
-        throw NotImplementedError("ReactorBase::setKineticsMgr");
     }
 
     //! Enable or disable changes in reactor composition due to chemical reactions.
@@ -138,7 +141,7 @@ public:
     //! Return a reference to the *n*-th Wall connected to this reactor.
     WallBase& wall(size_t n);
 
-    void addSurface(ReactorSurface* surf);
+    virtual void addSurface(ReactorSurface* surf);
 
     //! Return a reference to the *n*-th ReactorSurface connected to this
     //! reactor
@@ -152,7 +155,7 @@ public:
     /**
      * Initialize the reactor. Called automatically by ReactorNet::initialize.
      */
-    virtual void initialize(doublereal t0 = 0.0) {
+    virtual void initialize(double t0 = 0.0) {
         throw NotImplementedError("ReactorBase::initialize");
     }
 
@@ -186,7 +189,7 @@ public:
 
     //! Return the residence time (s) of the contents of this reactor, based
     //! on the outlet mass flow rates and the mass of the reactor contents.
-    doublereal residenceTime();
+    double residenceTime();
 
     //! @name Solution components
     //!
@@ -195,47 +198,63 @@ public:
     //! @{
 
     //! Returns the current volume (m^3) of the reactor.
-    doublereal volume() const {
+    double volume() const {
         return m_vol;
     }
 
     //! Returns the current density (kg/m^3) of the reactor's contents.
-    doublereal density() const {
+    double density() const {
+        if (m_state.empty()) {
+            throw CanteraError("ReactorBase::density",
+                               "Reactor state empty and/or contents not defined.");
+        }
         return m_state[1];
     }
 
     //! Returns the current temperature (K) of the reactor's contents.
-    doublereal temperature() const {
+    double temperature() const {
+        if (m_state.empty()) {
+            throw CanteraError("ReactorBase::temperature",
+                               "Reactor state empty and/or contents not defined.");
+        }
         return m_state[0];
     }
 
     //! Returns the current enthalpy (J/kg) of the reactor's contents.
-    doublereal enthalpy_mass() const {
+    double enthalpy_mass() const {
         return m_enthalpy;
     }
 
     //! Returns the current internal energy (J/kg) of the reactor's contents.
-    doublereal intEnergy_mass() const {
+    double intEnergy_mass() const {
         return m_intEnergy;
     }
 
     //! Returns the current pressure (Pa) of the reactor.
-    doublereal pressure() const {
+    double pressure() const {
         return m_pressure;
     }
 
     //! Returns the mass (kg) of the reactor's contents.
-    doublereal mass() const {
+    double mass() const {
         return m_vol * density();
     }
 
     //! Return the vector of species mass fractions.
-    const doublereal* massFractions() const {
+    const double* massFractions() const {
+        if (m_state.empty()) {
+            throw CanteraError("ReactorBase::massFractions",
+                               "Reactor state empty and/or contents not defined.");
+        }
         return m_state.data() + 2;
     }
 
     //! Return the mass fraction of the *k*-th species.
-    doublereal massFraction(size_t k) const {
+    double massFraction(size_t k) const {
+        if (m_state.empty()) {
+            throw CanteraError("ReactorBase::massFraction",
+                               "Reactor state empty and/or contents not defined.");
+        }
         return m_state[k+2];
     }
 
@@ -248,27 +267,43 @@ public:
     void setNetwork(ReactorNet* net);
 
 protected:
+    //! Specify the mixture contained in the reactor. Note that a pointer to
+    //! this substance is stored, and as the integration proceeds, the state of
+    //! the substance is modified.
+    //! @since New in %Cantera 3.1.
+    virtual void setThermo(ThermoPhase& thermo);
+
+    //! Specify the kinetics manager for the reactor. Called by setSolution().
+    //! @since New in %Cantera 3.1.
+    virtual void setKinetics(Kinetics& kin) {
+        throw NotImplementedError("ReactorBase::setKinetics");
+    }
+
     //! Number of homogeneous species in the mixture
-    size_t m_nsp;
+    size_t m_nsp = 0;
 
-    ThermoPhase* m_thermo;
-    double m_vol; //!< Current volume of the reactor [m^3]
-    double m_enthalpy; //!< Current specific enthalpy of the reactor [J/kg]
-    double m_intEnergy; //!< Current internal energy of the reactor [J/kg]
-    double m_pressure; //!< Current pressure in the reactor [Pa]
-    vector_fp m_state;
-    std::vector<FlowDevice*> m_inlet, m_outlet;
+    ThermoPhase* m_thermo = nullptr;
+    double m_vol = 1.0; //!< Current volume of the reactor [m^3]
+    double m_enthalpy = 0.0; //!< Current specific enthalpy of the reactor [J/kg]
+    double m_intEnergy = 0.0; //!< Current internal energy of the reactor [J/kg]
+    double m_pressure = 0.0; //!< Current pressure in the reactor [Pa]
+    vector<double> m_state;
+    vector<FlowDevice*> m_inlet, m_outlet;
 
-    std::vector<WallBase*> m_wall;
-    std::vector<ReactorSurface*> m_surfaces;
+    vector<WallBase*> m_wall;
+    vector<ReactorSurface*> m_surfaces;
 
     //! Vector of length nWalls(), indicating whether this reactor is on the left (0)
     //! or right (1) of each wall.
-    vector_int m_lr;
-    std::string m_name;
+    vector<int> m_lr;
+    string m_name;  //!< Reactor name.
+    bool m_defaultNameSet = false;  //!< `true` if default name has been previously set.
 
     //! The ReactorNet that this reactor is part of
-    ReactorNet* m_net;
+    ReactorNet* m_net = nullptr;
+
+    //! Composite thermo/kinetics/transport handler
+    shared_ptr<Solution> m_solution;
 };
 }
 

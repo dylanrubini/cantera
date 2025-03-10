@@ -18,8 +18,8 @@ class Species;
 class TransportData
 {
 public:
-    TransportData() {}
-    virtual ~TransportData() {}
+    TransportData() = default;
+    virtual ~TransportData() = default;
 
     virtual void validate(const Species& species) {}
 
@@ -45,10 +45,10 @@ protected:
 class GasTransportData : public TransportData
 {
 public:
-    GasTransportData();
+    GasTransportData() = default;
 
     //! Construct a GasTransportData object using MKS units for all parameters.
-    GasTransportData(const std::string& geometry, double diameter,
+    GasTransportData(const string& geometry, double diameter,
                      double well_depth, double dipole=0.0,
                      double polarizability=0.0, double rot_relax=0.0,
                      double acentric=0.0, double dispersion=0.0,
@@ -57,7 +57,7 @@ public:
     //! Set the parameters using "customary" units: diameter in Angstroms, well
     //! depth in Kelvin, dipole in Debye, and polarizability in Angstroms^3.
     //! These are the units used in in CK-style input files.
-    void setCustomaryUnits(const std::string& geometry, double diameter,
+    void setCustomaryUnits(const string& geometry, double diameter,
                            double well_depth, double dipole=0.0,
                            double polarizability=0.0, double rot_relax=0.0,
                            double acentric=0.0, double dispersion=0.0,
@@ -67,39 +67,39 @@ public:
     //! inconsistent with the atomic composition, non-positive diameter, or
     //! negative values for well depth, dipole, polarizability, or
     //! rotational relaxation number.
-    virtual void validate(const Species& species);
+    void validate(const Species& species) override;
 
-    virtual void getParameters(AnyMap& transportNode) const;
+    void getParameters(AnyMap& transportNode) const override;
 
     //! A string specifying the molecular geometry. One of `atom`, `linear`, or
     //! `nonlinear`.
-    std::string geometry;
+    string geometry;
 
     //! The Lennard-Jones collision diameter [m]
-    double diameter;
+    double diameter = 0.0;
 
     //! The Lennard-Jones well depth [J]
-    double well_depth;
+    double well_depth = 0.0;
 
     //! The permanent dipole moment of the molecule [Coulomb-m]. Default 0.0.
-    double dipole;
+    double dipole = 0.0;
 
     //! The polarizability of the molecule [m^3]. Default 0.0.
-    double polarizability;
+    double polarizability = 0.0;
 
     //! The rotational relaxation number (the number of collisions it takes to
     //! equilibrate the rotational degrees of freedom with the temperature).
     //! Default 0.0.
-    double rotational_relaxation;
+    double rotational_relaxation = 0.0;
 
     //! Pitzer's acentric factor [dimensionless]. Default 0.0.
-    double acentric_factor;
+    double acentric_factor = 0.0;
 
     //! dispersion normalized by e^2. [m^5] Default 0.0.
-    double dispersion_coefficient;
+    double dispersion_coefficient = 0.0;
 
     //! quadrupole. Default 0.0.
-    double quadrupole_polarizability;
+    double quadrupole_polarizability = 0.0;
 };
 
 //! Create a new TransportData object from an AnyMap specification

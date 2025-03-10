@@ -15,61 +15,69 @@
 namespace Cantera
 {
 
-/**
- * Base class for a phase with plasma properties. This class manages the
- * plasma properties such as electron energy distribution function (EEDF).
- * There are two ways to define the electron distribution and electron
- * temperature. The first method uses setElectronTemperature() to set
- * the electron temperature which is used to calculate the electron energy
- * distribution with isotropic-velocity model. The generalized electron
- * energy distribution for isotropic-velocity distribution can be
- * expressed as [1,2],
- *   \f[
+class Reaction;
+class ElectronCollisionPlasmaRate;
+
+//! Base class for handling plasma properties, specifically focusing on the
+//! electron energy distribution.
+/*!
+ * This class provides functionality to manage the the electron energy distribution
+ * using two primary methods for defining the electron distribution and electron
+ * temperature.
+ *
+ * The first method utilizes setElectronTemperature(), which sets the electron
+ * temperature and calculates the electron energy distribution assuming an
+ * isotropic-velocity model. Note that all units in PlasmaPhase are in SI, except
+ * for electron energy, which is measured in volts.
+ *
+ * The generalized electron energy distribution for an isotropic-velocity
+ * distribution (as described by Gudmundsson @cite gudmundsson2001 and Khalilpour
+ * and Foroutan @cite khalilpour2020)
+ * is given by:
+ *   @f[
  *          f(\epsilon) = c_1 \frac{\sqrt{\epsilon}}{\epsilon_m^{3/2}}
- *          \exp(-c_2 (\frac{\epsilon}{\epsilon_m})^x),
- *   \f]
- * where \f$ x = 1 \f$ and \f$ x = 2 \f$ correspond to the Maxwellian and
- * Druyvesteyn (default) electron energy distribution, respectively.
- * \f$ \epsilon_m = 3/2 T_e \f$ [eV] (mean electron energy). The second
- * method uses setDiscretizedElectronEnergyDist() to manually set electron
- * energy distribution and calculate electron temperature from mean electron
- * energy, which is calculated as [3],
- *   \f[
- *          \epsilon_m = \int_0^{\infty} \epsilon^{3/2} f(\epsilon) d\epsilon,
- *   \f]
- * which can be calculated using trapezoidal rule,
- *   \f[
- *          \epsilon_m = \sum_i (\epsilon^{5/2}_{i+1} - \epsilon^{5/2}_i)
- *                       (f(\epsilon_{i+1}) + f(\epsilon_i)) / 2,
- *   \f]
- * where \f$ i \f$ is the index of energy levels.
+ *          \exp \left(-c_2 \left(\frac{\epsilon}{\epsilon_m}\right)^x \right),
+ *   @f]
+ * where @f$ x = 1 @f$ corresponds to a Maxwellian distribution and
+ * @f$ x = 2 @f$ corresponds to a Druyvesteyn distribution (which is the
+ * default). Here, @f$ \epsilon_m = \frac{3}{2} T_e @f$ [V] represents the
+ * mean electron energy.
  *
- * References:
+ * The total probability distribution integrates to one:
+ *   @f[
+ *           \int_0^{\infty} f(\epsilon) d\epsilon = 1.
+ *   @f]
+ * According to Hagelaar and Pitchford @cite hagelaar2005, the electron energy
+ * probability function can be defined as
+ * @f$ F(\epsilon) = \frac{f(\epsilon)}{\sqrt{\epsilon}} @f$ with units of
+ * [V@f$^{-3/2}@f$]. The generalized form of the electron energy probability
+ * function for isotropic-velocity distributions is:
+ *   @f[
+ *          F(\epsilon) = c_1 \frac{1}{\epsilon_m^{3/2}}
+ *          \exp\left(-c_2 \left(\frac{\epsilon}{\epsilon_m}\right)^x\right),
+ *   @f]
+ * and this form is used to model the isotropic electron energy distribution
+ * in PlasmaPhase.
  *
- * [1] J. T. Gudmundsson. On the effect of the electron energy distribution on the
- * plasma parameters of an argon discharge: a global (volume-averaged) model study.
- * Plasma Sources Science and Technology, 10.1 (2001): 76.
- * doi: https://doi.org/10.1088/0963-0252/10/1/310
- *
- * [2] H. Khalilpour and G. Foroutan. The effects of electron energy distribution
- * function on the plasma sheath structure in the presence of charged nanoparticles
- * Journal of Plasma Physics 86.2 (2020).
- * doi: https://doi.org/10.1017/S0022377820000161
- *
- * [3] G. J. M. Hagelaar and L. C. Pitchford
- * "Solving the Boltzmann equation to obtain electron transport
- * coefficients and rate coefficients for fluid models."
- * Plasma Sources Science and Technology 14.4 (2005): 722.
- * doi: https://doi.org/10.1088/0963-0252/14/4/011
- *
- * [4] A. Luque, "BOLOS: An open source solver for the Boltzmann equation,"
- * https://github.com/aluque/bolos.
+ * The second method allows for manual definition of the electron energy
+ * distribution using setDiscretizedElectronEnergyDist(). In this approach,
+ * the electron temperature is derived from the mean electron energy,
+ * @f$ \epsilon_m @f$, which can be calculated as follows @cite hagelaar2005 :
+ *   @f[
+ *          \epsilon_m = \int_0^{\infty} \epsilon^{3/2} F(\epsilon) d\epsilon.
+ *   @f]
+ * This integral can be approximated using the trapezoidal rule,
+ *   @f[
+ *          \epsilon_m = \sum_i \left(\epsilon_{i+1}^{5/2} - \epsilon_i^{5/2}\right)
+ *                       \frac{F(\epsilon_{i+1}) + F(\epsilon_i)}{2},
+ *   @f]
+ * where @f$ i @f$ is the index of discrete energy levels, or Simpson's rule.
  *
  * @warning  This class is an experimental part of %Cantera and may be
  *           changed or removed without notice.
  * @todo Implement electron Boltzmann equation solver to solve EEDF.
  *       https://github.com/Cantera/enhancements/issues/127
- * @ingroup phase
+ * @ingroup thermoprops
  */
 class PlasmaPhase: public IdealGasPhase
 {
@@ -86,20 +94,23 @@ public:
      * @param  id        ID of the phase in the input file. Defaults to the
      *                   empty string.
      */
-    explicit PlasmaPhase(const std::string& inputFile="",
-                         const std::string& id="");
+    explicit PlasmaPhase(const string& inputFile="", const string& id="");
 
-    virtual std::string type() const {
+    ~PlasmaPhase();
+
+    string type() const override {
         return "plasma";
     }
 
-    virtual void initThermo();
+    void initThermo() override;
 
     //! Set electron energy levels.
     //! @param  levels The vector of electron energy levels (eV).
     //!                Length: #m_nPoints.
-    //! @param  length The length of the \p levels.
-    void setElectronEnergyLevels(const double* levels, size_t length);
+    //! @param  length The length of the @c levels.
+    //! @param  updateEnergyDist update electron energy distribution
+    void setElectronEnergyLevels(const double* levels, size_t length,
+                                 bool updateEnergyDist=true);
 
     //! Get electron energy levels.
     //! @param  levels The vector of electron energy levels (eV). Length: #m_nPoints
@@ -125,7 +136,7 @@ public:
     }
 
     //! Set the shape factor of isotropic electron energy distribution.
-    //! Note that \f$ x = 1 \f$ and \f$ x = 2 \f$ correspond to the
+    //! Note that @f$ x = 1 @f$ and @f$ x = 2 @f$ correspond to the
     //! Maxwellian and Druyvesteyn distribution, respectively.
     //! @param  x The shape factor
     void setIsotropicShapeFactor(double x);
@@ -137,28 +148,28 @@ public:
 
     //! Set the internally stored electron temperature of the phase (K).
     //! @param  Te Electron temperature in Kelvin
-    virtual void setElectronTemperature(double Te);
+    void setElectronTemperature(double Te) override;
 
     //! Set mean electron energy [eV]. This method also sets electron temperature
     //! accordingly.
     void setMeanElectronEnergy(double energy);
 
     //! Get electron energy distribution type
-    std::string electronEnergyDistributionType() const {
+    string electronEnergyDistributionType() const {
         return m_distributionType;
     }
 
     //! Set electron energy distribution type
-    void setElectronEnergyDistributionType(const std::string& type);
+    void setElectronEnergyDistributionType(const string& type);
 
     //! Numerical quadrature method. Method: #m_quadratureMethod
-    std::string quadratureMethod() const {
+    string quadratureMethod() const {
         return m_quadratureMethod;
     }
 
-    //! Set numerical quadrature method for intergating electron
+    //! Set numerical quadrature method for integrating electron
     //! energy distribution function. Method: #m_quadratureMethod
-    void setQuadratureMethod(const std::string& method) {
+    void setQuadratureMethod(const string& method) {
         m_quadratureMethod = method;
     }
 
@@ -179,12 +190,29 @@ public:
         return m_do_normalizeElectronEnergyDist;
     }
 
-    virtual bool addSpecies(shared_ptr<Species> spec);
+    bool addSpecies(shared_ptr<Species> spec) override;
 
     //! Electron Temperature (K)
     //!     @return The electron temperature of the phase
-    virtual double electronTemperature() const {
+    double electronTemperature() const override {
         return m_electronTemp;
+    }
+
+    //! Return the Gas Constant multiplied by the current electron temperature
+    /*!
+     *  The units are Joules kmol-1
+     */
+    double RTe() const {
+        return electronTemperature() * GasConstant;
+    }
+
+    /**
+     * Electron pressure. Units: Pa.
+     * @f[P = n_{k_e} R T_e @f]
+     */
+    virtual double electronPressure() const {
+        return GasConstant * concentration(m_electronSpeciesIndex) *
+               electronTemperature();
     }
 
     //! Number of electron levels
@@ -192,13 +220,109 @@ public:
         return m_nPoints;
     }
 
-    virtual void getParameters(AnyMap& phaseNode) const;
+    //! Number of collisions
+    size_t nCollisions() const {
+        return m_collisions.size();
+    }
 
-    virtual void setParameters(const AnyMap& phaseNode,
-                               const AnyMap& rootNode=AnyMap());
+    //! Electron Species Index
+    size_t electronSpeciesIndex() const {
+        return m_electronSpeciesIndex;
+    }
+
+    //! Return the Molar enthalpy. Units: J/kmol.
+    /*!
+     * For an ideal gas mixture with additional electron,
+     * @f[
+     * \hat h(T) = \sum_{k \neq k_e} X_k \hat h^0_k(T) + X_{k_e} \hat h^0_{k_e}(T_e),
+     * @f]
+     * and is a function only of temperature. The standard-state pure-species
+     * enthalpies @f$ \hat h^0_k(T) @f$ are computed by the species
+     * thermodynamic property manager.
+     *
+     * @see MultiSpeciesThermo
+     */
+    double enthalpy_mole() const override;
+
+    double cp_mole() const override {
+        throw NotImplementedError("PlasmaPhase::cp_mole");
+    }
+
+    double entropy_mole() const override {
+        throw NotImplementedError("PlasmaPhase::entropy_mole");
+    }
+
+    double gibbs_mole() const override {
+        throw NotImplementedError("PlasmaPhase::gibbs_mole");
+    }
+
+    double intEnergy_mole() const override {
+        throw NotImplementedError("PlasmaPhase::intEnergy_mole");
+    }
+
+    void getEntropy_R(double* sr) const override;
+
+    void getGibbs_RT(double* grt) const override;
+
+    void getGibbs_ref(double* g) const override;
+
+    void getStandardVolumes_ref(double* vol) const override;
+
+    void getChemPotentials(double* mu) const override;
+
+    void getStandardChemPotentials(double* muStar) const override;
+
+    void getPartialMolarEnthalpies(double* hbar) const override;
+
+    void getPartialMolarEntropies(double* sbar) const override;
+
+    void getPartialMolarIntEnergies(double* ubar) const override;
+
+    void getParameters(AnyMap& phaseNode) const override;
+
+    void setParameters(const AnyMap& phaseNode,
+                       const AnyMap& rootNode=AnyMap()) override;
+
+    //! Electron species name
+    string electronSpeciesName() const {
+        return speciesName(m_electronSpeciesIndex);
+    }
+
+    //! Return the distribution Number #m_distNum
+    int distributionNumber() const {
+        return m_distNum;
+    }
+
+    //! Return the electron energy level Number #m_levelNum
+    int levelNumber() const {
+        return m_levelNum;
+    }
+
+    virtual void setSolution(std::weak_ptr<Solution> soln) override;
+
+    /**
+     * The elastic power loss (J/s/m³)
+     *   @f[
+     *     P_k = N_A N_A C_e e \sum_k C_k K_k,
+     *   @f]
+     * where @f$ C_k @f$ and @f$ C_e @f$ are the concentration (kmol/m³) of the
+     * target species and electrons, respectively. @f$ K_k @f$ is the elastic
+     * electron energy loss coefficient (eV-m³/s).
+     */
+    double elasticPowerLoss();
 
 protected:
-    virtual void updateThermo() const;
+    void updateThermo() const override;
+
+    //! When electron energy distribution changed, plasma properties such as
+    //! electron-collision reaction rates need to be re-evaluated.
+    void electronEnergyDistributionChanged();
+
+    //! When electron energy level changed, plasma properties such as
+    //! electron-collision reaction rates need to be re-evaluate.
+    //! In addition, the cross-sections need to be interpolated at
+    //! the new level.
+    void electronEnergyLevelChanged();
 
     //! Check the electron energy levels
     /*!
@@ -233,11 +357,17 @@ protected:
     //! Electron energy distribution norm
     void normalizeElectronEnergyDistribution();
 
+    //! Update interpolated cross section of a collision
+    bool updateInterpolatedCrossSection(size_t k);
+
+    //! Update electron energy distribution difference
+    void updateElectronEnergyDistDifference();
+
     // Electron energy order in the exponential term
-    double m_isotropicShapeFactor;
+    double m_isotropicShapeFactor = 2.0;
 
     //! Number of points of electron energy levels
-    size_t m_nPoints;
+    size_t m_nPoints = 1001;
 
     //! electron energy levels [ev]. Length: #m_nPoints
     Eigen::ArrayXd m_electronEnergyLevels;
@@ -247,19 +377,85 @@ protected:
     Eigen::ArrayXd m_electronEnergyDist;
 
     //! Index of electron species
-    size_t m_electronSpeciesIndex;
+    size_t m_electronSpeciesIndex = npos;
 
     //! Electron temperature [K]
     double m_electronTemp;
 
     //! Electron energy distribution type
-    std::string m_distributionType;
+    string m_distributionType = "isotropic";
 
     //! Numerical quadrature method for electron energy distribution
-    std::string m_quadratureMethod;
+    string m_quadratureMethod = "simpson";
 
     //! Flag of normalizing electron energy distribution
-    bool m_do_normalizeElectronEnergyDist;
+    bool m_do_normalizeElectronEnergyDist = true;
+
+    //! Data for initiate reaction
+    AnyMap m_root;
+
+    //! Electron energy distribution Difference dF/dε (V^-5/2)
+    Eigen::ArrayXd m_electronEnergyDistDiff;
+
+    //! Elastic electron energy loss coefficients (eV m3/s)
+    /*! The elastic electron energy loss coefficient for species k is,
+     *   @f[
+     *     K_k = \frac{2 m_e}{m_k} \sqrt{\frac{2 e}{m_e}} \int_0^{\infty} \sigma_k
+     *           \epsilon^2 \left( F_0 + \frac{k_B T}{e}
+     *           \frac{\partial F_0}{\partial \epsilon} \right) d \epsilon,
+     *   @f]
+     * where @f$ m_e @f$ [kg] is the electron mass, @f$ \epsilon @f$ [V] is the
+     * electron energy, @f$ \sigma_k @f$ [m2] is the reaction collision cross section,
+     * @f$ F_0 @f$ [V^(-3/2)] is the normalized electron energy distribution function.
+     */
+    vector<double> m_elasticElectronEnergyLossCoefficients;
+
+    //! Updates the elastic electron energy loss coefficient for collision index i
+    /*! Calculates the elastic energy loss coefficient using the current electron
+        energy distribution and cross sections.
+    */
+    void updateElasticElectronEnergyLossCoefficient(size_t i);
+
+    //! Update elastic electron energy loss coefficients
+    /*! Used by elasticPowerLoss() and other plasma property calculations that
+        depends on #m_elasticElectronEnergyLossCoefficients. This function calls
+        updateInterpolatedCrossSection() before calling
+        updateElasticElectronEnergyLossCoefficient()
+    */
+    void updateElasticElectronEnergyLossCoefficients();
+
+private:
+    //! Electron energy distribution change variable. Whenever
+    //! #m_electronEnergyDist changes, this int is incremented.
+    int m_distNum = -1;
+
+    //! Electron energy level change variable. Whenever
+    //! #m_electronEnergyLevels changes, this int is incremented.
+    int m_levelNum = -1;
+
+    //! The list of shared pointers of plasma collision reactions
+    vector<shared_ptr<Reaction>> m_collisions;
+
+    //! The list of shared pointers of collision rates
+    vector<shared_ptr<ElectronCollisionPlasmaRate>> m_collisionRates;
+
+    //! The collision-target species indices of #m_collisions
+    vector<size_t> m_targetSpeciesIndices;
+
+    //! Interpolated cross sections. This is used for storing
+    //! interpolated cross sections temporarily.
+    vector<double> m_interp_cs;
+
+    //! The list of whether the interpolated cross sections is ready
+    vector<bool> m_interp_cs_ready;
+
+    //! Set collisions. This function sets the list of collisions and
+    //! the list of target species using #addCollision.
+    void setCollisions();
+
+    //! Add a collision and record the target species
+    void addCollision(std::shared_ptr<Reaction> collision);
+
 };
 
 }

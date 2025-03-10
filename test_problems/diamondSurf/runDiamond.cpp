@@ -12,27 +12,23 @@ using namespace Cantera;
 
 int main(int argc, char** argv)
 {
-#if defined(_MSC_VER) && _MSC_VER < 1900
-    _set_output_format(_TWO_DIGIT_EXPONENT);
-#endif
     int i, k;
 
     try {
-        shared_ptr<ThermoPhase> gas(newPhase("diamond.yaml", "gas"));
+        auto gas = newThermo("diamond.yaml", "gas");
         size_t nsp = gas->nSpecies();
         cout.precision(4);
         cout << "Number of species = " << nsp << endl;
 
-        shared_ptr<ThermoPhase> diamond(newPhase("diamond.yaml", "diamond"));
+        auto diamond = newThermo("diamond.yaml", "diamond");
         size_t nsp_diamond = diamond->nSpecies();
         cout << "Number of species in diamond = " << nsp_diamond << endl;
 
-        shared_ptr<ThermoPhase> diamond100(newPhase("diamond.yaml", "diamond_100"));
+        auto diamond100 = newThermo("diamond.yaml", "diamond_100");
         size_t nsp_d100 = diamond100->nSpecies();
         cout << "Number of species in diamond_100 = " << nsp_d100 << endl;
 
-        auto kin = newKinetics({gas.get(), diamond.get(), diamond100.get()},
-                               "diamond.yaml", "diamond_100");
+        auto kin = newKinetics({diamond100, gas, diamond}, "diamond.yaml");
         InterfaceKinetics& ikin = dynamic_cast<InterfaceKinetics&>(*kin);
         size_t nr = kin->nReactions();
         cout << "Number of reactions = " << nr << endl;
@@ -56,7 +52,8 @@ int main(int argc, char** argv)
         x[i0] = 0.1;
         size_t i1 = diamond100->speciesIndex("c6HH");
         x[i1] = 0.9;
-        diamond100->setState_TX(1200., x);
+        diamond100->setMoleFractions(x);
+        diamond100->setTemperature(1200.);
 
         for (i = 0; i < 20; i++) {
             x[i] = 0.0;

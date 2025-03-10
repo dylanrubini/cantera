@@ -10,11 +10,6 @@
 namespace Cantera
 {
 
-using std::string;
-using std::vector;
-
-Interface::Interface() {}
-
 void Interface::setThermo(shared_ptr<ThermoPhase> thermo) {
     Solution::setThermo(thermo);
     auto surf = std::dynamic_pointer_cast<SurfPhase>(thermo);
@@ -37,10 +32,10 @@ void Interface::setKinetics(shared_ptr<Kinetics> kinetics) {
     m_surfkin = surfkin;
 }
 
-shared_ptr<Interface> newInterface(const std::string& infile,
-    const std::string& name, const std::vector<std::string>& adjacent)
+shared_ptr<Interface> newInterface(const string& infile,
+    const string& name, const vector<string>& adjacent)
 {
-    auto sol = newSolution(infile, name, "", adjacent);
+    auto sol = newSolution(infile, name, "default", adjacent);
     auto iface = std::dynamic_pointer_cast<Interface>(sol);
     if (!iface) {
         auto rootNode = AnyMap::fromYamlFile(infile);
@@ -51,8 +46,8 @@ shared_ptr<Interface> newInterface(const std::string& infile,
     return iface;
 }
 
-shared_ptr<Interface> newInterface(const std::string& infile,
-    const std::string& name, const std::vector<shared_ptr<Solution>>& adjacent)
+shared_ptr<Interface> newInterface(const string& infile,
+    const string& name, const vector<shared_ptr<Solution>>& adjacent)
 {
     auto rootNode = AnyMap::fromYamlFile(infile);
     AnyMap& phaseNode = rootNode["phases"].getMapWhere("name", name);
@@ -60,9 +55,9 @@ shared_ptr<Interface> newInterface(const std::string& infile,
 }
 
 shared_ptr<Interface> newInterface(AnyMap& phaseNode, const AnyMap& rootNode,
-    const std::vector<shared_ptr<Solution>>& adjacent)
+    const vector<shared_ptr<Solution>>& adjacent)
 {
-    auto sol = newSolution(phaseNode, rootNode, "", adjacent);
+    auto sol = newSolution(phaseNode, rootNode, "default", adjacent);
     auto iface = std::dynamic_pointer_cast<Interface>(sol);
     if (!iface) {
         throw InputFileError("newInterface", phaseNode,

@@ -1,12 +1,11 @@
-/*!
- * @file openmp_ignition.cpp
- *
+/*
  * Ignition delay calculation with OpenMP
+ * ======================================
  *
  * This example shows how to use OpenMP to run multiple reactor network
  * calculations in parallel by using separate Cantera objects for each thread.
  *
- * Keywords: combustion, reactor network, ignition delay, parallel computing
+ * .. tags:: C++, combustion, reactor network, ignition delay, parallel computing
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -28,25 +27,24 @@ void run()
     // Containers for Cantera objects to be used in different. Each thread needs
     // to have its own set of linked Cantera objects. Multiple threads accessing
     // the same objects at the same time will cause errors.
-    std::vector<std::shared_ptr<Solution>> sols;
-    std::vector<std::unique_ptr<IdealGasConstPressureReactor>> reactors;
-    std::vector<std::unique_ptr<ReactorNet>> nets;
+    vector<shared_ptr<Solution>> sols;
+    vector<unique_ptr<IdealGasConstPressureReactor>> reactors;
+    vector<unique_ptr<ReactorNet>> nets;
 
     // Create and link the Cantera objects for each thread. This step should be
     // done in serial
     for (int i = 0; i < nThreads; i++) {
-        auto sol = newSolution("gri30.yaml", "gri30", "None");
+        auto sol = newSolution("gri30.yaml", "gri30", "none");
         sols.emplace_back(sol);
-        reactors.emplace_back(new IdealGasConstPressureReactor());
+        reactors.emplace_back(new IdealGasConstPressureReactor(sol));
         nets.emplace_back(new ReactorNet());
-        reactors.back()->insert(sol);
         nets.back()->addReactor(*reactors.back());
     }
 
     // Points at which to compute ignition delay time
     int nPoints = 50;
-    vector_fp T0(nPoints);
-    vector_fp ignition_time(nPoints);
+    vector<double> T0(nPoints);
+    vector<double> ignition_time(nPoints);
     for (int i = 0; i < nPoints; i++) {
         T0[i] = 1000 + 500 * ((float) i) / ((float) nPoints);
     }

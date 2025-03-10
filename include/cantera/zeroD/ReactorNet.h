@@ -15,21 +15,22 @@ namespace Cantera
 
 class Array2D;
 class Integrator;
-class PreconditionerBase;
+class SystemJacobian;
 
 //! A class representing a network of connected reactors.
 /*!
- *  This class is used to integrate the time-dependent governing equations for
- *  a network of reactors (Reactor, ConstPressureReactor) connected by various
- *  means, for example Wall, MassFlowController, Valve, or PressureController.
+ *  This class is used to integrate the governing equations for a network of reactors
+ *  that are time dependent (Reactor, ConstPressureReactor) connected by various
+ *  means, for example Wall, MassFlowController, Valve, or PressureController; or
+ *  reactors dependent on a single spatial variable (FlowReactor).
  *
- * @ingroup ZeroD
+ * @ingroup zerodGroup
  */
 class ReactorNet : public FuncEval
 {
 public:
     ReactorNet();
-    virtual ~ReactorNet();
+    ~ReactorNet() override;
     ReactorNet(const ReactorNet&) = delete;
     ReactorNet& operator=(const ReactorNet&) = delete;
 
@@ -39,26 +40,35 @@ public:
     //! Set the type of linear solver used in the integration.
     //! @param linSolverType type of linear solver. Default type: "DENSE"
     //! Other options include: "DIAG", "DENSE", "GMRES", "BAND"
-    void setLinearSolverType(const std::string& linSolverType="DENSE");
+    void setLinearSolverType(const string& linSolverType="DENSE");
 
     //! Set preconditioner used by the linear solver
     //! @param preconditioner preconditioner object used for the linear solver
-    void setPreconditioner(shared_ptr<PreconditionerBase> preconditioner);
+    void setPreconditioner(shared_ptr<SystemJacobian> preconditioner);
 
-    //! Set initial time. Default = 0.0 s. Restarts integration from this time
-    //! using the current mixture state as the initial condition.
+    //! Set the initial value of the independent variable (typically time).
+    //! Default = 0.0 s. Restarts integration from this value using the current mixture
+    //! state as the initial condition.
     void setInitialTime(double time);
 
-    //! Get the maximum time step.
-    double maxTimeStep() {
+    //! Get the initial value of the independent variable (typically time).
+    /*!
+     * @since New in %Cantera 3.0.
+     */
+    double getInitialTime() const {
+        return m_initial_time;
+    }
+
+    //! Get the maximum integrator step.
+    double maxTimeStep() const {
         return m_maxstep;
     }
 
-    //! Set the maximum time step.
+    //! Set the maximum integrator step.
     void setMaxTimeStep(double maxstep);
 
     //! Set the maximum number of error test failures permitted by the CVODES
-    //! integrator in a single time step.
+    //! integrator in a single step.
     void setMaxErrTestFails(int nmax);
 
     //! Set the relative and absolute tolerances for the integrator.
@@ -68,55 +78,61 @@ public:
     //! sensitivity equations.
     void setSensitivityTolerances(double rtol, double atol);
 
-    //! @}
+    //! Current value of the simulation time [s], for reactor networks that are solved
+    //! in the time domain.
+    double time();
 
-    //! Current value of the simulation time.
-    doublereal time() {
-        return m_time;
-    }
+    //! Current position [m] along the length of the reactor network, for reactors that
+    //! are solved as a function of space.
+    double distance();
 
     //! Relative tolerance.
-    doublereal rtol() {
+    double rtol() {
         return m_rtol;
     }
 
     //! Absolute integration tolerance
-    doublereal atol() {
+    double atol() {
         return m_atols;
     }
 
     //! Relative sensitivity tolerance
-    doublereal rtolSensitivity() const {
+    double rtolSensitivity() const {
         return m_rtolsens;
     }
 
     //! Absolute sensitivity tolerance
-    doublereal atolSensitivity() const {
+    double atolSensitivity() const {
         return m_atolsens;
     }
 
     //! Problem type of integrator
-    std::string linearSolverType() const;
+    string linearSolverType() const;
+
+    //! Returns the maximum number of internal integration steps the
+    //! integrator will take before reaching the next output point
+    int maxSteps();
 
     /**
-     * Advance the state of all reactors in time. Take as many internal
-     * timesteps as necessary to reach *time*.
-     * @param time Time to advance to (s).
+     * Advance the state of all reactors in the independent variable (time or space).
+     * Take as many internal steps as necessary to reach *t*.
+     * @param t Time/distance to advance to (s or m).
      */
-    void advance(doublereal time);
+    void advance(double t);
 
     /**
-     * Advance the state of all reactors in time. Take as many internal
-     * timesteps as necessary towards *time*. If *applylimit* is true,
-     * the advance step will be automatically reduced if needed to
-     * stay within limits (set by setAdvanceLimit).
-     * Returns the time at the end of integration.
-     * @param time Time to advance to (s).
+     * Advance the state of all reactors in the independent variable (time or space).
+     * Take as many internal steps as necessary towards *t*. If *applylimit* is true,
+     * the advance step will be automatically reduced if needed to stay within limits
+     * (set by setAdvanceLimit).
+     * Returns the time/distance at the end of integration.
+     * @param t Time/distance to advance to (s or m).
      * @param applylimit Limit advance step (boolean).
      */
-    double advance(double time, bool applylimit);
+    double advance(double t, bool applylimit);
 
-    //! Advance the state of all reactors in time.
+    //! Advance the state of all reactors with respect to the independent variable
+    //! (time or space). Returns the new value of the independent variable [s or m].
     double step();
 
     //! Add the reactor *r* to this reactor network.
@@ -141,22 +157,21 @@ public:
         suppressErrors(!m_verbose);
     }
 
-    //! Return a reference to the integrator.
-    Integrator& integrator() {
-        return *m_integ;
-    }
+    //! Return a reference to the integrator. Only valid after adding at least one
+    //! reactor to the network.
+    Integrator& integrator();
 
     //! Update the state of all the reactors in the network to correspond to
     //! the values in the solution vector *y*.
-    void updateState(doublereal* y);
+    void updateState(double* y);
 
     //! Return the sensitivity of the *k*-th solution component with respect to
     //! the *p*-th sensitivity parameter.
     /*!
-     *  The sensitivity coefficient \f$ S_{ki} \f$ of solution variable \f$ y_k
-     *  \f$ with respect to sensitivity parameter \f$ p_i \f$ is defined as:
+     *  The sensitivity coefficient @f$ S_{ki} @f$ of solution variable @f$ y_k
+     *  @f$ with respect to sensitivity parameter @f$ p_i @f$ is defined as:
      *
-     *  \f[ S_{ki} = \frac{1}{y_k} \frac{\partial y_k}{\partial p_i} \f]
+     *  @f[ S_{ki} = \frac{1}{y_k} \frac{\partial y_k}{\partial p_i} @f]
      *
      *  For reaction sensitivities, the parameter is a multiplier on the forward
      *  rate constant (and implicitly on the reverse rate constant for
@@ -172,52 +187,59 @@ public:
     //! Return the sensitivity of the component named *component* with respect to
     //! the *p*-th sensitivity parameter.
     //! @copydetails ReactorNet::sensitivity(size_t, size_t)
-    double sensitivity(const std::string& component, size_t p, int reactor=0) {
+    double sensitivity(const string& component, size_t p, int reactor=0) {
         size_t k = globalComponentIndex(component, reactor);
         return sensitivity(k, p);
     }
 
     //! Evaluate the Jacobian matrix for the reactor network.
     /*!
-     *  @param[in] t Time at which to evaluate the Jacobian
-     *  @param[in] y Global state vector at time *t*
-     *  @param[out] ydot Time derivative of the state vector evaluated at *t*.
+     *  @param[in] t Time/distance at which to evaluate the Jacobian
+     *  @param[in] y Global state vector at *t*
+     *  @param[out] ydot Derivative of the state vector evaluated at *t*, with respect
+     *      to *t*.
      *  @param[in] p sensitivity parameter vector (unused?)
      *  @param[out] j Jacobian matrix, size neq() by neq().
      */
-    void evalJacobian(doublereal t, doublereal* y,
-                      doublereal* ydot, doublereal* p, Array2D* j);
+    void evalJacobian(double t, double* y,
+                      double* ydot, double* p, Array2D* j);
 
     // overloaded methods of class FuncEval
-    virtual size_t neq() {
+    size_t neq() const override {
         return m_nv;
     }
 
-    size_t nReactors() {
+    size_t nReactors() const {
         return m_reactors.size();
     }
 
-    virtual void eval(doublereal t, doublereal* y,
-                      doublereal* ydot, doublereal* p);
+    void eval(double t, double* y, double* ydot, double* p) override;
 
-    virtual void getState(doublereal* y);
+    //! eval coupling for IDA / DAEs
+    void evalDae(double t, double* y, double* ydot, double* p,
+                 double* residual) override;
 
-    //! Return k-th derivative at the current time
+    void getState(double* y) override;
+    void getStateDae(double* y, double* ydot) override;
+
+    //! Return k-th derivative at the current state of the system
     virtual void getDerivative(int k, double* dky);
 
-    virtual size_t nparams() {
+    void getConstraints(double* constraints) override;
+
+    size_t nparams() const override {
         return m_sens_params.size();
     }
 
     //! Return the index corresponding to the component named *component* in the
     //! reactor with index *reactor* in the global state vector for the
     //! reactor network.
-    size_t globalComponentIndex(const std::string& component, size_t reactor=0);
+    size_t globalComponentIndex(const string& component, size_t reactor=0);
 
     //! Return the name of the i-th component of the global state vector. The
     //! name returned includes both the name of the reactor and the specific
     //! component, for example `'reactor1: CH4'`.
-    std::string componentName(size_t i) const;
+    string componentName(size_t i) const;
 
     //! Used by Reactor and Wall objects to register the addition of
     //! sensitivity parameters so that the ReactorNet can keep track of the
@@ -228,11 +250,10 @@ public:
     //!     coefficient
     //! @returns the index of this parameter in the vector of sensitivity
     //!     parameters (global across all reactors)
-    size_t registerSensitivityParameter(const std::string& name, double value,
-                                        double scale);
+    size_t registerSensitivityParameter(const string& name, double value, double scale);
 
     //! The name of the p-th sensitivity parameter added to this ReactorNet.
-    const std::string& sensitivityParameterName(size_t p) {
+    const string& sensitivityParameterName(size_t p) const {
         return m_paramNames.at(p);
     }
 
@@ -252,29 +273,24 @@ public:
         m_integrator_init = false;
     }
 
-    //! Set the maximum number of internal integration time-steps the
-    //! integrator will take before reaching the next output time
+    //! Set the maximum number of internal integration steps the
+    //! integrator will take before reaching the next output point
     //! @param nmax The maximum number of steps, setting this value
     //!             to zero disables this option.
     virtual void setMaxSteps(int nmax);
-
-    //! Returns the maximum number of internal integration time-steps the
-    //!  integrator will take before reaching the next output time
-    //!
-    virtual int maxSteps();
 
     //! Set absolute step size limits during advance
     void setAdvanceLimits(const double* limits);
 
     //! Check whether ReactorNet object uses advance limits
-    bool hasAdvanceLimits();
+    bool hasAdvanceLimits() const;
 
     //! Retrieve absolute step size limits during advance
-    bool getAdvanceLimits(double* limits);
+    bool getAdvanceLimits(double* limits) const;
 
-    virtual void preconditionerSetup(double t, double* y, double gamma);
+    void preconditionerSetup(double t, double* y, double gamma) override;
 
-    virtual void preconditionerSolve(double* rhs, double* output);
+    void preconditionerSolve(double* rhs, double* output) override;
 
     //! Get solver stats from integrator
     AnyMap solverStats() const;
@@ -284,12 +300,13 @@ public:
     virtual void setDerivativeSettings(AnyMap& settings);
 
 protected:
-    //! Check if surfaces and preconditioning are included, if so throw an error because
-    //! they are currently not supported.
-    virtual void checkPreconditionerSupported();
+    //! Check that preconditioning is supported by all reactors in the network
+    virtual void checkPreconditionerSupported() const;
 
-    //! Update the preconditioner based on the already computed jacobian values
-    virtual void updatePreconditioner(double gamma);
+    void updatePreconditioner(double gamma) override;
+
+    //! Create reproducible names for reactors and walls/connectors.
+    void updateNames(Reactor& r);
 
     //! Estimate a future state based on current derivatives.
     //! The function is intended for internal use by ReactorNet::advance
@@ -299,38 +316,52 @@ protected:
     //! Returns the order used for last solution step of the ODE integrator
     //! The function is intended for internal use by ReactorNet::advance
     //! and deliberately not exposed in external interfaces.
-    virtual int lastOrder();
+    virtual int lastOrder() const;
 
-    std::vector<Reactor*> m_reactors;
-    std::unique_ptr<Integrator> m_integ;
-    doublereal m_time;
-    bool m_init;
-    bool m_integrator_init; //!< True if integrator initialization is current
-    size_t m_nv;
+    vector<Reactor*> m_reactors;
+    map<string, int> m_counts;  //!< Map used for default name generation
+    unique_ptr<Integrator> m_integ;
+
+    //! The independent variable in the system. May be either time or space depending
+    //! on the type of reactors in the network.
+    double m_time = 0.0;
+
+    //! The initial value of the independent variable in the system.
+    double m_initial_time = 0.0;
+
+    bool m_init = false;
+    bool m_integrator_init = false; //!< True if integrator initialization is current
+    size_t m_nv = 0;
 
     //! m_start[n] is the starting point in the state vector for reactor n
-    std::vector<size_t> m_start;
+    vector<size_t> m_start;
 
-    vector_fp m_atol;
-    doublereal m_rtol, m_rtolsens;
-    doublereal m_atols, m_atolsens;
+    vector<double> m_atol;
+    double m_rtol = 1.0e-9;
+    double m_rtolsens = 1.0e-4;
+    double m_atols = 1.0e-15;
+    double m_atolsens = 1.0e-6;
+    shared_ptr<SystemJacobian> m_precon;
+    string m_linearSolverType;
 
     //! Maximum integrator internal timestep. Default of 0.0 means infinity.
-    doublereal m_maxstep;
+    double m_maxstep = 0.0;
 
-    int m_maxErrTestFails;
-    bool m_verbose;
+    bool m_verbose = false;
+
+    //! Indicates whether time or space is the independent variable
+    bool m_timeIsIndependent = true;
 
     //! Names corresponding to each sensitivity parameter
-    std::vector<std::string> m_paramNames;
+    vector<string> m_paramNames;
 
-    vector_fp m_ydot;
-    vector_fp m_yest;
-    vector_fp m_advancelimits;
+    vector<double> m_ydot;
+    vector<double> m_yest;
+    vector<double> m_advancelimits;
     //! m_LHS is a vector representing the coefficients on the
     //! "left hand side" of each governing equation
-    vector_fp m_LHS;
-    vector_fp m_RHS;
+    vector<double> m_LHS;
+    vector<double> m_RHS;
 };
 }
 

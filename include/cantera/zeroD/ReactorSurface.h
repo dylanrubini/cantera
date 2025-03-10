@@ -16,14 +16,32 @@ class SurfPhase;
 
 //! A surface where reactions can occur that is in contact with the bulk fluid of a
 //! Reactor.
-//! @ingroup ZeroD
+//! @ingroup wallGroup
 class ReactorSurface
 {
 public:
-    ReactorSurface();
-    virtual ~ReactorSurface() {}
+    ReactorSurface(const string& name="(none)") : m_name(name) {}
+    virtual ~ReactorSurface() = default;
     ReactorSurface(const ReactorSurface&) = delete;
     ReactorSurface& operator=(const ReactorSurface&) = delete;
+
+    //! String indicating the wall model implemented.
+    virtual string type() const {
+        return "ReactorSurface";
+    }
+
+    //! Retrieve reactor surface name.
+    string name() const {
+        return m_name;
+    }
+
+    //! Set reactor surface name.
+    void setName(const string& name) {
+        m_name = name;
+    }
+
+    //! Set the default name of a wall. Returns `false` if it was previously set.
+    bool setDefaultName(map<string, int>& counts);
 
     //! Returns the surface area [m^2]
     double area() const;
@@ -61,7 +79,7 @@ public:
     void setCoverages(const Composition& cov);
 
     //! Set the surface coverages by name
-    void setCoverages(const std::string& cov);
+    void setCoverages(const string& cov);
 
     //! Get the surface coverages. Array `cov` should have length equal to the
     //! number of surface species.
@@ -87,13 +105,16 @@ public:
     void resetSensitivityParameters();
 
 protected:
-    double m_area;
+    string m_name;  //!< Reactor surface name.
+    bool m_defaultNameSet = false;  //!< `true` if default name has been previously set.
 
-    SurfPhase* m_thermo;
-    Kinetics* m_kinetics;
-    ReactorBase* m_reactor;
-    vector_fp m_cov;
-    std::vector<SensitivityParameter> m_params;
+    double m_area = 1.0;
+
+    SurfPhase* m_thermo = nullptr;
+    Kinetics* m_kinetics = nullptr;
+    ReactorBase* m_reactor = nullptr;
+    vector<double> m_cov;
+    vector<SensitivityParameter> m_params;
 };
 
 }

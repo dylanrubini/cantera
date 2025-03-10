@@ -1,6 +1,6 @@
 /**
  *  @file AdaptivePreconditioner.h Declarations for the class
- *   AdaptivePreconditioner which is a child class of PreconditionerBase
+ *   AdaptivePreconditioner which is a child class of SystemJacobian
  *   for preconditioners used by sundials
  */
 
@@ -10,10 +10,7 @@
 #ifndef ADAPTIVEPRECONDITIONER_H
 #define ADAPTIVEPRECONDITIONER_H
 
-#include "cantera/numerics/PreconditionerBase.h"
-#include "cantera/numerics/eigen_sparse.h"
-#include "cantera/base/global.h"
-#include <iostream>
+#include "cantera/numerics/EigenSparseJacobian.h"
 
 namespace Cantera
 {
@@ -21,53 +18,34 @@ namespace Cantera
 //! AdaptivePreconditioner a preconditioner designed for use with large
 //! mechanisms that leverages sparse solvers. It does this by pruning
 //! the preconditioner by a threshold value. It also neglects pressure
-//! dependence and thirdbody contributions in its formation and has a
+//! dependence and third body contributions in its formation and has a
 //! finite difference approximation for temperature.
-class AdaptivePreconditioner : public PreconditionerBase
+class AdaptivePreconditioner : public EigenSparseJacobian
 {
 public:
     AdaptivePreconditioner();
 
     void initialize(size_t networkSize) override;
-
-    void reset() override {
-        m_precon_matrix.setZero();
-        m_jac_trips.clear();
-    };
-
-    void setup() override;
-
+    const string type() const override { return "Adaptive"; }
+    void setup() override; // deprecated
+    void factorize() override;
     void solve(const size_t stateSize, double* rhs_vector, double* output) override;
+    void stateAdjustment(vector<double>& state) override;
 
-    void setValue(size_t row, size_t col, double value) override;
-
-    virtual void stateAdjustment(vector_fp& state) override;
-
-    virtual void updatePreconditioner() override;
+    int info() const override {
+        return static_cast<int>(m_solver.info());
+    }
 
     //! Prune preconditioner elements
     void prunePreconditioner();
 
-    //! Function used to return semi-analytical jacobian matrix
-    Eigen::SparseMatrix<double> jacobian() {
-        Eigen::SparseMatrix<double> jacobian_mat(m_dim, m_dim);
-        jacobian_mat.setFromTriplets(m_jac_trips.begin(), m_jac_trips.end());
-        return jacobian_mat;
-    }
-
-    //! Return the internal preconditioner matrix
-    Eigen::SparseMatrix<double> matrix() {
-        updatePreconditioner();
-        return m_precon_matrix;
-    }
-
     //! Get the threshold value for setting elements
     double threshold() { return m_threshold; }
 
-    //! Get ilut fill factor
+    //! Get ILUT fill factor
     double ilutFillFactor() { return m_fill_factor; }
 
-    //! Get ilut drop tolerance
+    //! Get ILUT drop tolerance
     double ilutDropTol() { return m_drop_tol; }
 
     //! Set the threshold value to compare elements against
@@ -91,27 +69,12 @@ public:
         m_solver.setFillfactor(fillFactor);
     }
 
-    //! Print preconditioner contents
-    void printPreconditioner() override;
-
-    //! Print jacobian contents
-    void printJacobian();
-
 protected:
-    //! ilut fill factor
+    //! ILUT fill factor
     double m_fill_factor = 0;
 
-    //! ilut drop tolerance
+    //! ILUT drop tolerance
     double m_drop_tol = 0;
-
-    //! Vector of triples representing the jacobian used in preconditioning
-    std::vector<Eigen::Triplet<double>> m_jac_trips;
-
-    //! Storage of appropriately sized identity matrix for making the preconditioner
-    Eigen::SparseMatrix<double> m_identity;
-
-    //! Container that is the sparse preconditioner
-    Eigen::SparseMatrix<double> m_precon_matrix;
 
     //! Solver used in solving the linear system
     Eigen::IncompleteLUT<double> m_solver;

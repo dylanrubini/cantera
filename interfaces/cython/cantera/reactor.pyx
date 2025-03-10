@@ -2,50 +2,38 @@
 # at https://cantera.org/license.txt for license and copyright information.
 
 import warnings
-from collections import defaultdict as _defaultdict
 import numbers as _numbers
 from cython.operator cimport dereference as deref
 
 from .thermo cimport *
-from ._utils cimport pystr, stringify, comp_map, dict_to_anymap, anymap_to_dict
+from ._utils cimport pystr, stringify, comp_map, py_to_anymap, anymap_to_py
 from ._utils import *
 from .delegator cimport *
-
-_reactor_counts = _defaultdict(int)
-
-# Need a pure-python class to store weakrefs to
-class _WeakrefProxy:
-    pass
+from .drawnetwork import *
 
 cdef class ReactorBase:
     """
     Common base class for reactors and reservoirs.
     """
-    reactor_type = "None"
-    def __cinit__(self, *args, **kwargs):
-        self.rbase = newReactor(stringify(self.reactor_type))
+    reactor_type = "none"
+    def __cinit__(self, _SolutionBase contents, *, name="(none)", **kwargs):
+        self._reactor = newReactor(stringify(self.reactor_type),
+                                   contents._base, stringify(name))
+        self.rbase = self._reactor.get()
 
-    def __init__(self, ThermoPhase contents=None, name=None, *, volume=None):
-        self._weakref_proxy = _WeakrefProxy()
+    def __init__(self, _SolutionBase contents=None, *,
+                 name="(none)", volume=None, node_attr=None):
         self._inlets = []
         self._outlets = []
         self._walls = []
         self._surfaces = []
-        if isinstance(contents, ThermoPhase):
-            self.insert(contents)
-
-        if name is not None:
-            self.name = name
-        else:
-            _reactor_counts[self.reactor_type] += 1
-            n = _reactor_counts[self.reactor_type]
-            self.name = '{0}_{1}'.format(self.reactor_type, n)
+        if isinstance(contents, _SolutionBase):
+            self.insert(contents)  # leave insert for the time being
 
         if volume is not None:
             self.volume = volume
 
-    def __dealloc__(self):
-        del self.rbase
+        self.node_attr = node_attr or {}
 
     def insert(self, _SolutionBase solution):
         """
@@ -53,8 +41,7 @@ cdef class ReactorBase:
         properties and kinetic rates for this reactor.
         """
         self._thermo = solution
-        self._thermo._references[self._weakref_proxy] = True
-        self.rbase.setThermoMgr(deref(solution.thermo))
+        self.rbase.setSolution(solution._base)
 
     property type:
         """The type of the reactor."""
@@ -65,7 +52,6 @@ cdef class ReactorBase:
         """The name of the reactor."""
         def __get__(self):
             return pystr(self.rbase.name())
-
         def __set__(self, name):
             self.rbase.setName(stringify(name))
 
@@ -153,6 +139,41 @@ cdef class ReactorBase:
         """
         self._walls.append(wall)
 
+    def draw(self, graph=None, *, graph_attr=None, node_attr=None, print_state=False,
+             species=None, species_units="percent"):
+        """
+        Draw as ``graphviz`` ``dot`` node. The node is added to an existing ``graph`` if
+        provided. Optionally include current reactor state in the node.
+
+        :param graph:
+            ``graphviz.graphs.BaseGraph`` object to which the reactor is added.
+            If not provided, a new ``DiGraph`` is created. Defaults to ``None``.
+        :param graph_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the general appearance of the drawn network.
+            See https://graphviz.org/docs/graph/ for a list of all usable attributes.
+        :param node_attr:
+            Attributes to be passed to the ``node`` method invoked to draw the reactor.
+            See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+        :param print_state:
+            Whether state information of the reactor is printed into the node.
+            Defaults to ``False``.
+        :param species:
+            If ``print_state`` is ``True``, define how species are to be printed.
+            Options are ``'X'`` and ``'Y'`` for mole and mass fractions of all species,
+            respectively, or an iterable that contains the desired species names as
+            strings. Defaults to ``None``.
+        :param species_units:
+            Defines the units the species are displayed in as either ``"percent"`` or
+            ``"ppm"``. Defaults to ``"percent"``.
+        :return:
+            ``graphviz.graphs.BaseGraph`` object with reactor
+
+        .. versionadded:: 3.1
+        """
+        return draw_reactor(self, graph, graph_attr, node_attr, print_state, species,
+                            species_units)
+
     def __reduce__(self):
         raise NotImplementedError('Reactor object is not picklable')
 
@@ -172,30 +193,35 @@ cdef class Reactor(ReactorBase):
     def __cinit__(self, *args, **kwargs):
         self.reactor = <CxxReactor*>(self.rbase)
 
-    def __init__(self, contents=None, *, name=None, energy='on', **kwargs):
+    def __init__(self, contents, *,
+                 name="(none)", energy='on', group_name="", **kwargs):
         """
         :param contents:
-            Reactor contents. If not specified, the reactor is initially empty.
-            In this case, call `insert` to specify the contents.
+            A `Solution` object representing the Reactor contents
         :param name:
-            Used only to identify this reactor in output. If not specified,
-            defaults to ``'Reactor_n'``, where *n* is an integer assigned in
-            the order `Reactor` objects are created.
+            Name string. If not specified, the name initially defaults to ``'(none)'``
+            and changes to ``'<reactor_type>_n'`` when `Reactor` objects are installed
+            within a `ReactorNet`. For the latter, ``<reactor_type>`` is the type of
+            the reactor and *n* is an integer assigned in the order reactors are
+            installed.
         :param energy:
             Set to ``'on'`` or ``'off'``. If set to ``'off'``, the energy
             equation is not solved, and the temperature is held at its
-            initial value..
+            initial value.
+        :param node_attr:
+            Attributes to be passed to the ``node`` method invoked to draw this reactor.
+            See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+        :param group_name:
+            Group reactors of the same ``group_name`` when drawn using graphviz.
+
+        .. versionadded:: 3.1
+           Added the ``node_attr`` and ``group_name`` parameters.
 
         Some examples showing how to create :class:`Reactor` objects are
         shown below.
 
         >>> gas = Solution('gri30.yaml')
         >>> r1 = Reactor(gas)
-
-        This is equivalent to:
-
-        >>> r1 = Reactor()
-        >>> r1.insert(gas)
 
         Arguments may be specified using keywords in any order:
 
@@ -204,12 +230,14 @@ cdef class Reactor(ReactorBase):
         >>> r3 = Reactor(name='adiabatic_reactor', contents=gas)
 
         """
-        super().__init__(contents, name, **kwargs)
+        super().__init__(contents, name=name, **kwargs)
 
         if energy == 'off':
             self.energy_enabled = False
         elif energy != 'on':
             raise ValueError("'energy' must be either 'on' or 'off'")
+
+        self.group_name = group_name
 
     def insert(self, _SolutionBase solution):
         """
@@ -218,8 +246,6 @@ cdef class Reactor(ReactorBase):
         """
         ReactorBase.insert(self, solution)
         self._kinetics = solution
-        if solution.kinetics != NULL:
-            self.reactor.setKineticsMgr(deref(solution.kinetics))
 
     property kinetics:
         """
@@ -312,16 +338,16 @@ cdef class Reactor(ReactorBase):
 
         `Reactor` or `IdealGasReactor`:
 
-          - 0  - mass
-          - 1  - volume
-          - 2  - internal energy or temperature
-          - 3+ - mass fractions of the species
+        - 0  - mass
+        - 1  - volume
+        - 2  - internal energy or temperature
+        - 3+ - mass fractions of the species
 
         `ConstPressureReactor` or `IdealGasConstPressureReactor`:
 
-          - 0  - mass
-          - 1  - enthalpy or temperature
-          - 2+ - mass fractions of the species
+        - 0  - mass
+        - 1  - enthalpy or temperature
+        - 2+ - mass fractions of the species
 
         You can use the function `component_index` to determine the location of
         a specific component from its name, or `component_name` to determine the
@@ -337,12 +363,16 @@ cdef class Reactor(ReactorBase):
         """
         Get the local, reactor-specific Jacobian or an approximation thereof
 
-        **Warning**: Depending on the particular implementation, this may return an
-        approximate Jacobian intended only for use in forming a preconditioner for
-        iterative solvers, excluding terms that would generate a fully-dense Jacobian.
+        .. warning::
 
-        **Warning**: This method is an experimental part of the Cantera API and may be
-        changed or removed without notice.
+            Depending on the particular implementation, this may return an approximate
+            Jacobian intended only for use in forming a preconditioner for iterative
+            solvers, excluding terms that would generate a fully-dense Jacobian.
+
+        .. warning::
+
+            This method is an experimental part of the Cantera API and may be
+            changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.reactor.jacobian(), self.n_vars, self.n_vars)
@@ -351,8 +381,10 @@ cdef class Reactor(ReactorBase):
         """
         Get the reactor-specific Jacobian, calculated using a finite difference method.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.reactor.finiteDifferenceJacobian(),
@@ -439,25 +471,91 @@ cdef class IdealGasConstPressureMoleReactor(Reactor):
 cdef class FlowReactor(Reactor):
     """
     A steady-state plug flow reactor with constant cross sectional area.
-    Time integration follows a fluid element along the length of the reactor.
+    Integration follows a fluid element along the length of the reactor.
     The reactor is assumed to be frictionless and adiabatic.
     """
     reactor_type = "FlowReactor"
 
     property mass_flow_rate:
-        """ Mass flow rate per unit area [kg/m^2*s] """
+        """ Mass flow rate [kg/s] """
         def __set__(self, double value):
             (<CxxFlowReactor*>self.reactor).setMassFlowRate(value)
 
-    property speed:
-        """ Speed [m/s] of the flow in the reactor at the current position """
-        def __get__(self):
-            return (<CxxFlowReactor*>self.reactor).speed()
+    @property
+    def area(self):
+        """
+        Get/set the area of the reactor [m^2].
 
-    property distance:
-        """ The distance of the fluid element from the inlet of the reactor."""
-        def __get__(self):
-            return (<CxxFlowReactor*>self.reactor).distance()
+        When the area is changed, the flow speed is scaled to keep the total mass flow
+        rate constant.
+        """
+        return (<CxxFlowReactor*>self.reactor).area()
+
+    @area.setter
+    def area(self, area):
+        (<CxxFlowReactor*>self.reactor).setArea(area)
+
+    @property
+    def inlet_surface_atol(self):
+        """
+        Get/Set the steady-state tolerances used to determine the initial surface
+        species coverages.
+        """
+        return (<CxxFlowReactor*>self.reactor).inletSurfaceAtol()
+
+    @inlet_surface_atol.setter
+    def inlet_surface_atol(self, atol):
+        (<CxxFlowReactor*>self.reactor).setInletSurfaceAtol(atol)
+
+    @property
+    def inlet_surface_rtol(self):
+        """
+        Get/Set the steady-state tolerances used to determine the initial surface
+        species coverages.
+        """
+        return (<CxxFlowReactor*>self.reactor).inletSurfaceRtol()
+
+    @inlet_surface_rtol.setter
+    def inlet_surface_rtol(self, rtol):
+        (<CxxFlowReactor*>self.reactor).setInletSurfaceRtol(rtol)
+
+    @property
+    def inlet_surface_max_steps(self):
+        """
+        Get/Set the maximum number of integrator steps used to determine the initial
+        surface species coverages.
+        """
+        return (<CxxFlowReactor*>self.reactor).inletSurfaceMaxSteps()
+
+    @inlet_surface_max_steps.setter
+    def inlet_surface_max_steps(self, nsteps):
+        (<CxxFlowReactor*>self.reactor).setInletSurfaceMaxSteps(nsteps)
+
+    @property
+    def inlet_surface_max_error_failures(self):
+        """
+        Get/Set the maximum number of integrator error failures allowed when determining
+        the initial surface species coverages.
+        """
+        return (<CxxFlowReactor*>self.reactor).inletSurfaceMaxErrorFailures()
+
+    @inlet_surface_max_error_failures.setter
+    def inlet_surface_max_error_failures(self, nsteps):
+        (<CxxFlowReactor*>self.reactor).setInletSurfaceMaxErrorFailures(nsteps)
+
+    @property
+    def surface_area_to_volume_ratio(self):
+        """ Get/Set the surface area to volume ratio of the reactor [m^-1] """
+        return (<CxxFlowReactor*>self.reactor).surfaceAreaToVolumeRatio()
+
+    @surface_area_to_volume_ratio.setter
+    def surface_area_to_volume_ratio(self, sa_to_vol):
+        (<CxxFlowReactor*>self.reactor).setSurfaceAreaToVolumeRatio(sa_to_vol)
+
+    @property
+    def speed(self):
+        """ Speed [m/s] of the flow in the reactor at the current position """
+        return (<CxxFlowReactor*>self.reactor).speed()
 
 
 cdef class ExtensibleReactor(Reactor):
@@ -519,8 +617,8 @@ cdef class ExtensibleReactor(Reactor):
         `n_vars`.
 
     ``eval_walls(self, t : double) -> None``
-        Responsible for calculating the net rate of volume change `vdot`
-        and the net rate of heat transfer `qdot` caused by walls connected
+        Responsible for calculating the net rate of volume change `expansion_rate`
+        and the net rate of heat transfer `heat_rate` caused by walls connected
         to this reactor.
 
     ``eval_surfaces(LHS : double[:], RHS : double[:], sdot : double[:]) -> None``
@@ -575,23 +673,31 @@ cdef class ExtensibleReactor(Reactor):
         def __set__(self, n):
             self.accessor.setNEq(n)
 
-    property vdot:
+    @property
+    def expansion_rate(self):
         """
         Get/Set the net rate of volume change (for example, from moving walls) [m^3/s]
-        """
-        def __get__(self):
-            return self.accessor.vdot()
-        def __set__(self, vdot):
-            self.accessor.setVdot(vdot)
 
-    property qdot:
+        .. versionadded:: 3.0
+        """
+        return self.accessor.expansionRate()
+
+    @expansion_rate.setter
+    def expansion_rate(self, vdot):
+        self.accessor.setExpansionRate(vdot)
+
+    @property
+    def heat_rate(self):
         """
         Get/Set the net heat transfer rate (for example, through walls) [W]
+
+        .. versionadded:: 3.0
         """
-        def __get__(self):
-            return self.accessor.qdot()
-        def __set__(self, qdot):
-            self.accessor.setQdot(qdot)
+        return self.accessor.heatRate()
+
+    @heat_rate.setter
+    def heat_rate(self, qdot):
+        self.accessor.setHeatRate(qdot)
 
     def restore_thermo_state(self):
         """
@@ -676,6 +782,11 @@ cdef class ReactorSurface:
     """
     Represents a surface in contact with the contents of a reactor.
 
+    :param name:
+        Name string. If not specified, the name initially defaults to ``'(none)'`` and
+        changes to ``'ReactorSurface_n'`` when when associated `Reactor` objects are
+        installed within a `ReactorNet`. For the latter, *n* is an integer assigned in
+        the order reactor surfaces are detected.
     :param kin:
         The `Kinetics` or `Interface` object representing reactions on this
         surface.
@@ -683,20 +794,28 @@ cdef class ReactorSurface:
         The `Reactor` into which this surface should be installed.
     :param A:
         The area of the reacting surface [m^2]
+    :param node_attr:
+        Attributes to be passed to the ``node`` method invoked to draw this surface.
+        See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+
+    .. versionadded:: 3.1
+       Added the ``node_attr`` parameter.
     """
-    def __cinit__(self):
-        self.surface = new CxxReactorSurface()
+    def __cinit__(self, *args, name="(none)", **kwargs):
+        self.surface = new CxxReactorSurface(stringify(name))
 
     def __dealloc__(self):
         del self.surface
 
-    def __init__(self, kin=None, Reactor r=None, *, A=None):
+    def __init__(self, kin=None, Reactor r=None, *,
+                 name="(none)", A=None, node_attr=None):
         if kin is not None:
             self.kinetics = kin
         if r is not None:
             self.install(r)
         if A is not None:
             self.area = A
+        self.node_attr = node_attr or {'shape': 'underline'}
 
     def install(self, Reactor r):
         """
@@ -704,6 +823,19 @@ cdef class ReactorSurface:
         """
         r._surfaces.append(self)
         r.reactor.addSurface(self.surface)
+        self._reactor = r
+
+    property type:
+        """The type of the reactor surface."""
+        def __get__(self):
+            return pystr(self.surface.type())
+
+    property name:
+        """The name of the reactor surface."""
+        def __get__(self):
+            return pystr(self.surface.name())
+        def __set__(self, name):
+            self.surface.setName(stringify(name))
 
     property area:
         """ Area on which reactions can occur [m^2] """
@@ -747,6 +879,57 @@ cdef class ReactorSurface:
                     np.ascontiguousarray(coverages, dtype=np.double)
             self.surface.setCoverages(&data[0])
 
+    @property
+    def reactor(self):
+        """
+        Return the `Reactor` object the surface is connected to.
+
+        .. versionadded:: 3.1
+        """
+        return self._reactor
+
+    def draw(self, graph=None, *, graph_attr=None, node_attr=None,
+             surface_edge_attr=None,  print_state=False, species=None,
+             species_units="percent"):
+        """
+        Draw the surface as a ``graphviz`` ``dot`` node connected to its reactor.
+        The node is added to an existing ``graph`` if provided.
+        Optionally include current reactor state in the reactor node.
+
+        :param graph:
+            ``graphviz.graphs.BaseGraph`` object to which the reactor is added.
+            If not provided, a new ``DiGraph`` is created. Defaults to ``None``.
+        :param graph_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the general appearance of the drawn network.
+            See https://graphviz.org/docs/graph/ for a list of all usable attributes.
+        :param node_attr:
+            Attributes to be passed to the ``node`` method invoked to draw the reactor.
+            See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+        :param surface_edge_attr:
+            Attributes to be passed to the ``edge`` method invoked to draw the
+            connection between the surface and its reactor.
+            See https://graphviz.org/docs/edges/ for a list of all usable attributes.
+        :param print_state:
+            Whether state information of the reactor is printed into its node.
+            Defaults to ``False``
+        :param species:
+            If ``print_state`` is ``True``, define how species are to be printed.
+            Options are ``'X'`` and ``'Y'`` for mole and mass fractions of all species,
+            respectively, or an iterable that contains the desired species names as
+            strings. Defaults to ``None``.
+        :param species_units:
+            Defines the units the species are displayed in as either ``"percent"`` or
+            ``"ppm"``. Defaults to ``"percent"``.
+        :return:
+            ``graphviz.graphs.BaseGraph`` object with surface and connected
+            reactor.
+
+        .. versionadded:: 3.1
+        """
+        return draw_surface(self, graph, graph_attr, node_attr, surface_edge_attr,
+                            print_state, species, species_units)
+
     def add_sensitivity_reaction(self, int m):
         """
         Specifies that the sensitivity of the state variables with respect to
@@ -760,20 +943,24 @@ cdef class WallBase:
     """
     Common base class for walls.
     """
-    wall_type = "None"
-    def __cinit__(self, *args, **kwargs):
-        self.wall = newWall(stringify(self.wall_type))
+    wall_type = "none"
+    def __cinit__(self, *args, name="(none)", **kwargs):
+        self._wall = newWall(stringify(self.wall_type), stringify(name))
+        self.wall = self._wall.get()
 
-    def __init__(self, left, right, *, name=None, A=None, K=None, U=None,
-                 Q=None, velocity=None):
+    def __init__(self, left, right, *, name="(none)", A=None, K=None, U=None,
+                 Q=None, velocity=None, edge_attr=None):
         """
         :param left:
             Reactor or reservoir on the left. Required.
         :param right:
             Reactor or reservoir on the right. Required.
         :param name:
-            Name string. If omitted, the name is ``'Wall_n'``, where ``'n'``
-            is an integer assigned in the order walls are created.
+            Name string. If not specified, the name initially defaults to ``'(none)'``
+            and changes to ``'<wall_type>_n'`` when when associated `Reactor` objects
+            are installed within a `ReactorNet`. For the latter, ``<wall_type>`` is
+            the type of the wall and *n* is an integer assigned in the order walls are
+            detected.
         :param A:
             Wall area [m^2]. Defaults to 1.0 m^2.
         :param K:
@@ -787,17 +974,18 @@ cdef class WallBase:
         :param velocity:
             Wall velocity function :math:`v_0(t)` [m/s].
             Default: :math:`v_0(t) = 0.0`.
+        :param edge_attr:
+            Attributes like ``style`` when drawn as a connecting edge using
+            graphviz's dot language. Default is ``{}``.
+
+        .. versionadded:: 3.1
+           Added the ``edge_attr`` parameter.
+
         """
         self._velocity_func = None
         self._heat_flux_func = None
 
         self._install(left, right)
-        if name is not None:
-            self.name = name
-        else:
-            _reactor_counts['Wall'] += 1
-            n = _reactor_counts['Wall']
-            self.name = 'Wall_{0}'.format(n)
 
         if A is not None:
             self.area = A
@@ -806,9 +994,10 @@ cdef class WallBase:
         if U is not None:
             self.heat_transfer_coeff = U
         if Q is not None:
-            self.set_heat_flux(Q)
+            self.heat_flux = Q
         if velocity is not None:
-            self.set_velocity(velocity)
+            self.velocity = velocity
+        self.edge_attr = edge_attr or {}
 
     def _install(self, ReactorBase left, ReactorBase right):
         """
@@ -827,6 +1016,13 @@ cdef class WallBase:
         def __get__(self):
             return pystr(self.wall.type())
 
+    property name:
+        """The name of the wall."""
+        def __get__(self):
+            return pystr(self.wall.name())
+        def __set__(self, name):
+            self.wall.setName(stringify(name))
+
     property area:
         """ The wall area [m^2]. """
         def __get__(self):
@@ -834,21 +1030,85 @@ cdef class WallBase:
         def __set__(self, double value):
             self.wall.setArea(value)
 
-    def vdot(self, double t):
+    @property
+    def left_reactor(self):
         """
-        The rate of volumetric change [m^3/s] associated with the wall
-        at time ``t``. A positive value corresponds to the left-hand reactor
-        volume increasing, and the right-hand reactor volume decreasing.
-        """
-        return self.wall.vdot(t)
+        Return the `Reactor` or `Reservoir` object left of the wall.
 
-    def qdot(self, double t):
+        .. versionadded:: 3.1
         """
-        Total heat flux [W] through the wall at time ``t``. A positive value
-        corresponds to heat flowing from the left-hand reactor to the
-        right-hand one.
+        return self._left_reactor
+
+    @property
+    def right_reactor(self):
         """
-        return self.wall.Q(t)
+        Return the `Reactor` or `Reservoir` object right of the wall.
+
+        .. versionadded:: 3.1
+        """
+        return self._right_reactor
+
+    @property
+    def expansion_rate(self):
+        """
+        Get the rate of volumetric change [m^3/s] associated with the wall at the
+        current reactor network time. A positive value corresponds to the left-hand
+        reactor volume increasing, and the right-hand reactor volume decreasing.
+
+        .. versionadded:: 3.0
+        """
+        return self.wall.expansionRate()
+
+    @property
+    def heat_rate(self):
+        """
+        Get the total heat flux [W] through the wall  at the current reactor network
+        time. A positive value corresponds to heat flowing from the left-hand reactor
+        to the right-hand one.
+
+        .. versionadded:: 3.0
+        """
+        return self.wall.heatRate()
+
+
+    def draw(self, graph=None, *, graph_attr=None, node_attr=None, edge_attr=None,
+             moving_wall_edge_attr=None, show_wall_velocity=True):
+        """
+        Draw as connection between left and right reactor or reservoir using
+        ``graphviz``.
+
+        :param graph:
+            ``graphviz.graphs.BaseGraph`` object to which the connection is added.
+            If not provided, a new ``DiGraph`` is created. Defaults to ``None``
+        :param graph_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the general appearance of the drawn network.
+            Has no effect if existing ``graph`` is provided.
+            See https://graphviz.org/docs/graph/ for a list of all usable attributes.
+        :param node_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the default appearance of any ``node`` (reactors, reservoirs).
+            Has no effect if existing ``graph`` is provided.
+            See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+        :param edge_attr:
+            Attributes to be passed to the ``edge`` method invoked to draw this wall
+            connection.
+            Default is ``{"color": "red", "style": "dashed"}``.
+            See https://graphviz.org/docs/edges/ for a list of all usable attributes.
+        :param moving_wall_edge_attr:
+            Same as ``edge_attr`` but only applied to edges representing wall movement.
+            Default is ``{"arrowtail": "icurveteecurve", "dir": "both",
+            "style": "dotted", "arrowhead": "icurveteecurve"}``.
+        :param show_wall_velocity:
+            If ``True``, wall movement will be indicated by additional arrows with the
+            corresponding wall velocity as a label.
+        :return:
+            A ``graphviz.graphs.BaseGraph`` object depicting the connection.
+
+        .. versionadded:: 3.1
+        """
+        return draw_walls([self], graph, graph_attr, node_attr, edge_attr,
+                                moving_wall_edge_attr, show_wall_velocity)
 
 
 cdef class Wall(WallBase):
@@ -904,11 +1164,18 @@ cdef class Wall(WallBase):
         def __set__(self, double value):
             (<CxxWall*>(self.wall)).setEmissivity(value)
 
-    def set_velocity(self, v):
+    @property
+    def velocity(self):
         """
-        The wall velocity [m/s]. May be either a constant or an arbitrary
+        The wall velocity [m/s]. May be either set to a constant or an arbitrary
         function of time. See `Func1`.
+
+        .. versionadded:: 3.0
         """
+        return (<CxxWall*>(self.wall)).velocity()
+
+    @velocity.setter
+    def velocity(self, v):
         cdef Func1 f
         if isinstance(v, Func1):
             f = v
@@ -918,11 +1185,18 @@ cdef class Wall(WallBase):
         self._velocity_func = f
         (<CxxWall*>(self.wall)).setVelocity(f.func)
 
-    def set_heat_flux(self, q):
+    @property
+    def heat_flux(self):
         """
-        Heat flux [W/m^2] across the wall. May be either a constant or
+        Heat flux [W/m^2] across the wall. May be either set to a constant or
         an arbitrary function of time. See `Func1`.
+
+        .. versionadded:: 3.0
         """
+        return (<CxxWall*>(self.wall)).heatFlux()
+
+    @heat_flux.setter
+    def heat_flux(self, q):
         cdef Func1 f
         if isinstance(q, Func1):
             f = q
@@ -944,30 +1218,28 @@ cdef class FlowDevice:
     across a FlowDevice, and the pressure difference equals the difference in
     pressure between the upstream and downstream reactors.
     """
-    flowdevice_type = "None"
-    def __cinit__(self, *args, **kwargs):
-        self.dev = newFlowDevice(stringify(self.flowdevice_type))
+    flowdevice_type = "none"
+    def __cinit__(self, *args, name="(none)", **kwargs):
+        self._dev = newFlowDevice(stringify(self.flowdevice_type), stringify(name))
+        self.dev = self._dev.get()
 
-    def __init__(self, upstream, downstream, *, name=None):
+    def __init__(self, upstream, downstream, *, name="(none)", edge_attr=None):
         assert self.dev != NULL
         self._rate_func = None
-
-        if name is not None:
-            self.name = name
-        else:
-            _reactor_counts[self.__class__.__name__] += 1
-            n = _reactor_counts[self.__class__.__name__]
-            self.name = '{0}_{1}'.format(self.__class__.__name__, n)
-
+        self.edge_attr = edge_attr or {}
         self._install(upstream, downstream)
-
-    def __dealloc__(self):
-        del self.dev
 
     property type:
         """The type of the flow device."""
         def __get__(self):
             return pystr(self.dev.type())
+
+    property name:
+        """The name of the flow device."""
+        def __get__(self):
+            return pystr(self.dev.name())
+        def __set__(self, name):
+            self.dev.setName(stringify(name))
 
     def _install(self, ReactorBase upstream, ReactorBase downstream):
         """
@@ -981,6 +1253,24 @@ cdef class FlowDevice:
         self._upstream = upstream
         self._downstream = downstream
 
+    @property
+    def upstream(self):
+        """
+        Return the `Reactor` or `Reservoir` object upstream of the flow device.
+
+        .. versionadded:: 3.1
+        """
+        return self._upstream
+
+    @property
+    def downstream(self):
+        """
+        Return the `Reactor` or `Reservoir` object downstream of the flow device.
+
+        .. versionadded:: 3.1
+        """
+        return self._downstream
+
     property mass_flow_rate:
         """
         Get the mass flow rate [kg/s] through this device at the current reactor
@@ -989,18 +1279,26 @@ cdef class FlowDevice:
         def __get__(self):
             return self.dev.massFlowRate()
 
-    def set_pressure_function(self, k):
+    @property
+    def pressure_function(self):
         r"""
-        Set the relationship between mass flow rate and the pressure drop across a
-        flow device. The mass flow rate [kg/s] is calculated given the pressure
-        drop [Pa] and a coefficient set by a flow device specific function.
-        The calculation of mass flow rate depends to the flow device.
+        The relationship between mass flow rate and the pressure drop across a flow
+        device. The mass flow rate [kg/s] is calculated given the pressure drop [Pa] and
+        a coefficient set by a flow device specific function. Unless a user-defined
+        pressure function is provided, the function returns the pressure difference
+        across the device. The calculation of mass flow rate depends on the flow device.
 
-        >>> F = FlowDevice(res1, reactor1)
-        >>> F.set_pressure_function(lambda dP: dP**2)
+        >>> f = FlowDevice(res1, reactor1)
+        >>> f.pressure_function = lambda dP: dP**2
 
-        where FlowDevice is either a Valve or PressureController object.
+        where `FlowDevice` is either a `Valve` or `PressureController` object.
+
+        .. versionadded:: 3.0
         """
+        return self.dev.evalPressureFunction()
+
+    @pressure_function.setter
+    def pressure_function(self, k):
         cdef Func1 f
         if isinstance(k, Func1):
             f = k
@@ -1009,17 +1307,25 @@ cdef class FlowDevice:
         self._rate_func = f
         self.dev.setPressureFunction(f.func)
 
-    def set_time_function(self, k):
+    @property
+    def time_function(self):
         r"""
-        Set the time dependence of a flow device. The mass flow rate [kg/s] is
-        calculated for a flow device, and multiplied by a function of time.
-        The calculation of mass flow rate depends to the flow device.
+        The time dependence of a flow device. The mass flow rate [kg/s] is calculated
+        for a Flow device, and multiplied by a function of time, which returns 1.0
+        unless a user-defined function is provided. The calculation of mass flow rate
+        depends on the flow device.
 
-        >>> F = FlowDevice(res1, reactor1)
-        >>> F.set_time_function(lambda t: exp(-10 * (t - 0.5)**2))
+        >>> f = FlowDevice(res1, reactor1)
+        >>> f.time_function = lambda t: exp(-10 * (t - 0.5)**2)
 
-        where FlowDevice is either a Valve or MassFlowController object.
+        where `FlowDevice` is either a `Valve` or `MassFlowController` object.
+
+        .. versionadded:: 3.0
         """
+        return self.dev.evalTimeFunction()
+
+    @time_function.setter
+    def time_function(self, k):
         cdef Func1 g
         if isinstance(k, Func1):
             g = k
@@ -1027,6 +1333,36 @@ cdef class FlowDevice:
             g = Func1(k)
         self._time_func = g
         self.dev.setTimeFunction(g.func)
+
+
+    def draw(self, graph=None, *, graph_attr=None, node_attr=None, edge_attr=None):
+        """
+        Draw as connection between upstream and downstream reactor or reservoir using
+        ``graphviz``.
+
+        :param graph:
+            ``graphviz.graphs.BaseGraph`` object to which the connection is added.
+            If not provided, a new ``DiGraph`` is created. Defaults to ``None``
+        :param graph_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the general appearance of the drawn network.
+            Has no effect if existing ``graph`` is provided.
+            See https://graphviz.org/docs/graph/ for a list of all usable attributes.
+        :param node_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the default appearance of any ``node`` (reactors, reservoirs).
+            Has no effect if existing ``graph`` is provided.
+            See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+        :param edge_attr:
+            Attributes to be passed to the ``edge`` method invoked to draw this flow
+            controller connection.
+            See https://graphviz.org/docs/edges/ for a list of all usable attributes.
+        :return:
+            A ``graphviz.graphs.BaseGraph`` object depicting the connection.
+
+        .. versionadded:: 3.1
+        """
+        return draw_flow_controllers([self], graph, graph_attr, node_attr, edge_attr)
 
 
 cdef class MassFlowController(FlowDevice):
@@ -1039,10 +1375,10 @@ cdef class MassFlowController(FlowDevice):
 
     where :math:`\dot m_0` is a constant value and :math:`g(t)` is a function of
     time. Both :math:`\dot m_0` and :math:`g(t)` can be set individually by
-    the property `mass_flow_coeff` and the method `set_time_function`,
-    respectively. The property `mass_flow_rate` combines the former
-    into a single interface. Note that if :math:`\dot m_0*g(t) < 0`, the mass flow
-    rate will be set to zero, since reversal of the flow direction is not allowed.
+    properties `mass_flow_coeff` and `time_function`, respectively. The property
+    `mass_flow_rate` combines the former into a single interface. Note that if
+    :math:`\dot m_0*g(t) < 0`, the mass flow rate will be set to zero, since
+    reversal of the flow direction is not allowed.
 
     Unlike a real mass flow controller, a MassFlowController object will
     maintain the flow even if the downstream pressure is greater than the
@@ -1053,14 +1389,14 @@ cdef class MassFlowController(FlowDevice):
     """
     flowdevice_type = "MassFlowController"
 
-    def __init__(self, upstream, downstream, *, name=None, mdot=1.):
-        super().__init__(upstream, downstream, name=name)
+    def __init__(self, upstream, downstream, *, name="(none)", mdot=1., **kwargs):
+        super().__init__(upstream, downstream, name=name, **kwargs)
         self.mass_flow_rate = mdot
 
     property mass_flow_coeff:
         r"""Set the mass flow rate [kg/s] through the mass flow controller
         as a constant, which may be modified by a function of time, see
-        `set_time_function`.
+        `time_function`.
 
         >>> mfc = MassFlowController(res1, reactor1)
         >>> mfc.mass_flow_coeff = 1e-4  # Set the flow rate to a constant
@@ -1078,7 +1414,7 @@ cdef class MassFlowController(FlowDevice):
         current value.
 
         Note that depending on the argument type, this method either changes
-        the property `mass_flow_coeff` or calls the `set_time_function` method.
+        the property `mass_flow_coeff` or updates the `time_function` property.
 
         >>> mfc.mass_flow_rate = 0.3
         >>> mfc.mass_flow_rate = lambda t: 2.5 * exp(-10 * (t - 0.5)**2)
@@ -1091,7 +1427,7 @@ cdef class MassFlowController(FlowDevice):
                 (<CxxMassFlowController*>self.dev).setMassFlowRate(m)
             else:
                 self.mass_flow_coeff = 1.
-                self.set_time_function(m)
+                self.time_function = m
 
 
 cdef class Valve(FlowDevice):
@@ -1101,7 +1437,7 @@ cdef class Valve(FlowDevice):
 
     .. math:: \dot m = K_v*(P_1 - P_2)
 
-    where :math:`K_v` is a constant set by the `set_valve_coeff` method.
+    where :math:`K_v` is a constant set using the `valve_coeff` property.
     Note that :math:`P_1` must be greater than :math:`P_2`; otherwise,
     :math:`\dot m = 0`. However, an arbitrary function can also be specified,
     such that
@@ -1110,12 +1446,12 @@ cdef class Valve(FlowDevice):
 
     where :math:`f` is the arbitrary function that multiplies :math:`K_v` given
     a single argument, the pressure differential. Further, a valve opening function
-    :math:`g` may be specified using the method `set_time_function`, such that
+    :math:`g` may be specified using the `time_function` property, such that
 
     .. math:: \dot m = K_v*g(t)*f(P_1 - P_2)
 
     See the documentation for the `valve_coeff` property as well as the
-    `set_pressure_function` and `set_time_function` methods for examples. Note that
+    `pressure_function` and `time_function` properties for examples. Note that
     it is never possible for the flow to reverse and go from the downstream to the
     upstream reactor/reservoir through a line containing a `Valve` object.
 
@@ -1127,21 +1463,21 @@ cdef class Valve(FlowDevice):
     """
     flowdevice_type = "Valve"
 
-    def __init__(self, upstream, downstream, *, name=None, K=1.):
-        super().__init__(upstream, downstream, name=name)
+    def __init__(self, upstream, downstream, *, name="(none)", K=1., **kwargs):
+        super().__init__(upstream, downstream, name=name, **kwargs)
         if isinstance(K, _numbers.Real):
             self.valve_coeff = K
         else:
             self.valve_coeff = 1.
-            self.set_pressure_function(K)
+            self.pressure_function = K
 
     property valve_coeff:
         r"""Set valve coefficient, that is, the proportionality constant between mass
         flow rate and pressure drop [kg/s/Pa].
 
-        >>> V = Valve(res1, reactor1)
-        >>> V.valve_coeff = 1e-4  # Set the value of K to a constant
-        >>> V.valve_coeff  # Get the value of K
+        >>> v = Valve(res1, reactor1)
+        >>> v.valve_coeff = 1e-4  # Set the value of K to a constant
+        >>> v.valve_coeff  # Get the value of K
         """
         def __get__(self):
             return (<CxxValve*>self.dev).getValveCoeff()
@@ -1152,33 +1488,33 @@ cdef class Valve(FlowDevice):
 cdef class PressureController(FlowDevice):
     r"""
     A PressureController is designed to be used in conjunction with another
-    'master' flow controller, typically a `MassFlowController`. The master
+    primary flow controller, typically a `MassFlowController`. The primary
     flow controller is installed on the inlet of the reactor, and the
     corresponding `PressureController` is installed on the outlet of the
-    reactor. The `PressureController` mass flow rate is equal to the master
+    reactor. The `PressureController` mass flow rate is equal to the primary
     mass flow rate, plus a small correction dependent on the pressure
     difference:
 
-    .. math:: \dot m = \dot m_{\rm master} + K_v(P_1 - P_2).
+    .. math:: \dot m = \dot m_{\rm primary} + K_v(P_1 - P_2).
 
     As an alternative, an arbitrary function of pressure differential can be
-    specified using the method `set_pressure_function`, such that
+    specified using the `pressure_function` property, such that
 
-    .. math:: \dot m = \dot m_{\rm master} + K_v*f(P_1 - P_2)
+    .. math:: \dot m = \dot m_{\rm primary} + K_v*f(P_1 - P_2)
 
     where :math:`f` is the arbitrary function of a single argument.
     """
     flowdevice_type = "PressureController"
 
-    def __init__(self, upstream, downstream, *, name=None, master=None, K=1.):
+    def __init__(self, upstream, downstream, *, name="(none)", primary=None, K=1.):
         super().__init__(upstream, downstream, name=name)
-        if master is not None:
-            self.set_master(master)
+        if primary is not None:
+            self.primary = primary
         if isinstance(K, _numbers.Real):
             self.pressure_coeff = K
         else:
             self.pressure_coeff = 1.
-            self.set_pressure_function(K)
+            self.pressure_function = K
 
     property pressure_coeff:
         """
@@ -1190,12 +1526,18 @@ cdef class PressureController(FlowDevice):
         def __set__(self, double value):
             (<CxxPressureController*>self.dev).setPressureCoeff(value)
 
-    def set_master(self, FlowDevice d):
+    @property
+    def primary(self):
         """
-        Set the "master" `FlowDevice` used to compute this device's mass flow
-        rate.
+        Primary `FlowDevice` used to compute this device's mass flow rate.
+
+        .. versionadded:: 3.0
         """
-        (<CxxPressureController*>self.dev).setMaster(d.dev)
+        raise NotImplementedError("PressureController.primary")
+
+    @primary.setter
+    def primary(self, FlowDevice d):
+        (<CxxPressureController*>self.dev).setPrimary(d.dev)
 
 
 cdef class ReactorNet:
@@ -1224,19 +1566,22 @@ cdef class ReactorNet:
 
     def advance(self, double t, pybool apply_limit=True):
         """
-        Advance the state of the reactor network in time from the current time
-        towards time ``t`` in seconds, taking as many integrator time steps as necessary.
-        If ``apply_limit`` is true and an advance limit is specified, the reactor
-        state at the end of the timestep is estimated prior to advancing. If
-        the difference exceed limits, the end time is reduced by half until
-        the projected end state remains within specified limits.
-        Returns the time reached at the end of integration.
+        Advance the state of the reactor network from the current time/distance towards
+        the specified value ``t`` of the independent variable, which depends on the type
+        of reactors included in the network.
+
+        The integrator will take as many steps as necessary to reach ``t``. If
+        ``apply_limit`` is true and an advance limit is specified, the reactor state at
+        the end of the step is estimated prior to advancing. If the difference exceed
+        limits, the end value is reduced by half until the projected end state remains
+        within specified limits. Returns the time/distance reached at the end of
+        integration.
         """
         return self.net.advance(t, apply_limit)
 
     def step(self):
         """
-        Take a single internal time step. The time after taking the step is
+        Take a single internal step. The time/distance after taking the step is
         returned.
         """
         return self.net.step()
@@ -1255,16 +1600,42 @@ cdef class ReactorNet:
         """
         self.net.reinitialize()
 
-    property time:
-        """The current time [s]."""
-        def __get__(self):
-            return self.net.time()
+    @property
+    def reactors(self):
+        """
+        List of all reactors that are part of the reactor network.
 
-    def set_initial_time(self, double t):
+        .. versionadded:: 3.1
         """
-        Set the initial time. Restarts integration from this time using the
-        current state as the initial condition. Default: 0.0 s.
+        return self._reactors
+
+    @property
+    def time(self):
         """
+        The current time [s], for reactor networks that are solved in the time domain.
+        """
+        return self.net.time()
+
+    @property
+    def distance(self):
+        """
+        The current distance[ m] along the length of the reactor network, for reactors
+        that are solved as a function of space.
+        """
+        return self.net.distance()
+
+    @property
+    def initial_time(self):
+        """
+        The initial time of the integrator. When set, integration is restarted from this
+        time using the current state as the initial condition. Default: 0.0 s.
+
+        .. versionadded:: 3.0
+        """
+        return self.net.getInitialTime()
+
+    @initial_time.setter
+    def initial_time(self, double t):
         self.net.setInitialTime(t)
 
     property max_time_step:
@@ -1281,16 +1652,64 @@ cdef class ReactorNet:
 
     property max_err_test_fails:
         """
-        The maximum number of error test failures permitted by the CVODES
-        integrator in a single time step.
+        The maximum number of error test failures permitted by the CVODES integrator
+        in a single step. The default is 10.
         """
         def __set__(self, n):
             self.net.setMaxErrTestFails(n)
 
+    @property
+    def max_nonlinear_iterations(self):
+        """
+        Get/Set the maximum number of nonlinear solver iterations permitted by the
+        SUNDIALS solver in one solve attempt. The default value is 4.
+        """
+        return self.net.integrator().maxNonlinIterations()
+
+    @max_nonlinear_iterations.setter
+    def max_nonlinear_iterations(self, int n):
+        self.net.integrator().setMaxNonlinIterations(n)
+
+    @property
+    def max_nonlinear_convergence_failures(self):
+        """
+        Get/Set the maximum number of nonlinear solver convergence failures permitted in
+        one step of the SUNDIALS integrator. The default value is 10.
+        """
+        return self.net.integrator().maxNonlinConvFailures()
+
+    @max_nonlinear_convergence_failures.setter
+    def max_nonlinear_convergence_failures(self, int n):
+        self.net.integrator().setMaxNonlinConvFailures(n)
+
+    @property
+    def include_algebraic_in_error_test(self):
+        """
+        Get/Set whether to include algebraic variables in the in the local error test.
+        Applicable only to DAE systems. The default is `True`.
+        """
+        return self.net.integrator().algebraicInErrorTest()
+
+    @include_algebraic_in_error_test.setter
+    def include_algebraic_in_error_test(self, pybool yesno):
+        self.net.integrator().includeAlgebraicInErrorTest(yesno)
+
+    @property
+    def max_order(self):
+        """
+        Get/Set the maximum order of the linear multistep method. The default value and
+        maximum is 5.
+        """
+        return self.net.integrator().maxOrder()
+
+    @max_order.setter
+    def max_order(self, int n):
+        self.net.integrator().setMaxOrder(n)
+
     property max_steps:
         """
-        The maximum number of internal integration time-steps that CVODES
-        is allowed to take before reaching the next output time.
+        The maximum number of internal integration steps that CVODES
+        is allowed to take before reaching the next output point.
         """
         def __set__(self, nsteps):
             self.net.setMaxSteps(nsteps)
@@ -1371,7 +1790,7 @@ cdef class ReactorNet:
         string or an integer. See `component_index` and `sensitivities` to
         determine the integer index for the variables and the definition of the
         resulting sensitivity coefficient. If it is not given, ``r`` defaults to
-        the first reactor. Returns an empty array until the first time step is
+        the first reactor. Returns an empty array until the first integration step is
         taken.
         """
         if isinstance(component, int):
@@ -1393,7 +1812,7 @@ cdef class ReactorNet:
         reversible reactions).
 
         The sensitivities are returned in an array with dimensions *(n_vars,
-        n_sensitivity_params)*, unless no timesteps have been taken, in which
+        n_sensitivity_params)*, unless no integration steps have been taken, in which
         case the shape is *(0, n_sensitivity_params)*. The order of the
         variables (that is, rows) is:
 
@@ -1463,7 +1882,8 @@ cdef class ReactorNet:
 
     def get_derivative(self, k):
         """
-        Get the k-th time derivative of the state vector of the reactor network.
+        Get the k-th derivative of the state vector of the reactor network with respect
+        to the independent integrator variable (time/distance).
         """
         if not self.n_vars:
             raise CanteraError('ReactorNet empty or not initialized.')
@@ -1562,11 +1982,11 @@ cdef class ReactorNet:
 
     property preconditioner:
         """Preconditioner associated with integrator"""
-        def __set__(self, PreconditionerBase precon):
+        def __set__(self, SystemJacobian precon):
             # set preconditioner
-            self.net.setPreconditioner(precon.pbase)
+            self.net.setPreconditioner(precon._base)
             # set problem type as default of preconditioner
-            self.linear_solver_type = precon.precon_linear_solver_type
+            self.linear_solver_type = precon.linear_solver_type
 
     property linear_solver_type:
         """
@@ -1574,10 +1994,10 @@ cdef class ReactorNet:
 
             Options for this property include:
 
-              - `"DENSE"`
-              - `"GMRES"`
-              - `"BAND"`
-              - `"DIAG"`
+            - `"DENSE"`
+            - `"GMRES"`
+            - `"BAND"`
+            - `"DIAG"`
 
         """
         def __set__(self, linear_solver_type):
@@ -1592,7 +2012,7 @@ cdef class ReactorNet:
         def __get__(self):
             cdef CxxAnyMap stats
             stats = self.net.solverStats()
-            return anymap_to_dict(stats)
+            return anymap_to_py(stats)
 
     property derivative_settings:
         """
@@ -1600,4 +2020,63 @@ cdef class ReactorNet:
         See also `Kinetics.derivative_settings`.
         """
         def __set__(self, settings):
-            self.net.setDerivativeSettings(dict_to_anymap(settings))
+            self.net.setDerivativeSettings(py_to_anymap(settings))
+
+    def draw(self, *, graph_attr=None, node_attr=None, edge_attr=None,
+             heat_flow_attr=None, mass_flow_attr=None, moving_wall_edge_attr=None,
+             surface_edge_attr=None, show_wall_velocity=True, print_state=False,
+             species=None, species_units="percent"):
+        """
+        Draw as ``graphviz.graphs.DiGraph``. Connecting flow controllers and
+        walls are depicted as arrows.
+
+        :param graph_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the general appearance of the drawn network.
+            See https://graphviz.org/docs/graph/ for a list of all usable attributes.
+        :param node_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the default appearance of any ``node`` (reactors, reservoirs).
+            ``node_attr`` defined in the reactor object itself have priority.
+            See https://graphviz.org/docs/nodes/ for a list of all usable attributes.
+        :param edge_attr:
+            Attributes to be passed to the ``graphviz.Digraph`` function that control
+            the default appearance of any ``edge`` (flow controllers, walls).
+            ``edge_attr`` defined in the connection objects (subclasses of `FlowDevice`
+            or walls) themselves have priority.
+            See https://graphviz.org/docs/edges/ for a list of all usable attributes.
+        :param heat_flow_attr:
+            Same as ``edge_attr`` but only applied to edges representing walls.
+            Default is ``{"color": "red", "style": "dashed"}``.
+        :param mass_flow_attr:
+            Same as ``edge_attr`` but only applied to edges representing `FlowDevice`
+            objects.
+        :param moving_wall_edge_attr:
+            Same as ``edge_attr`` but only applied to edges representing wall movement.
+        :param surface_edge_attr:
+            Same as ``edge_attr`` but only applied to edges representing connections
+            between `ReactorSurface` objects and reactors.
+            Default is ``{"style": "dotted", "arrowhead": "none"}``.
+        :param show_wall_velocity:
+            If ``True``, wall movement will be indicated by additional arrows with the
+            corresponding wall velocity as a label.
+        :param print_state:
+            Whether state information of the reactors is printed into each node.
+            Defaults to ``False``.
+        :param species:
+            If ``print_state`` is ``True``, define how species are to be printed.
+            Options are ``'X'`` and ``'Y'`` for mole and mass fractions of all species,
+            respectively, or an iterable that contains the desired species names as
+            strings. Defaults to ``None``.
+        :param species_units:
+            Defines the units the species are displayed in as either ``"percent"`` or
+            ``"ppm"``. Defaults to ``"percent"``.
+        :return:
+            ``graphviz.graphs.BaseGraph`` object with reactor net.
+
+        .. versionadded:: 3.1
+        """
+        return draw_reactor_net(self, graph_attr, node_attr, edge_attr,
+                                heat_flow_attr, mass_flow_attr, moving_wall_edge_attr,
+                                surface_edge_attr, show_wall_velocity, print_state,
+                                species, species_units)

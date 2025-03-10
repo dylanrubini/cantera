@@ -1,11 +1,13 @@
-c     Isentropic Flow
+c     Isentropic flow
+c     ===============
 c
-c     Calculated Mach number vs. area for an isentropic flow. Relies on the
-c     wrapper functions defined in demo_ftnlib.cpp to call the Cantera C++
-c     interface. See also the Python version of this problem in the Python
-c     examples.
+c     Calculated Mach number vs. area for an isentropic flow. Relies on
+c     the wrapper functions defined in :doc:`demo_ftnlib.cpp
+c     <demo_ftnlib>` to call the Cantera C++ interface.
+c     See also the Python version of this problem in
+c     :doc:`isentropic.py <../python/thermo/isentropic>`.
 c
-c     Keywords: compressible flow
+c     .. tags:: Fortran 77, compressible flow
 
 c     This file is part of Cantera. See License.txt in the top-level directory or
 c     at https://cantera.org/license.txt for license and copyright information.
@@ -16,7 +18,7 @@ c     at https://cantera.org/license.txt for license and copyright information.
       double precision a(NPTS), dmach(NPTS), t(NPTS),
      $     ratio(NPTS)
 
-      call newIdealGasMix('h2o2.yaml','ohmech','')
+      call newIdealGasMix('h2o2.yaml','ohmech','none')
       temp = 1200.d0
       pres = 10.d0*oneatm
       call setState_TPX_String(temp, pres,'H2:1, N2:0.1')

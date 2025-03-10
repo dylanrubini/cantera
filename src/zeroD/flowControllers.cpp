@@ -10,9 +10,6 @@
 namespace Cantera
 {
 
-MassFlowController::MassFlowController() : FlowDevice() {
-}
-
 void MassFlowController::setMassFlowRate(double mdot)
 {
     if (m_tfunc) {
@@ -34,9 +31,6 @@ void MassFlowController::updateMassFlowRate(double time)
     m_mdot = std::max(mdot, 0.0);
 }
 
-PressureController::PressureController() : FlowDevice(), m_master(0) {
-}
-
 void PressureController::updateMassFlowRate(double time)
 {
     if (!ready()) {
@@ -50,12 +44,9 @@ void PressureController::updateMassFlowRate(double time)
     } else {
         mdot *= delta_P;
     }
-    m_master->updateMassFlowRate(time);
-    mdot += m_master->massFlowRate();
+    m_primary->updateMassFlowRate(time);
+    mdot += m_primary->massFlowRate();
     m_mdot = std::max(mdot, 0.0);
-}
-
-Valve::Valve() : FlowDevice() {
 }
 
 void Valve::updateMassFlowRate(double time)

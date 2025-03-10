@@ -1,4 +1,7 @@
 """
+Extracting a sub-mechanism
+==========================
+
 An example demonstrating how to use Species and Reaction objects to
 programmatically extract a reaction submechanism. In this example, the CO/H2
 oxidation reactions are extracted from the GRI 3.0 mechanism.
@@ -8,7 +11,8 @@ mechanism and the submechanism, which demonstrates that the submechanism
 contains all of the important species and reactions.
 
 Requires: cantera >= 2.6.0, matplotlib >= 2.0
-Keywords: kinetics, combustion, 1D flow, editing mechanisms, plotting
+
+.. tags:: Python, kinetics, combustion, 1D flow, editing mechanisms, plotting
 """
 
 from timeit import default_timer
@@ -19,7 +23,8 @@ input_file = 'gri30.yaml'
 all_species = ct.Species.list_from_file(input_file)
 species = []
 
-# Filter species
+# %%
+# Filter species.
 for S in all_species:
     comp = S.composition
     if 'C' in comp and 'H' in comp:
@@ -37,7 +42,8 @@ for S in all_species:
 species_names = {S.name for S in species}
 print('Species: {0}'.format(', '.join(S.name for S in species)))
 
-# Filter reactions, keeping only those that only involve the selected species
+# %%
+# Filter reactions, keeping only those that only involve the selected species.
 ref_phase = ct.Solution(thermo='ideal-gas', kinetics='gas', species=all_species)
 all_reactions = ct.Reaction.list_from_file(input_file, ref_phase)
 reactions = []
@@ -56,13 +62,17 @@ print('\n')
 
 gas1 = ct.Solution(input_file)
 gas2 = ct.Solution(name="gri30-CO-H2-submech",
-                   thermo="ideal-gas", kinetics="gas", transport_model="Mix",
+                   thermo="ideal-gas", kinetics="gas",
+                   transport_model="mixture-averaged",
                    species=species, reactions=reactions)
 
-# Save the resulting mechanism for later use
+# %%
+# Save the resulting mechanism for later use.
 gas2.update_user_header({"description": "CO-H2 submechanism extracted from GRI-Mech 3.0"})
 gas2.write_yaml("gri30-CO-H2-submech.yaml", header=True)
 
+# %%
+# Simulate a flame with each mechanism.
 def solve_flame(gas):
     gas.TPX = 373, 0.05*ct.one_atm, 'H2:0.4, CO:0.6, O2:1, N2:3.76'
 
@@ -76,7 +86,6 @@ def solve_flame(gas):
     sim.solve(0, auto=True)
     return sim
 
-
 t1 = default_timer()
 sim1 = solve_flame(gas1)
 t2 = default_timer()
@@ -84,6 +93,9 @@ print('Solved with GRI 3.0 in {0:.2f} seconds'.format(t2-t1))
 sim2 = solve_flame(gas2)
 t3 = default_timer()
 print('Solved with CO/H2 submechanism in {0:.2f} seconds'.format(t3-t2))
+
+# %%
+# Plot the results to show that the submechanism gives the same results as the original.
 
 plt.plot(sim1.grid, sim1.heat_release_rate,
          lw=2, label='GRI 3.0')

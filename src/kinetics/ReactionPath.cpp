@@ -7,6 +7,7 @@
 // at https://cantera.org/license.txt for license and copyright information.
 
 #include "cantera/kinetics/ReactionPath.h"
+#include "cantera/kinetics/Reaction.h"
 #include "cantera/thermo/ThermoPhase.h"
 
 #include <boost/algorithm/string.hpp>
@@ -40,14 +41,13 @@ void SpeciesNode::printPaths()
 }
 
 Path::Path(SpeciesNode* begin, SpeciesNode* end)
-    : m_a(begin), m_b(end), m_total(0.0)
+    : m_a(begin), m_b(end)
 {
     begin->addPath(this);
     end->addPath(this);
 }
 
-void Path::addReaction(size_t rxnNumber, doublereal value,
-                       const string& label)
+void Path::addReaction(size_t rxnNumber, double value, const string& label)
 {
     m_rxn[rxnNumber] += value;
     m_total += value;
@@ -56,18 +56,18 @@ void Path::addReaction(size_t rxnNumber, doublereal value,
     }
 }
 
-void Path::writeLabel(ostream& s, doublereal threshold)
+void Path::writeLabel(ostream& s, double threshold)
 {
     if (m_label.size() == 0) {
         return;
     }
-    doublereal v;
-    for (const auto& label : m_label) {
-        v = label.second/m_total;
+    double v;
+    for (const auto& [species, value] : m_label) {
+        v = value / m_total;
         if (m_label.size() == 1) {
-            s << label.first << "\\l";
+            s << species << "\\l";
         } else if (v > threshold) {
-            s << label.first;
+            s << species;
             int percent = int(100*v + 0.5);
             if (percent < 100) {
                 s << " (" << percent << "%)\\l";
@@ -78,35 +78,11 @@ void Path::writeLabel(ostream& s, doublereal threshold)
     }
 }
 
-ReactionPathDiagram::ReactionPathDiagram()
-{
-    name = "reaction_paths";
-    m_flxmax = 0.0;
-    bold_color = "blue";
-    normal_color = "steelblue";
-    dashed_color = "gray";
-    dot_options = "center=1;";
-    m_font = "Helvetica";
-    bold_min = 0.2;
-    dashed_max = 0.0;
-    label_min = 0.0;
-    threshold = 0.005;
-    flow_type = NetFlow;
-    scale = -1;
-    x_size = -1.0;
-    y_size = -1.0;
-    arrow_width = -5.0;
-    show_details = false;
-    arrow_hue = 0.6666;
-    title = "";
-    m_local = npos;
-}
-
 ReactionPathDiagram::~ReactionPathDiagram()
 {
     // delete the nodes
-    for (const auto& node : m_nodes) {
-        delete node.second;
+    for (const auto& [k, node] : m_nodes) {
+        delete node;
     }
 
     // delete the paths
@@ -116,25 +92,25 @@ ReactionPathDiagram::~ReactionPathDiagram()
     }
 }
 
-vector_int ReactionPathDiagram::reactions()
+vector<int> ReactionPathDiagram::reactions()
 {
-    doublereal flmax = 0.0;
+    double flmax = 0.0;
     for (size_t i = 0; i < nPaths(); i++) {
         Path* p = path(i);
         flmax = std::max(p->flow(), flmax);
     }
     m_rxns.clear();
     for (size_t i = 0; i < nPaths(); i++) {
-        for (const auto& rxn : path(i)->reactionMap()) {
-            double flxratio = rxn.second/flmax;
+        for (const auto& [iRxn, flux] : path(i)->reactionMap()) {
+            double flxratio = flux / flmax;
             if (flxratio > threshold) {
-                m_rxns[rxn.first] = 1;
+                m_rxns.insert(iRxn);
             }
         }
     }
-    vector_int r;
+    vector<int> r;
     for (const auto& rxn : m_rxns) {
-        r.push_back(int(rxn.first));
+        r.push_back(int(rxn));
     }
     return r;
 }
@@ -149,8 +125,7 @@ void ReactionPathDiagram::add(ReactionPathDiagram& d)
     }
 }
 
-void ReactionPathDiagram::findMajorPaths(doublereal athreshold, size_t lda,
-        doublereal* a)
+void ReactionPathDiagram::findMajorPaths(double athreshold, size_t lda, double* a)
 {
     double netmax = 0.0;
     for (size_t n = 0; n < nNodes(); n++) {
@@ -195,7 +170,7 @@ void ReactionPathDiagram::writeData(ostream& s)
 
 void ReactionPathDiagram::exportToDot(ostream& s)
 {
-    doublereal flmax = 0.0;
+    double flmax = 0.0;
     s.precision(3);
 
     // a directed graph
@@ -283,8 +258,8 @@ void ReactionPathDiagram::exportToDot(ostream& s)
                             s << ", arrowsize=" << flxratio + 1;
                         }
 
-                        doublereal hue = 0.7;
-                        doublereal bright = 0.9;
+                        double hue = 0.7;
+                        double bright = 0.9;
                         s << ", color=" << "\"" << hue << ", "
                           << flxratio + 0.5
                           << ", " << bright << "\"" << endl;
@@ -346,8 +321,8 @@ void ReactionPathDiagram::exportToDot(ostream& s)
                       <<  arrow_width;
                     s << ", arrowsize=" << flxratio + 1;
                 }
-                doublereal hue = 0.7;
-                doublereal bright = 0.9;
+                double hue = 0.7;
+                double bright = 0.9;
                 s << ", color=" << "\"" << hue << ", " << flxratio + 0.5
                   << ", " << bright << "\"" << endl;
 
@@ -364,9 +339,9 @@ void ReactionPathDiagram::exportToDot(ostream& s)
         }
     }
     s.precision(2);
-    for (const auto& node : m_nodes) {
-        if (node.second->visible) {
-            s << "s" << node.first << " [ fontname=\""+m_font+"\", label=\"" << node.second->name
+    for (const auto& [kSpecies, node] : m_nodes) {
+        if (node->visible) {
+            s << "s" << kSpecies << " [ fontname=\""+m_font+"\", label=\"" << node->name
               << "\"];" << endl;
         }
     }
@@ -376,7 +351,7 @@ void ReactionPathDiagram::exportToDot(ostream& s)
 }
 
 
-void ReactionPathDiagram::addNode(size_t k, const string& nm, doublereal x)
+void ReactionPathDiagram::addNode(size_t k, const string& nm, double x)
 {
     if (!m_nodes[k]) {
         m_nodes[k] = new SpeciesNode;
@@ -388,7 +363,7 @@ void ReactionPathDiagram::addNode(size_t k, const string& nm, doublereal x)
 }
 
 void ReactionPathDiagram::linkNodes(size_t k1, size_t k2, size_t rxn,
-                                    doublereal value, string legend)
+                                    double value, string legend)
 {
     Path* ff = m_paths[k1][k2];
     if (!ff) {
@@ -397,11 +372,11 @@ void ReactionPathDiagram::linkNodes(size_t k1, size_t k2, size_t rxn,
         m_pathlist.push_back(ff);
     }
     ff->addReaction(rxn, value, legend);
-    m_rxns[rxn] = 1;
+    m_rxns.insert(rxn);
     m_flxmax = std::max(ff->flow(), m_flxmax);
 }
 
-std::vector<size_t> ReactionPathDiagram::species()
+vector<size_t> ReactionPathDiagram::species()
 {
     return m_speciesNumber;
 }
@@ -411,7 +386,7 @@ int ReactionPathBuilder::findGroups(ostream& logfile, Kinetics& s)
     m_groups.resize(m_nr);
     for (size_t i = 0; i < m_nr; i++) { // loop over reactions
         logfile << endl << "Reaction " << i+1 << ": "
-                << s.reactionString(i);
+                << s.reaction(i)->equation();
 
         if (m_determinate[i]) {
             logfile << " ... OK." << endl;
@@ -565,8 +540,8 @@ int ReactionPathBuilder::init(ostream& logfile, Kinetics& kin)
 
     // all reactants / products, even ones appearing on both sides of the
     // reaction
-    vector<vector<size_t> > allProducts(m_nr);
-    vector<vector<size_t> > allReactants(m_nr);
+    vector<vector<size_t>> allProducts(m_nr);
+    vector<vector<size_t>> allReactants(m_nr);
     for (size_t i = 0; i < m_nr; i++) {
         for (size_t k = 0; k < m_ns; k++) {
             for (int n = 0; n < kin.reactantStoichCoeff(k, i); n++) {
@@ -631,7 +606,7 @@ int ReactionPathBuilder::init(ostream& logfile, Kinetics& kin)
     }
 
     // build species groups
-    vector_int comp(m_nel);
+    vector<int> comp(m_nel);
     m_sgroup.resize(m_ns);
     for (size_t j = 0; j < m_ns; j++) {
         for (size_t m = 0; m < m_nel; m++) {
@@ -675,7 +650,7 @@ int ReactionPathBuilder::init(ostream& logfile, Kinetics& kin)
 }
 
 string reactionLabel(size_t i, size_t kr, size_t nr,
-                     const std::vector<size_t>& slist, const Kinetics& s)
+                     const vector<size_t>& slist, const Kinetics& s)
 {
     string label = "";
     for (size_t j = 0; j < nr; j++) {
@@ -683,9 +658,9 @@ string reactionLabel(size_t i, size_t kr, size_t nr,
             label += " + "+ s.kineticsSpeciesName(slist[j]);
         }
     }
-    if (ba::starts_with(s.reactionType(i), "three-body")) {
+    if (ba::starts_with(s.reaction(i)->type(), "three-body")) {
         label += " + M ";
-    } else if (ba::starts_with(s.reactionType(i), "falloff")) {
+    } else if (ba::starts_with(s.reaction(i)->type(), "falloff")) {
         label += " (+ M)";
     }
     return label;
@@ -695,7 +670,7 @@ int ReactionPathBuilder::build(Kinetics& s, const string& element,
                                ostream& output, ReactionPathDiagram& r, bool quiet)
 {
     map<size_t, int> warn;
-    doublereal threshold = 0.0;
+    double threshold = 0.0;
     size_t m = m_enamemap[element]-1;
     r.element = element;
     if (m == npos) {
@@ -709,7 +684,7 @@ int ReactionPathBuilder::build(Kinetics& s, const string& element,
     vector<string>& in_nodes = r.included();
     vector<string>& out_nodes = r.excluded();
 
-    vector_int status(s.nTotalSpecies(), 0);
+    vector<int> status(s.nTotalSpecies(), 0);
     for (size_t ni = 0; ni < in_nodes.size(); ni++) {
         status[s.kineticsSpeciesIndex(in_nodes[ni])] = 1;
     }
@@ -738,9 +713,9 @@ int ReactionPathBuilder::build(Kinetics& s, const string& element,
                             revlabel += " + "+ s.kineticsSpeciesName(m_prod[i][j]);
                         }
                     }
-                    if (ba::starts_with(s.reactionType(i), "three-body")) {
+                    if (ba::starts_with(s.reaction(i)->type(), "three-body")) {
                         revlabel += " + M ";
-                    } else if (ba::starts_with(s.reactionType(i), "falloff")) {
+                    } else if (ba::starts_with(s.reaction(i)->type(), "falloff")) {
                         revlabel += " (+ M)";
                     }
 
@@ -758,13 +733,13 @@ int ReactionPathBuilder::build(Kinetics& s, const string& element,
                         double f;
                         if ((m_atoms(kkp,m) < m_elatoms(m, i)) &&
                                 (m_atoms(kkr,m) < m_elatoms(m, i))) {
-                            map<size_t, map<size_t, Group> >& g = m_transfer[i];
+                            map<size_t, map<size_t, Group>>& g = m_transfer[i];
                             if (g.empty()) {
                                 if (!warn[i] && !quiet) {
                                     output << endl;
                                     output << "*************** REACTION IGNORED ***************" << endl;
                                     output << "Warning: no rule to determine partitioning of " << element
-                                           << endl << " in reaction " << s.reactionString(i) << "." << endl
+                                           << endl << " in reaction " << s.reaction(i)->equation() << "." << endl
                                            << "*************** REACTION IGNORED **************" << endl;
                                     output << endl;
                                     warn[i] = 1;

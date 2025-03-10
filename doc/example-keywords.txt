@@ -2,6 +2,7 @@
 battery
 benchmarking
 burner-stabilized flame
+C++
 catalysis
 combustion
 compressible flow
@@ -11,11 +12,15 @@ electrochemistry
 equilibrium
 extinction
 flame speed
+Fortran 77
+Fortran 90
 fuel cell
+heat transfer
 ignition delay
-input files
 internal combustion engine
+jet-stirred reactor
 kinetics
+Matlab
 mixture
 multicomponent transport
 multiphase
@@ -26,17 +31,22 @@ plasma
 plotting
 plug flow reactor
 pollutant formation
+porous media
 preconditioner
 premixed flame
+Python
+radiative heat transfer
 reaction path analysis
 reactor network
 saving output
 sensitivity analysis
 strained flame
 surface chemistry
+shock tube
 thermodynamic cycle
 thermodynamics
 transport
 tutorial
+units
 user-defined model
 well-stirred reactor

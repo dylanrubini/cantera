@@ -32,13 +32,9 @@ typedef int ftnlen;       // Fortran hidden string length type
 // For linux and most unix systems, this is the case.
 {FTN_TRAILING_UNDERSCORE!s}
 
-
-{CT_SUNDIALS_VERSION!s}
-
 //-------- LAPACK / BLAS ---------
 
 {LAPACK_FTN_STRING_LEN_AT_END!s}
-{LAPACK_NAMES_LOWERCASE!s}
 {LAPACK_FTN_TRAILING_UNDERSCORE!s}
 {CT_USE_LAPACK!s}
 
@@ -46,24 +42,16 @@ typedef int ftnlen;       // Fortran hidden string length type
 {CT_USE_SYSTEM_EIGEN_PREFIXED!s}
 {CT_USE_SYSTEM_FMT!s}
 {CT_USE_SYSTEM_YAMLCPP!s}
-{CT_USE_DEMANGLE!s}
-{CT_HAS_PYTHON!s}
-
-//--------- operating system --------------------------------------
-
-// The configure script defines this if the operating system is Mac
-// OS X, This used to add some Mac-specific directories to the default
-// data file search path.
-{DARWIN!s}
-
-// Identify whether the operating system is Solaris
-// with a native compiler
-{SOLARIS!s}
 
 //-------------- Optional Cantera Capabilities ----------------------
 
-//    Enable Sundials to use an external BLAS/LAPACK library if it was
-//    built to use this option
+// Enable Sundials to use an external BLAS/LAPACK library if it was
+// built to use this option
 {CT_SUNDIALS_USE_LAPACK!s}
+
+// Enable export/import of HDF data via C++ HighFive
+{CT_USE_HDF5!s}
+{CT_USE_SYSTEM_HIGHFIVE!s}
+{CT_USE_HIGHFIVE_BOOLEAN!s}
 
 #endif

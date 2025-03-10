@@ -6,21 +6,23 @@
 
 from .ctcxx cimport *
 from .func1 cimport *
+from .delegator cimport CxxDelegator
 
-cdef extern from "<map>" namespace "std":
+# @todo Replace with import from libcpp.map once Cython 0.29.x is no longer supported
+cdef extern from "<map>" namespace "std" nogil:
     cdef cppclass multimap[T, U]:
         cppclass iterator:
-            pair[T, U]& operator*() nogil
-            iterator operator++() nogil
-            iterator operator--() nogil
-            bint operator==(iterator) nogil
-            bint operator!=(iterator) nogil
-        multimap() nogil except +
-        U& operator[](T&) nogil
-        iterator begin() nogil
-        iterator end() nogil
-        pair[iterator, bint] insert(pair[T, U]) nogil
-        iterator find(T&) nogil
+            pair[T, U]& operator*()
+            iterator operator++()
+            iterator operator--()
+            bint operator==(iterator)
+            bint operator!=(iterator)
+        multimap() except +
+        U& operator[](T&)
+        iterator begin()
+        iterator end()
+        pair[iterator, bint] insert(pair[T, U])
+        iterator find(T&)
 
 
 cdef extern from "cantera/kinetics/ReactionRateFactory.h" namespace "Cantera":
@@ -36,6 +38,7 @@ cdef extern from "cantera/kinetics/ReactionRate.h" namespace "Cantera":
         double eval(double, double) except +translate_exception
         double eval(double, vector[double]&) except +translate_exception
         CxxAnyMap parameters() except +translate_exception
+        CxxUnits conversionUnits()
 
 
 cdef extern from "cantera/kinetics/Arrhenius.h" namespace "Cantera":
@@ -70,6 +73,11 @@ cdef extern from "cantera/kinetics/TwoTempPlasmaRate.h" namespace "Cantera":
         CxxTwoTempPlasmaRate(double, double, double, double)
         double activationElectronEnergy()
 
+cdef extern from "cantera/kinetics/ElectronCollisionPlasmaRate.h" namespace "Cantera":
+    cdef cppclass CxxElectronCollisionPlasmaRate "Cantera::ElectronCollisionPlasmaRate" (CxxReactionRate):
+        CxxElectronCollisionPlasmaRate(CxxAnyMap) except +translate_exception
+        vector[double]& energyLevels()
+        vector[double]& crossSections()
 
 cdef extern from "cantera/base/Array.h" namespace "Cantera":
     cdef cppclass CxxArray2D "Cantera::Array2D":
@@ -167,6 +175,10 @@ cdef extern from "cantera/kinetics/PlogRate.h" namespace "Cantera":
         CxxPlogRate(multimap[double, CxxArrheniusRate])
         multimap[double, CxxArrheniusRate] getRates()
 
+cdef extern from "cantera/kinetics/LinearBurkeRate.h" namespace "Cantera":
+    cdef cppclass CxxLinearBurkeRate "Cantera::LinearBurkeRate" (CxxReactionRate):
+        CxxLinearBurkeRate()
+        CxxLinearBurkeRate(CxxAnyMap) except +translate_exception
 
 cdef extern from "cantera/kinetics/ChebyshevRate.h" namespace "Cantera":
     cdef cppclass CxxChebyshevRate "Cantera::ChebyshevRate" (CxxReactionRate):
@@ -189,7 +201,10 @@ cdef extern from "cantera/kinetics/Custom.h" namespace "Cantera":
 
 
 cdef extern from "cantera/kinetics/ReactionRateDelegator.h" namespace "Cantera":
-    cdef cppclass CxxReactionRateDelegator "Cantera::ReactionRateDelegator" (CxxReactionRate):
+    cdef cppclass CxxReactionDataDelegator "Cantera::ReactionDataDelegator" (CxxDelegator):
+        CxxReactionDataDelegator()
+
+    cdef cppclass CxxReactionRateDelegator "Cantera::ReactionRateDelegator" (CxxDelegator, CxxReactionRate):
         CxxReactionRateDelegator()
         void setType(string&)
 
@@ -245,6 +260,10 @@ cdef class ReactionRate:
 cdef class ArrheniusRateBase(ReactionRate):
     cdef CxxArrheniusBase* base
 
+cdef class ElectronCollisionPlasmaRate(ReactionRate):
+    cdef CxxElectronCollisionPlasmaRate* base
+    cdef set_cxx_object(self)
+
 cdef class FalloffRate(ReactionRate):
     cdef CxxFalloffRate* falloff
     cdef set_cxx_object(self)
@@ -254,7 +273,12 @@ cdef class CustomRate(ReactionRate):
     cdef Func1 _rate_func  # prevent premature garbage collection
 
 cdef class ExtensibleRate(ReactionRate):
+    cdef public list _delegates
     cdef set_cxx_object(self, CxxReactionRate* rate=*)
+
+cdef class ExtensibleRateData:
+    cdef public list _delegates
+    cdef set_cxx_object(self, CxxReactionDataDelegator* rate)
 
 cdef class InterfaceRateBase(ArrheniusRateBase):
     cdef CxxInterfaceRateBase* interface

@@ -1,13 +1,12 @@
-/*!
- * @file derivative_speed.cpp
- *
+/*
  * Benchmark derivative evaluations
+ * ================================
  *
  * Calculate derivatives of reaction rates of progress and species production and
  * destruction rates with respect to temperature, pressure, molar concentration,
  * and mole fractions. Time evaluation for different chemical mechanisms.
  *
- * Keywords: kinetics, benchmarking
+ * .. tags:: C++, kinetics, benchmarking
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -21,7 +20,7 @@
 
 using namespace Cantera;
 
-void statistics(vector_fp times, size_t loops, size_t runs)
+void statistics(vector<double> times, size_t loops, size_t runs)
 {
     double average = accumulate(times.begin(), times.end(), 0.0) / times.size();
     for (auto& v : times) {
@@ -44,13 +43,13 @@ void timeit_array(void (Kinetics::*function)(double*),
                   size_t loops=10000,
                   size_t runs=7)
 {
-    vector_fp out(siz);
+    vector<double> out(siz);
 
     double T = gas.temperature();
     double pressure = gas.pressure();
     double deltaT = 1e-5;
 
-    vector_fp times;
+    vector<double> times;
     for (size_t run = 0; run < runs; ++run) {
         auto t1 = std::chrono::high_resolution_clock::now();
         for (size_t i = 0.; i < loops; ++i) {
@@ -79,7 +78,7 @@ void timeit_matrix(Eigen::SparseMatrix<double> (Kinetics::*function)(),
     double pressure = gas.pressure();
     double deltaT = 1e-5;
 
-    vector_fp times;
+    vector<double> times;
     for (size_t run = 0; run < runs; ++run) {
         auto t1 = std::chrono::high_resolution_clock::now();
         for (size_t i = 0.; i < loops; ++i) {
@@ -95,10 +94,9 @@ void timeit_matrix(Eigen::SparseMatrix<double> (Kinetics::*function)(),
     statistics(times, loops, runs);
 }
 
-void benchmark(const std::string& mech, const std::string& phase,
-    const std::string& fuel)
+void benchmark(const string& mech, const string& phase, const string& fuel)
 {
-    auto sol = newSolution(mech, phase, "None");
+    auto sol = newSolution(mech, phase, "none");
     auto& gas = *(sol->thermo());
     auto& kin = *(sol->kinetics());
 

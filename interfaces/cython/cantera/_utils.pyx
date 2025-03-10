@@ -6,22 +6,34 @@ import os
 import warnings
 from cpython.ref cimport PyObject
 import numbers
-import pkg_resources
+import importlib.metadata
+from collections import namedtuple
 import numpy as np
+from .units cimport Units
 
-# avoid explicit dependence of cantera on scipy
-try:
-    pkg_resources.get_distribution('scipy')
-except pkg_resources.DistributionNotFound:
-    _scipy_sparse = ImportError('Method requires a working scipy installation.')
-else:
-    from scipy import sparse as _scipy_sparse
+
+_scipy_sparse = None
+def _import_scipy_sparse():
+    # defer scipy import
+    global _scipy_sparse
+    if _scipy_sparse is not None:
+        return
+
+    try:
+        importlib.metadata.version('scipy')
+    except importlib.metadata.PackageNotFoundError:
+        raise ImportError('Method requires a working scipy installation.')
+    else:
+        from scipy import sparse as _scipy_sparse
+
 
 cdef CxxPythonLogger* _logger = new CxxPythonLogger()
 CxxSetLogger(_logger)
 
 cdef string stringify(x) except *:
     """ Converts Python strings to std::string. """
+    if x is None:
+        return stringify("")
     if isinstance(x, bytes):
         return string(<bytes>x)
     else:
@@ -39,16 +51,35 @@ def get_data_directories():
     """ Get a list of the directories Cantera searches for data files. """
     return pystr(CxxGetDataDirectories(stringify(os.pathsep))).split(os.pathsep)
 
-__sundials_version__ = '.'.join(str(get_sundials_version()))
+__sundials_version__ = pystr(get_sundials_version())
 
-__version__ = pystr(get_cantera_version())
+__version__ = pystr(CxxVersion())
+
+if __version__ != pystr(get_cantera_version_py()):
+    raise ImportError("Mismatch between Cantera Python module version "
+        f"({pystr(get_cantera_version_py())}) and Cantera shared library "
+        f"version ({__version__})")
 
 __git_commit__ = pystr(CxxGitCommit())
+
+if __git_commit__ != pystr(get_cantera_git_commit_py()):
+    raise ImportError("Mismatch between Cantera Python module Git commit "
+        f"({pystr(get_cantera_git_commit_py())}) and Cantera shared library "
+        f"git commit ({__git_commit__})")
 
 _USE_SPARSE = False
 
 def debug_mode_enabled():
     return CxxDebugModeEnabled()
+
+def print_stack_trace_on_segfault():
+    """
+    Enable printing a stack trace if a segfault occurs. Not recommended for general
+    use as it is possible for this to deadlock.
+
+    .. versionadded:: 3.0
+    """
+    CxxPrintStackTraceOnSegfault()
 
 def appdelete():
     """ Delete all global Cantera C++ objects """
@@ -60,8 +91,11 @@ def use_sparse(sparse=True):
     *SciPy* installation. Use pip or conda to install ``scipy`` to enable this method.
     """
     global _USE_SPARSE
-    if sparse and isinstance(_scipy_sparse, ImportError):
-        raise _scipy_sparse
+    if sparse:
+        try:
+            _import_scipy_sparse()
+        except ImportError:
+            raise
     _USE_SPARSE = sparse
 
 def make_deprecation_warnings_fatal():
@@ -86,12 +120,24 @@ def use_legacy_rate_constants(pybool legacy):
     Set definition used for rate constant calculation.
 
     If set to `False` (default value), rate constants of three-body reactions are
-    consistent with conventional definitions (for example Eq. 9.75 in Kee, Coltrin
-    and Glarborg, 'Chemically Reacting Flow', Wiley Interscience, 2003). If set to
-    `True`, output for rate constants of three-body reactions is multiplied by
-    third-body concentrations, consistent with Cantera's behavior prior to version 3.0.
+    consistent with conventional definitions (for example Eq. 9.75 in
+    :cite:t:`kee2003`). If set to `True`, output for rate constants of three-body
+    reactions is multiplied by third-body concentrations, consistent with Cantera's
+    behavior prior to version 3.0.
     """
     Cxx_use_legacy_rate_constants(legacy)
+
+def hdf_support():
+    """
+    Returns list of libraries that include HDF support:
+    - 'native': if Cantera was compiled with C++ HighFive HDF5 support.
+
+    .. versionadded:: 3.0
+    """
+    out = []
+    if CxxUsesHDF5():
+        out.append("native")
+    return set(out)
 
 cdef Composition comp_map(X) except *:
     if isinstance(X, (str, bytes)):
@@ -107,9 +153,82 @@ cdef comp_map_to_dict(Composition m):
     return {pystr(species):value for species,value in (<object>m).items()}
 
 class CanteraError(RuntimeError):
-    pass
+    @staticmethod
+    def set_stack_trace_depth(depth):
+        """
+        Set the number of stack frames to include when a `CanteraError` is displayed. By
+        default, or if the depth is set to 0, no stack information will be shown.
+        """
+        CxxCanteraError.setStackTraceDepth(depth)
+
+_DimensionalValue = namedtuple('_DimensionalValue',
+                              ('value', 'units', 'activation_energy'),
+                              defaults=[False])
 
 cdef public PyObject* pyCanteraError = <PyObject*>CanteraError
+
+
+cdef class AnyMap(dict):
+    """
+    A key-value store representing objects defined in Cantera's YAML input format.
+
+    Extends the capabilities of a normal `dict` object by providing functions for
+    converting values between different unit systems. See :ref:`sec-yaml-units` for
+    details on how units are handled in YAML input files.
+    """
+    def __cinit__(self, *args, **kwawrgs):
+        self.unitsystem = UnitSystem()
+
+    cdef _set_CxxUnitSystem(self, shared_ptr[CxxUnitSystem] units):
+        self.unitsystem._set_unitSystem(units)
+
+    def default_units(self):
+        return self.unitsystem.defaults()
+
+    @property
+    def units(self):
+        """Get the `UnitSystem` applicable to this `AnyMap`."""
+        return self.unitsystem
+
+    def convert(self, str key, dest):
+        """
+        Convert the value corresponding to the specified *key* to the units defined by
+        *dest*. *dest* may be a string or a `Units` object.
+        """
+        return self.unitsystem.convert_to(self[key], dest)
+
+    def convert_activation_energy(self, key, dest):
+        """
+        Convert the value corresponding to the specified *key* to the units defined by
+        *dest*. *dest* may be a string or a `Units` object defining units that are
+        interpretable as an activation energy.
+        """
+        return self.unitsystem.convert_activation_energy_to(self[key], dest)
+
+    def convert_rate_coeff(self, str key, dest):
+        """
+        Convert the value corresponding to the specified *key* to the units defined by
+        *dest*, with special handling for `UnitStack` input and potentially-undefined
+        rate coefficient units.
+        """
+        return self.unitsystem.convert_rate_coeff_to(self[key], dest)
+
+    def set_quantity(self, str key, value, src):
+        """
+        Set the element *key* of this map to the specified value, converting from the
+        units defined by *src* to the correct unit system for this map when serializing
+        to YAML.
+        """
+        self[key] = _DimensionalValue(value, src)
+
+    def set_activation_energy(self, str key, value, src):
+        """
+        Set the element *key* of this map to the specified value, converting from the
+        activation energy units defined by *src* to the correct unit system for this map
+        when serializing to YAML.
+        """
+        self[key] = _DimensionalValue(value, src, True)
+
 
 cdef anyvalue_to_python(string name, CxxAnyValue& v):
     cdef CxxAnyMap a
@@ -133,9 +252,9 @@ cdef anyvalue_to_python(string name, CxxAnyValue& v):
                             "from AnyValue of held type '{}'".format(
                                 pystr(name), v.type_str()))
     elif v.isType[CxxAnyMap]():
-        return anymap_to_dict(v.asType[CxxAnyMap]())
+        return anymap_to_py(v.asType[CxxAnyMap]())
     elif v.isType[vector[CxxAnyMap]]():
-        return [anymap_to_dict(a) for a in v.asType[vector[CxxAnyMap]]()]
+        return [anymap_to_py(a) for a in v.asType[vector[CxxAnyMap]]()]
     elif v.isType[vector[double]]():
         return v.asType[vector[double]]()
     elif v.isType[vector[string]]():
@@ -162,15 +281,33 @@ cdef anyvalue_to_python(string name, CxxAnyValue& v):
                             pystr(name), v.type_str()))
 
 
-cdef anymap_to_dict(CxxAnyMap& m):
+cdef anymap_to_py(CxxAnyMap& m):
     cdef pair[string,CxxAnyValue] item
     m.applyUnits()
-    if m.empty():
-        return {}
-    return {pystr(item.first): anyvalue_to_python(item.first, item.second)
-            for item in m.ordered()}
+    cdef AnyMap out = AnyMap()
+    out._set_CxxUnitSystem(m.unitsShared())
+    for item in m.ordered():
+        out[pystr(item.first)] = anyvalue_to_python(item.first, item.second)
+    return out
 
-cdef CxxAnyMap dict_to_anymap(dict data, cbool hyphenize=False) except *:
+
+cdef void setQuantity(CxxAnyMap& m, str k, v: _DimensionalValue) except *:
+    cdef CxxAnyValue testval = python_to_anyvalue(v.value)
+    cdef CxxAnyValue target
+    if isinstance(v.units, str):
+        if testval.isScalar():
+            target.setQuantity(testval.asType[double](), stringify(v.units),
+                               <cbool?>v.activation_energy)
+        else:
+            target.setQuantity(testval.asVector[double](), stringify(v.units))
+    elif isinstance(v.units, Units):
+        target.setQuantity(testval.asType[double](), (<Units>v.units).units)
+    else:
+        raise TypeError(f'Expected a string or Units object. Got {type(v.units)}')
+    m[stringify(k)] = target
+
+
+cdef CxxAnyMap py_to_anymap(data, cbool hyphenize=False) except *:
     cdef CxxAnyMap m
     if hyphenize:
         # replace "_" by "-": while Python dictionaries typically use "_" in key names,
@@ -183,7 +320,10 @@ cdef CxxAnyMap dict_to_anymap(dict data, cbool hyphenize=False) except *:
         data = _hyphenize(data)
 
     for k, v in data.items():
-        m[stringify(k)] = python_to_anyvalue(v, k)
+        if isinstance(v, _DimensionalValue):
+            setQuantity(m, k, v)
+        else:
+            m[stringify(k)] = python_to_anyvalue(v, k)
     return m
 
 cdef get_types(item):
@@ -197,6 +337,8 @@ cdef get_types(item):
             itype = numbers.Integral
         elif isinstance(item.flat[0], numbers.Real):
             itype = numbers.Real
+        elif isinstance(item.flat[0], np.str_):
+            itype = str
         else:
             itype = item.dtype.type
         return itype, item.ndim
@@ -246,7 +388,7 @@ cdef get_types(item):
 cdef CxxAnyValue python_to_anyvalue(item, name=None) except *:
     cdef CxxAnyValue v
     if isinstance(item, dict):
-        v = dict_to_anymap(item)
+        v = py_to_anymap(item)
     elif isinstance(item, (list, tuple, set, np.ndarray)):
         itype, ndim = get_types(item)
         if ndim == 1:
@@ -275,13 +417,13 @@ cdef CxxAnyValue python_to_anyvalue(item, name=None) except *:
                 v = list_to_anyvalue(item)
         else:
             v = list_to_anyvalue(item)
-    elif isinstance(item, str):
+    elif isinstance(item, (str, np.str_, np.bytes_)):
         v = stringify(item)
-    elif isinstance(item, bool):
+    elif isinstance(item, (bool, np.bool_)):
         v = <cbool>(item)
-    elif isinstance(item, int):
+    elif isinstance(item, (int, np.int32, np.int64)):
         v = <long int>(item)
-    elif isinstance(item, float):
+    elif isinstance(item, (float, np.float32, np.float64)):
         v = <double>(item)
     elif item is None:
         pass  # None corresponds to "empty" AnyValue
@@ -340,7 +482,7 @@ cdef vector[CxxAnyMap] list_dict_to_anyvalue(data) except *:
     v.resize(len(data))
     cdef size_t i
     for i, item in enumerate(data):
-        v[i] = dict_to_anymap(item)
+        v[i] = py_to_anymap(item)
     return v
 
 cdef vector[vector[double]] list2_double_to_anyvalue(data):
@@ -388,3 +530,8 @@ def _py_to_any_to_py(dd):
     cdef string name = stringify("test")
     cdef CxxAnyValue vv = python_to_anyvalue(dd)
     return anyvalue_to_python(name, vv), pystr(vv.type_str())
+
+def _py_to_anymap_to_py(pp):
+    # used for internal testing purposes only
+    cdef CxxAnyMap m = py_to_anymap(pp)
+    return anymap_to_py(m)

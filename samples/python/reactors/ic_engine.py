@@ -1,20 +1,20 @@
-# -*- coding: utf-8 -*-
 """
-Simulation of a (gaseous) Diesel-type internal combustion engine.
+Diesel-type internal combustion engine simulation with gaseous fuel
+===================================================================
 
-The simulation uses n-Dodecane as fuel, which is injected close to top dead
+The simulation uses n-dodecane as fuel, which is injected close to top dead
 center. Note that this example uses numerous simplifying assumptions and
 thus serves for illustration purposes only.
 
-Requires: cantera >= 2.5.0, scipy >= 0.19, matplotlib >= 2.0
-Keywords: combustion, thermodynamics, internal combustion engine,
+Requires: cantera >= 3.0, scipy >= 0.19, matplotlib >= 2.0
+
+.. tags:: Python, combustion, thermodynamics, internal combustion engine,
           thermodynamic cycle, reactor network, plotting, pollutant formation
 """
 
 import cantera as ct
 import numpy as np
 
-from scipy.integrate import trapz
 import matplotlib.pyplot as plt
 
 #########################################################################
@@ -104,13 +104,15 @@ cyl.volume = V_oT
 
 # define inlet state
 gas.TPX = T_inlet, p_inlet, comp_inlet
+# Note: The previous line is technically not needed as the state of the gas object is
+# already set correctly; change if inlet state is different from the reactor state.
 inlet = ct.Reservoir(gas)
 
 # inlet valve
 inlet_valve = ct.Valve(inlet, cyl)
 inlet_delta = np.mod(inlet_close - inlet_open, 4 * np.pi)
 inlet_valve.valve_coeff = inlet_valve_coeff
-inlet_valve.set_time_function(
+inlet_valve.time_function = (
     lambda t: np.mod(crank_angle(t) - inlet_open, 4 * np.pi) < inlet_delta)
 
 # define injector state (gaseous!)
@@ -122,7 +124,7 @@ injector_mfc = ct.MassFlowController(injector, cyl)
 injector_delta = np.mod(injector_close - injector_open, 4 * np.pi)
 injector_t_open = (injector_close - injector_open) / 2. / np.pi / f
 injector_mfc.mass_flow_coeff = injector_mass / injector_t_open
-injector_mfc.set_time_function(
+injector_mfc.time_function = (
     lambda t: np.mod(crank_angle(t) - injector_open, 4 * np.pi) < injector_delta)
 
 # define outlet pressure (temperature and composition don't matter)
@@ -133,7 +135,7 @@ outlet = ct.Reservoir(gas)
 outlet_valve = ct.Valve(cyl, outlet)
 outlet_delta = np.mod(outlet_close - outlet_open, 4 * np.pi)
 outlet_valve.valve_coeff = outlet_valve_coeff
-outlet_valve.set_time_function(
+outlet_valve.time_function = (
     lambda t: np.mod(crank_angle(t) - outlet_open, 4 * np.pi) < outlet_delta)
 
 # define ambient pressure (temperature and composition don't matter)
@@ -143,7 +145,7 @@ ambient_air = ct.Reservoir(gas)
 # piston is modeled as a moving wall
 piston = ct.Wall(ambient_air, cyl)
 piston.area = A_piston
-piston.set_velocity(piston_speed)
+piston.velocity = piston_speed
 
 # create a reactor network containing the cylinder and limit advance step
 sim = ct.ReactorNet([cyl])
@@ -237,7 +239,7 @@ fig, ax = plt.subplots()
 ax.plot(t, states('o2').X, label='O2')
 ax.plot(t, states('co2').X, label='CO2')
 ax.plot(t, states('co').X, label='CO')
-ax.plot(t, states('c12h26').X * 10, label='n-Dodecane x10')
+ax.plot(t, states('c12h26').X * 10, label='n-dodecane x10')
 ax.legend(loc=0)
 ax.set_ylabel('$X_i$ [-]')
 ax.set_xlabel(r'$\phi$ [deg]')
@@ -250,13 +252,13 @@ plt.show()
 ######################################################################
 
 # heat release
-Q = trapz(states.heat_release_rate * states.V, t)
+Q = np.trapz(states.heat_release_rate * states.V, t)
 output_str = '{:45s}{:>4.1f} {}'
 print(output_str.format('Heat release rate per cylinder (estimate):',
                         Q / t[-1] / 1000., 'kW'))
 
 # expansion power
-W = trapz(states.dWv_dt, t)
+W = np.trapz(states.dWv_dt, t)
 print(output_str.format('Expansion power per cylinder (estimate):',
                         W / t[-1] / 1000., 'kW'))
 
@@ -266,6 +268,6 @@ print(output_str.format('Efficiency (estimate):', eta * 100., '%'))
 
 # CO emissions
 MW = states.mean_molecular_weight
-CO_emission = trapz(MW * states.mdot_out * states('CO').X[:, 0], t)
-CO_emission /= trapz(MW * states.mdot_out, t)
+CO_emission = np.trapz(MW * states.mdot_out * states('CO').X[:, 0], t)
+CO_emission /= np.trapz(MW * states.mdot_out, t)
 print(output_str.format('CO emission (estimate):', CO_emission * 1.e6, 'ppm'))

@@ -10,6 +10,7 @@
 
 #include "Domain1D.h"
 #include "MultiJac.h"
+#include "cantera/numerics/SystemJacobian.h"
 
 namespace Cantera
 {
@@ -21,35 +22,55 @@ class AnyMap;
 /**
  * Container class for multiple-domain 1D problems. Each domain is
  * represented by an instance of Domain1D.
- * @ingroup onedim
+ * @ingroup onedGroup
  */
 class OneDim
 {
 public:
+    //! Default constructor
     OneDim();
 
     //! Construct a OneDim container for the domains in the list *domains*.
-    OneDim(std::vector<Domain1D*> domains);
+    OneDim(vector<shared_ptr<Domain1D>>& domains);
+
     virtual ~OneDim();
     OneDim(const OneDim&) = delete;
     OneDim& operator=(const OneDim&) = delete;
 
     //! Add a domain. Domains are added left-to-right.
-    void addDomain(Domain1D* d);
+    void addDomain(shared_ptr<Domain1D> d);
 
-    //! Return a reference to the Jacobian evaluator.
+    //! Return a reference to the Jacobian evaluator of an OneDim object.
+    //! @ingroup derivGroup
     MultiJac& jacobian();
+
+    shared_ptr<SystemJacobian> getJacobian() {
+        return m_jac;
+    }
 
     //! Return a reference to the Newton iterator.
     MultiNewton& newton();
 
+    //! Set the linear solver used to hold the Jacobian matrix and solve linear systems
+    //! as part of each Newton iteration. The default is a direct, banded solver.
+    void setLinearSolver(shared_ptr<SystemJacobian> solver);
+
+    //! Get the type of the linear solver being used.
+    shared_ptr<SystemJacobian> linearSolver() const { return m_jac; }
+
     /**
      * Solve F(x) = 0, where F(x) is the multi-domain residual function.
+     *
      * @param x0         Starting estimate of solution.
      * @param x1         Final solution satisfying F(x1) = 0.
      * @param loglevel   Controls amount of diagnostic output.
+     *
+     * @returns
+     * - 1 for success
+     * - -2 failure (maximum number of damping steps was reached)
+     * - -3 failure (solution was up against the bounds
      */
-    int solve(doublereal* x0, doublereal* x1, int loglevel);
+    int solve(double* x0, double* x1, int loglevel);
 
     //! Number of domains.
     size_t nDomains() const {
@@ -61,14 +82,14 @@ public:
         return *m_dom[i];
     }
 
-    size_t domainIndex(const std::string& name);
+    //! Get the index of the domain named `name`.
+    size_t domainIndex(const string& name);
 
     //! Check that the specified domain index is in range.
     //! Throws an exception if n is greater than nDomains()-1
     void checkDomainIndex(size_t n) const {
         if (n >= m_dom.size()) {
-            throw IndexError("OneDim::checkDomainIndex", "domains", n,
-                             m_dom.size()-1);
+            throw IndexError("OneDim::checkDomainIndex", "domains", n, m_dom.size());
         }
     }
 
@@ -100,35 +121,34 @@ public:
 
     //! Pointer to left-most domain (first added).
     Domain1D* left() {
-        return m_dom[0];
+        return m_dom[0].get();
     }
 
     //! Pointer to right-most domain (last added).
     Domain1D* right() {
-        return m_dom.back();
+        return m_dom.back().get();
     }
 
-    //! Number of solution components at global point jg.
+    //! Number of solution components at global point `jg`.
     size_t nVars(size_t jg) {
         return m_nvars[jg];
     }
 
-    //! Location in the solution vector of the first component of global point
-    //! jg.
+    //! Location in the solution vector of the first component of global point `jg`.
     size_t loc(size_t jg) {
         return m_loc[jg];
     }
 
     //! Return the domain, local point index, and component name for the i-th
     //! component of the global solution vector
-    std::tuple<std::string, size_t, std::string> component(size_t i);
+    std::tuple<string, size_t, string> component(size_t i);
 
     //! Jacobian bandwidth.
     size_t bandwidth() const {
         return m_bw;
     }
 
-    /*!
+    /**
      * Initialize all domains. On the first call, this methods calls the init
      * method of each domain, proceeding from left to right. Subsequent calls
      * do nothing.
@@ -145,15 +165,15 @@ public:
      * solution x. On return, array r contains the steady-state residual
      * values. Used only for diagnostic output.
      */
-    doublereal ssnorm(doublereal* x, doublereal* r);
+    double ssnorm(double* x, double* r);
 
     //! Reciprocal of the time step.
-    doublereal rdt() const {
+    double rdt() const {
         return m_rdt;
     }
 
     //! Prepare for time stepping beginning with solution *x* and timestep *dt*.
-    void initTimeInteg(doublereal dt, doublereal* x);
+    void initTimeInteg(double dt, double* x);
 
     //! True if transient mode.
     bool transient() const {
@@ -165,7 +185,7 @@ public:
         return (m_rdt == 0.0);
     }
 
-    /*!
+    /**
      * Prepare to solve the steady-state problem. After invoking this method,
      * subsequent calls to solve() will solve the steady-state problem. Sets
      * the reciprocal of the time step to zero, and, if it was previously non-
@@ -184,8 +204,18 @@ public:
      *                  the default value is used.
      * @param count   Set to zero to omit this call from the statistics
      */
-    void eval(size_t j, double* x, double* r, doublereal rdt=-1.0,
-              int count = 1);
+    void eval(size_t j, double* x, double* r, double rdt=-1.0, int count = 1);
+
+    /**
+     * Evaluates the Jacobian at x0 using finite differences.
+     *
+     * The Jacobian is computed by perturbing each component of `x0`, evaluating the
+     * residual function, and then estimating the partial derivatives numerically using
+     * finite differences to determine the corresponding column of the Jacobian.
+     *
+     * @param x0  State vector at which to evaluate the Jacobian
+     */
+    void evalJacobian(double* x0);
 
     //! Return a pointer to the domain global point *i* belongs to.
     /*!
@@ -197,23 +227,26 @@ public:
     //! Call after one or more grids has changed size, for example after being refined.
     virtual void resize();
 
-    vector_int& transientMask() {
+    //! Access the vector indicating which equations contain a transient term.
+    //! Elements are 1 for equations with a transient terms and 0 otherwise.
+    vector<int>& transientMask() {
         return m_mask;
     }
 
-    /*!
+    /**
      * Take time steps using Backward Euler.
      *
-     * @param nsteps number of steps
-     * @param dt initial step size
-     * @param x current solution vector
-     * @param r solution vector after time stepping
-     * @param loglevel controls amount of printed diagnostics
+     * @param nsteps  number of steps
+     * @param dt  initial step size
+     * @param x  current solution vector
+     * @param r  solution vector after time stepping
+     * @param loglevel  controls amount of printed diagnostics
      * @returns size of last timestep taken
      */
-    double timeStep(int nsteps, double dt, double* x,
-                    double* r, int loglevel);
+    double timeStep(int nsteps, double dt, double* x, double* r, int loglevel);
 
+    //! Reset values such as negative species concentrations in each domain.
+    //! @see Domain1D::resetBadValues
     void resetBadValues(double* x);
 
     //! Write statistics about the number of iterations and Jacobians at each
@@ -225,16 +258,26 @@ public:
      */
     void writeStats(int printTime = 1);
 
-    AnyMap serialize(const double* soln) const;
+    //! @name Options
+    //! @{
 
-    // options
-    void setMinTimeStep(doublereal tmin) {
+    //! Set the minimum time step allowed during time stepping
+    void setMinTimeStep(double tmin) {
         m_tmin = tmin;
     }
-    void setMaxTimeStep(doublereal tmax) {
+
+    //! Set the maximum time step allowed during time stepping
+    void setMaxTimeStep(double tmax) {
         m_tmax = tmax;
     }
-    void setTimeStepFactor(doublereal tfactor) {
+
+    /**
+     * Sets a factor by which the time step is reduced if the time stepping
+     * fails. The default value is 0.5.
+     *
+     * @param tfactor  factor time step is multiplied by if time stepping fails
+     */
+    void setTimeStepFactor(double tfactor) {
         m_tfactor = tfactor;
     }
 
@@ -249,7 +292,13 @@ public:
     int maxTimeStepCount() const {
         return m_nsteps_max;
     }
+    //! @}
 
+    //! Set the maximum number of steps that can be taken using the same Jacobian
+    //! before it must be re-evaluated.
+    //! @param ss_age  Age limit during steady-state mode
+    //! @param ts_age  Age limit during time stepping mode. If not specified, the
+    //!     steady-state age is also used during time stepping.
     void setJacAge(int ss_age, int ts_age=-1);
 
     /**
@@ -270,39 +319,39 @@ public:
     void clearStats();
 
     //! Return total grid size in each call to solve()
-    const std::vector<size_t>& gridSizeStats() {
+    const vector<size_t>& gridSizeStats() {
         saveStats();
         return m_gridpts;
     }
 
     //! Return CPU time spent evaluating Jacobians in each call to solve()
-    const vector_fp& jacobianTimeStats() {
+    const vector<double>& jacobianTimeStats() {
         saveStats();
         return m_jacElapsed;
     }
 
     //! Return CPU time spent on non-Jacobian function evaluations in each call
     //! to solve()
-    const vector_fp& evalTimeStats() {
+    const vector<double>& evalTimeStats() {
         saveStats();
         return m_funcElapsed;
     }
 
     //! Return number of Jacobian evaluations made in each call to solve()
-    const vector_int& jacobianCountStats() {
+    const vector<int>& jacobianCountStats() {
         saveStats();
         return m_jacEvals;
     }
 
     //! Return number of non-Jacobian function evaluations made in each call to
     //! solve()
-    const vector_int& evalCountStats() {
+    const vector<int>& evalCountStats() {
         saveStats();
         return m_funcEvals;
     }
 
     //! Return number of time steps taken in each call to solve()
-    const vector_int& timeStepStats() {
+    const vector<int>& timeStepStats() {
         saveStats();
         return m_timeSteps;
     }
@@ -322,59 +371,116 @@ public:
         m_time_step_callback = callback;
     }
 
-protected:
-    void evalSSJacobian(doublereal* x, doublereal* xnew);
+    //! Configure perturbations used to evaluate finite difference Jacobian
+    //! @param relative  Relative perturbation (multiplied by the absolute value of
+    //!     each component). Default `1.0e-5`.
+    //! @param absolute  Absolute perturbation (independent of component value).
+    //!     Default `1.0e-10`.
+    //! @param threshold  Threshold below which to exclude elements from the Jacobian
+    //!     Default `0.0`.
+    void setJacobianPerturbation(double relative, double absolute, double threshold) {
+        m_jacobianRelPerturb = relative;
+        m_jacobianAbsPerturb = absolute;
+        m_jacobianThreshold = threshold;
+    }
 
-    doublereal m_tmin; //!< minimum timestep size
-    doublereal m_tmax; //!< maximum timestep size
+protected:
+    //! Evaluate the steady-state Jacobian, accessible via jacobian()
+    //! @param[in] x  Current state vector, length size()
+    //! @param[out] rsd  Storage for the residual, length size()
+    void evalSSJacobian(double* x, double* rsd);
+
+    double m_tmin = 1e-16; //!< minimum timestep size
+    double m_tmax = 1e+08; //!< maximum timestep size
 
     //! factor time step is multiplied by  if time stepping fails ( < 1 )
-    doublereal m_tfactor;
+    double m_tfactor = 0.5;
 
-    std::unique_ptr<MultiJac> m_jac; //!< Jacobian evaluator
-    std::unique_ptr<MultiNewton> m_newt; //!< Newton iterator
-    doublereal m_rdt; //!< reciprocal of time step
-    bool m_jac_ok; //!< if true, Jacobian is current
+    shared_ptr<vector<double>> m_state; //!< Solution vector
 
-    size_t m_bw; //!< Jacobian bandwidth
-    size_t m_size; //!< solution vector size
+    shared_ptr<SystemJacobian> m_jac; //!< Jacobian evaluator
+    unique_ptr<MultiNewton> m_newt; //!< Newton iterator
+    double m_rdt = 0.0; //!< reciprocal of time step
+    bool m_jac_ok = false; //!< if true, Jacobian is current
 
-    std::vector<Domain1D*> m_dom, m_connect, m_bulk;
+    size_t m_bw = 0; //!< Jacobian bandwidth
+    size_t m_size = 0; //!< solution vector size
 
-    bool m_init;
-    std::vector<size_t> m_nvars;
-    std::vector<size_t> m_loc;
-    vector_int m_mask;
-    size_t m_pts;
+    //! Work arrays used during Jacobian evaluation
+    vector<double> m_work1, m_work2;
 
-    // options
-    int m_ss_jac_age, m_ts_jac_age;
+    //! All domains comprising the system
+    vector<shared_ptr<Domain1D>> m_dom;
+
+    //! All connector and boundary domains
+    vector<shared_ptr<Domain1D>> m_connect;
+
+    //! All bulk/flow domains
+    vector<shared_ptr<Domain1D>> m_bulk;
+
+    //! Indicates whether one-time initialization for each domain has been completed.
+    bool m_init = false;
+
+    //! Number of variables at each point, across all domains. Length points().
+    //! Accessed with nVars().
+    vector<size_t> m_nvars;
+
+    //! Location in the state vector of the first component of each point, across all
+    //! domains. Accessed with loc().
+    vector<size_t> m_loc;
+
+    //! Transient mask. See transientMask().
+    vector<int> m_mask;
+
+    //! Total number of points.
+    size_t m_pts = 0;
+
+    int m_ss_jac_age = 20; //!< Maximum age of the Jacobian in steady-state mode.
+    int m_ts_jac_age = 20; //!< Maximum age of the Jacobian in time-stepping mode.
 
     //! Function called at the start of every call to #eval.
-    Func1* m_interrupt;
+    Func1* m_interrupt = nullptr;
 
     //! User-supplied function called after each successful timestep.
-    Func1* m_time_step_callback;
+    Func1* m_time_step_callback = nullptr;
 
     //! Number of time steps taken in the current call to solve()
-    int m_nsteps;
+    int m_nsteps = 0;
 
     //! Maximum number of timesteps allowed per call to solve()
-    int m_nsteps_max;
+    int m_nsteps_max = 500;
+
+    //! Threshold for ignoring small elements in Jacobian
+    double m_jacobianThreshold = 0.0;
+    //! Relative perturbation of each component in finite difference Jacobian
+    double m_jacobianRelPerturb = 1e-5;
+    //! Absolute perturbation of each component in finite difference Jacobian
+    double m_jacobianAbsPerturb = 1e-10;
 
 private:
-    // statistics
-    int m_nevals;
-    doublereal m_evaltime;
-    std::vector<size_t> m_gridpts;
-    vector_int m_jacEvals;
-    vector_fp m_jacElapsed;
-    vector_int m_funcEvals;
-    vector_fp m_funcElapsed;
+    //! @name Statistics
+    //! Solver stats are collected after successfully solving on a particular grid.
+    //! @{
+    int m_nevals = 0; //!< Number of calls to eval()
+    double m_evaltime = 0; //!< Total time [s] spent in eval()
+
+    vector<size_t> m_gridpts; //!< Number of grid points in this grid
+    vector<int> m_jacEvals; //!< Number of Jacobian evaluations on this grid
+    vector<double> m_jacElapsed; //!< Time [s] spent evaluating Jacobians on this grid
+
+    //! Number of residual function evaluations on this grid (not counting evaluations
+    //! used to construct Jacobians).
+    vector<int> m_funcEvals;
+
+    //! Time [s] spent on residual function evaluations on this grid (not counting
+    //! evaluations used to construct Jacobians).
+    vector<double> m_funcElapsed;
 
     //! Number of time steps taken in each call to solve() (for example, for each
     //! successive grid refinement)
-    vector_int m_timeSteps;
+    vector<int> m_timeSteps;
+
+    //! @}
 };
 
 }

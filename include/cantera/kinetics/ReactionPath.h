@@ -27,17 +27,16 @@ class SpeciesNode
 {
 public:
     //! Default constructor
-    SpeciesNode() : number(npos), value(0.0),
-        visible(false), m_in(0.0), m_out(0.0) {}
+    SpeciesNode() = default;
 
     //! Destructor
-    virtual ~SpeciesNode() {}
+    virtual ~SpeciesNode() = default;
 
     // public attributes
-    size_t number; //! < Species number
-    std::string name; //! < Label on graph
-    doublereal value; //! < May be used to set node appearance
-    bool visible; //! < Visible on graph;
+    size_t number = npos; //!< Species number
+    string name; //!< Label on graph
+    double value = 0.0; //!< May be used to set node appearance
+    bool visible = false; //!< Visible on graph;
 
     //! @name References
     //!
@@ -60,32 +59,32 @@ public:
     //! add a path to or from this node
     void addPath(Path* path);
 
-    doublereal outflow() {
+    double outflow() {
         return m_out;
     }
-    doublereal inflow() {
+    double inflow() {
         return m_in;
     }
-    doublereal netOutflow() {
+    double netOutflow() {
         return m_out - m_in;
     }
 
     void printPaths();
 
 protected:
-    doublereal m_in;
-    doublereal m_out;
-    std::vector<Path*> m_paths;
+    double m_in = 0.0;
+    double m_out = 0.0;
+    vector<Path*> m_paths;
 };
 
 
 class Path
 {
 public:
-    typedef std::map<size_t, doublereal> rxn_path_map;
+    typedef map<size_t, double> rxn_path_map;
 
     /**
-     *  Constructor. Construct a one-way path from \c begin to \c end.
+     *  Constructor. Construct a one-way path from @c begin to @c end.
      */
     Path(SpeciesNode* begin, SpeciesNode* end);
 
@@ -96,8 +95,7 @@ public:
      * Add a reaction to the path. Increment the flow from this reaction, the
      * total flow, and the flow associated with this label.
      */
-    void addReaction(size_t rxnNumber, doublereal value,
-                     const std::string& label = "");
+    void addReaction(size_t rxnNumber, double value, const string& label = "");
 
     //! Upstream node.
     const SpeciesNode* begin() const {
@@ -116,7 +114,7 @@ public:
     }
 
     /**
-     *  If \c n is one of the nodes this path connects, then
+     *  If @c n is one of the nodes this path connects, then
      *  the other node is returned. Otherwise zero is returned.
      */
     SpeciesNode* otherNode(SpeciesNode* n) {
@@ -124,10 +122,10 @@ public:
     }
 
     //! The total flow in this path
-    doublereal flow() {
+    double flow() {
         return m_total;
     }
-    void setFlow(doublereal v) {
+    void setFlow(double v) {
         m_total = v;
     }
 
@@ -145,13 +143,13 @@ public:
      * Write the label for a path connecting two species, indicating
      * the percent of the total flow due to each reaction.
      */
-    void writeLabel(std::ostream& s, doublereal threshold = 0.005);
+    void writeLabel(std::ostream& s, double threshold = 0.005);
 
 protected:
-    std::map<std::string, doublereal> m_label;
+    map<string, double> m_label;
     SpeciesNode* m_a, *m_b;
     rxn_path_map m_rxn;
-    doublereal m_total;
+    double m_total = 0.0;
 };
 
 
@@ -161,7 +159,7 @@ protected:
 class ReactionPathDiagram
 {
 public:
-    ReactionPathDiagram();
+    ReactionPathDiagram() = default;
 
     /**
      * Destructor. Deletes all nodes and paths in the diagram.
@@ -169,17 +167,17 @@ public:
     virtual ~ReactionPathDiagram();
 
     //! The largest one-way flow value in any path
-    doublereal maxFlow() {
+    double maxFlow() {
         return m_flxmax;
     }
 
-    //! The net flow from node \c k1 to node \c k2
-    doublereal netFlow(size_t k1, size_t k2) {
+    //! The net flow from node @c k1 to node @c k2
+    double netFlow(size_t k1, size_t k2) {
         return flow(k1, k2) - flow(k2, k1);
     }
 
-    //! The one-way flow from node \c k1 to node \c k2
-    doublereal flow(size_t k1, size_t k2) {
+    //! The one-way flow from node @c k1 to node @c k2
+    double flow(size_t k1, size_t k2) {
         return (m_paths[k1][k2] ? m_paths[k1][k2]->flow() : 0.0);
     }
 
@@ -192,14 +190,14 @@ public:
 
     /**
      *  Export the reaction path diagram. This method writes to stream
-     *  \c s the commands for the 'dot' program in the \c GraphViz
+     *  @c s the commands for the 'dot' program in the @c GraphViz
      *  package from AT&T. (GraphViz may be downloaded from www.graphviz.org.)
      *
      *  To generate a postscript reaction path diagram from the output of this
      *  method saved in file paths.dot, for example, give the command:
-     *  \code
+     *  @code
      *  dot -Tps paths.dot > paths.ps
-     *  \endcode
+     *  @endcode
      *  To generate a GIF image, replace -Tps with -Tgif
      */
     void exportToDot(std::ostream& s);
@@ -221,82 +219,90 @@ public:
         return m_nodes.size();
     }
 
-    void addNode(size_t k, const std::string& nm, doublereal x = 0.0);
+    void addNode(size_t k, const string& nm, double x = 0.0);
 
     void displayOnly(size_t k=npos) {
         m_local = k;
     }
 
-    void linkNodes(size_t k1, size_t k2, size_t rxn, doublereal value,
-                   std::string legend = "");
+    void linkNodes(size_t k1, size_t k2, size_t rxn, double value, string legend = "");
 
-    void include(const std::string& aaname) {
+    void include(const string& aaname) {
         m_include.push_back(aaname);
     }
-    void exclude(const std::string& aaname) {
+    void exclude(const string& aaname) {
         m_exclude.push_back(aaname);
     }
-    void include(std::vector<std::string>& names) {
+    void include(vector<string>& names) {
         for (size_t i = 0; i < names.size(); i++) {
             m_include.push_back(names[i]);
         }
     }
-    void exclude(std::vector<std::string>& names) {
+    void exclude(vector<string>& names) {
         for (size_t i = 0; i < names.size(); i++) {
             m_exclude.push_back(names[i]);
         }
     }
-    std::vector<std::string>& included() {
+    vector<string>& included() {
         return m_include;
     }
-    std::vector<std::string>& excluded() {
+    vector<string>& excluded() {
         return m_exclude;
     }
-    std::vector<size_t> species();
-    vector_int reactions();
-    void findMajorPaths(doublereal threshold, size_t lda, doublereal* a);
-    void setFont(const std::string& font) {
+    vector<size_t> species();
+    vector<int> reactions();
+    void findMajorPaths(double threshold, size_t lda, double* a);
+    void setFont(const string& font) {
         m_font = font;
     }
     // public attributes
 
-    std::string title;
-    std::string bold_color;
-    std::string normal_color;
-    std::string dashed_color;
-    std::string element;
-    std::string m_font;
-    doublereal threshold, bold_min, dashed_max, label_min;
-    doublereal x_size, y_size;
-    std::string name, dot_options;
-    flow_t flow_type;
-    doublereal scale;
-    doublereal arrow_width;
-    bool show_details;
-    doublereal arrow_hue;
+    string title;
+    string bold_color = "blue";
+    string normal_color = "steelblue";
+    string dashed_color = "gray";
+    string element;
+    string m_font = "Helvetica";
+    double threshold = 0.005;
+    double bold_min = 0.2;
+    double dashed_max = 0.0;
+    double label_min = 0.0;
+    double x_size = -1.0;
+    double y_size = -1.0;
+    string name = "reaction_paths";
+    string dot_options = "center=1;";
+    flow_t flow_type = NetFlow;
+    double scale = -1;
+    double arrow_width = -5.0;
+    bool show_details = false;
+    double arrow_hue = 0.6666;
 
 protected:
-    doublereal m_flxmax;
-    std::map<size_t, std::map<size_t, Path*> > m_paths;
-    std::map<size_t, SpeciesNode*> m_nodes;
-    std::vector<Path*> m_pathlist;
-    std::vector<std::string> m_include;
-    std::vector<std::string> m_exclude;
-    std::vector<size_t> m_speciesNumber;
-    std::map<size_t, int> m_rxns;
-    size_t m_local;
+    double m_flxmax = 0.0;
+    map<size_t, map<size_t, Path*>> m_paths;
+
+    //! map of species index to SpeciesNode
+    map<size_t, SpeciesNode*> m_nodes;
+    vector<Path*> m_pathlist;
+    vector<string> m_include;
+    vector<string> m_exclude;
+    vector<size_t> m_speciesNumber;
+
+    //! Indices of reactions that are included in the diagram
+    set<size_t> m_rxns;
+    size_t m_local = npos;
 };
 
 
 class ReactionPathBuilder
 {
 public:
-    ReactionPathBuilder() {}
-    virtual ~ReactionPathBuilder() {}
+    ReactionPathBuilder() = default;
+    virtual ~ReactionPathBuilder() = default;
 
     int init(std::ostream& logfile, Kinetics& s);
 
-    int build(Kinetics& s, const std::string& element, std::ostream& output,
+    int build(Kinetics& s, const string& element, std::ostream& output,
               ReactionPathDiagram& r, bool quiet=false);
 
     //! Analyze a reaction to determine which reactants lead to which products.
@@ -308,24 +314,24 @@ protected:
     size_t m_nr;
     size_t m_ns;
     size_t m_nel;
-    vector_fp m_ropf;
-    vector_fp m_ropr;
-    vector_fp m_x;
-    std::vector<std::vector<size_t> > m_reac;
-    std::vector<std::vector<size_t> > m_prod;
+    vector<double> m_ropf;
+    vector<double> m_ropr;
+    vector<double> m_x;
+    vector<vector<size_t>> m_reac;
+    vector<vector<size_t>> m_prod;
     DenseMatrix m_elatoms;
-    std::vector<vector_int> m_groups;
-    std::vector<Group> m_sgroup;
-    std::vector<std::string> m_elementSymbols;
+    vector<vector<int>> m_groups;
+    vector<Group> m_sgroup;
+    vector<string> m_elementSymbols;
 
     //! m_transfer[reaction][reactant number][product number] where "reactant
     //! number" means the number of the reactant in the reaction equation. For example,
     //! for "A+B -> C+D", "B" is reactant number 1 and "C" is product number 0.
-    std::map<size_t, std::map<size_t, std::map<size_t, Group> > > m_transfer;
+    map<size_t, map<size_t, map<size_t, Group>>> m_transfer;
 
-    std::vector<bool> m_determinate;
+    vector<bool> m_determinate;
     Array2D m_atoms;
-    std::map<std::string, size_t> m_enamemap;
+    map<string, size_t> m_enamemap;
 };
 
 }

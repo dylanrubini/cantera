@@ -7,26 +7,29 @@
 #include "application.h"
 #include "cantera/base/global.h"
 
+#define BOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED
+#include <boost/stacktrace.hpp>
+
 #include <sstream>
 
 namespace Cantera
 {
 
-// *** Exceptions ***
+int CanteraError::traceDepth_ = 0;
 
-static const char* stars = ("*****************************************"
-                            "**************************************\n");
-
-CanteraError::CanteraError(const std::string& procedure) :
+CanteraError::CanteraError(const string& procedure) :
     procedure_(procedure)
 {
+    if (traceDepth_) {
+        auto trace = boost::stacktrace::stacktrace(0, traceDepth_);
+        traceback_ = boost::stacktrace::to_string(trace);
+    }
 }
 
 const char* CanteraError::what() const throw()
 {
     try {
-        formattedMessage_ = "\n";
-        formattedMessage_ += stars;
+        formattedMessage_ = "\n" + string(79, '*') + "\n";
         formattedMessage_ += getClass();
         if (procedure_.size()) {
             formattedMessage_ += " thrown by " + procedure_;
@@ -35,33 +38,50 @@ const char* CanteraError::what() const throw()
         if (formattedMessage_.compare(formattedMessage_.size()-1, 1, "\n")) {
             formattedMessage_.append("\n");
         }
-        formattedMessage_ += stars;
+        if (traceDepth_) {
+            formattedMessage_ += string(79, '-') + "\n" + traceback_;
+        }
+        formattedMessage_ += string(79, '*') + "\n";
+
     } catch (...) {
         // Something went terribly wrong and we couldn't even format the message.
     }
     return formattedMessage_.c_str();
 }
 
-std::string CanteraError::getMessage() const
+string CanteraError::getMessage() const
 {
     return msg_;
 }
 
-std::string CanteraError::getMethod() const
+string CanteraError::getMethod() const
 {
     return procedure_;
 }
 
-std::string ArraySizeError::getMessage() const
+void CanteraError::setStackTraceDepth(int depth)
+{
+    traceDepth_ = depth;
+}
+
+string ArraySizeError::getMessage() const
 {
     return fmt::format("Array size ({}) too small. Must be at least {}.",
                        sz_, reqd_);
 }
 
-std::string IndexError::getMessage() const
+string IndexError::getMessage() const
 {
+    if (m_size == 0) {
+        return fmt::format("IndexError: index {} given, but array{} is empty.",
+                           m_, arrayName_.empty() ? arrayName_ : " "+arrayName_);
+    }
+    if (arrayName_ == "") {
+        return fmt::format("IndexError: {} outside valid range of 0 to {}.",
+                           m_, m_size - 1);
+    }
     return fmt::format("IndexError: {}[{}] outside valid range of 0 to {}.",
-                       arrayName_, m_, mmax_);
+                       arrayName_, m_, m_size - 1);
 }
 
 } // namespace Cantera

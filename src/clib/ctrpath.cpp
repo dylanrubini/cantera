@@ -5,12 +5,11 @@
 // This file is part of Cantera. See License.txt in the top-level directory or
 // at https://cantera.org/license.txt for license and copyright information.
 
-#define CANTERA_USE_INTERNAL
 #include "cantera/clib/ctrpath.h"
 
 // Cantera includes
 #include "cantera/kinetics/ReactionPath.h"
-#include "Cabinet.h"
+#include "clib_utils.h"
 
 #include <fstream>
 
@@ -30,8 +29,7 @@ extern "C" {
     int rdiag_new()
     {
         try {
-            ReactionPathDiagram* d = new ReactionPathDiagram();
-            return DiagramCabinet::add(d);
+            return DiagramCabinet::add(make_shared<ReactionPathDiagram>());
         } catch (...) {
             return handleAllExceptions(-1, ERR);
         }
@@ -47,19 +45,10 @@ extern "C" {
         }
     }
 
-    int rdiag_copy(int i)
-    {
-        try {
-            return DiagramCabinet::newCopy(i);
-        } catch (...) {
-            return handleAllExceptions(-1, ERR);
-        }
-    }
-
     int rdiag_detailed(int i)
     {
         try {
-            DiagramCabinet::item(i).show_details = true;
+            DiagramCabinet::at(i)->show_details = true;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -69,7 +58,7 @@ extern "C" {
     int rdiag_brief(int i)
     {
         try {
-            DiagramCabinet::item(i).show_details = false;
+            DiagramCabinet::at(i)->show_details = false;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -79,7 +68,7 @@ extern "C" {
     int rdiag_setThreshold(int i, double v)
     {
         try {
-            DiagramCabinet::item(i).threshold = v;
+            DiagramCabinet::at(i)->threshold = v;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -89,7 +78,7 @@ extern "C" {
     int rdiag_setBoldColor(int i, const char* color)
     {
         try {
-            DiagramCabinet::item(i).bold_color = color;
+            DiagramCabinet::at(i)->bold_color = color;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -99,7 +88,7 @@ extern "C" {
     int rdiag_setNormalColor(int i, const char* color)
     {
         try {
-            DiagramCabinet::item(i).normal_color = color;
+            DiagramCabinet::at(i)->normal_color = color;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -109,7 +98,7 @@ extern "C" {
     int rdiag_setDashedColor(int i, const char* color)
     {
         try {
-            DiagramCabinet::item(i).dashed_color = color;
+            DiagramCabinet::at(i)->dashed_color = color;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -119,7 +108,7 @@ extern "C" {
     int rdiag_setDotOptions(int i, const char* opt)
     {
         try {
-            DiagramCabinet::item(i).dot_options = opt;
+            DiagramCabinet::at(i)->dot_options = opt;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -129,7 +118,7 @@ extern "C" {
     int rdiag_setFont(int i, const char* font)
     {
         try {
-            DiagramCabinet::item(i).setFont(font);
+            DiagramCabinet::at(i)->setFont(font);
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -139,7 +128,7 @@ extern "C" {
     int rdiag_setBoldThreshold(int i, double v)
     {
         try {
-            DiagramCabinet::item(i).bold_min = v;
+            DiagramCabinet::at(i)->bold_min = v;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -149,7 +138,7 @@ extern "C" {
     int rdiag_setNormalThreshold(int i, double v)
     {
         try {
-            DiagramCabinet::item(i).dashed_max = v;
+            DiagramCabinet::at(i)->dashed_max = v;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -159,7 +148,7 @@ extern "C" {
     int rdiag_setLabelThreshold(int i, double v)
     {
         try {
-            DiagramCabinet::item(i).label_min = v;
+            DiagramCabinet::at(i)->label_min = v;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -169,7 +158,7 @@ extern "C" {
     int rdiag_setScale(int i, double v)
     {
         try {
-            DiagramCabinet::item(i).scale = v;
+            DiagramCabinet::at(i)->scale = v;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -180,9 +169,9 @@ extern "C" {
     {
         try {
             if (iflow == 0) {
-                DiagramCabinet::item(i).flow_type = OneWayFlow;
+                DiagramCabinet::at(i)->flow_type = OneWayFlow;
             } else {
-                DiagramCabinet::item(i).flow_type = NetFlow;
+                DiagramCabinet::at(i)->flow_type = NetFlow;
             }
             return 0;
         } catch (...) {
@@ -193,7 +182,7 @@ extern "C" {
     int rdiag_setArrowWidth(int i, double v)
     {
         try {
-            DiagramCabinet::item(i).arrow_width = v;
+            DiagramCabinet::at(i)->arrow_width = v;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -203,7 +192,7 @@ extern "C" {
     int rdiag_setTitle(int i, const char* title)
     {
         try {
-            DiagramCabinet::item(i).title = title;
+            DiagramCabinet::at(i)->title = title;
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -213,7 +202,7 @@ extern "C" {
     int rdiag_add(int i, int n)
     {
         try {
-            DiagramCabinet::item(i).add(DiagramCabinet::item(n));
+            DiagramCabinet::at(i)->add(*DiagramCabinet::at(n));
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -224,7 +213,7 @@ extern "C" {
                         size_t lda, double* a)
     {
         try {
-            DiagramCabinet::item(i).findMajorPaths(threshold, lda, a);
+            DiagramCabinet::at(i)->findMajorPaths(threshold, lda, a);
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -236,9 +225,9 @@ extern "C" {
         try {
             ofstream f(fname);
             if (fmt == 0) {
-                DiagramCabinet::item(i).exportToDot(f);
+                DiagramCabinet::at(i)->exportToDot(f);
             } else {
-                DiagramCabinet::item(i).writeData(f);
+                DiagramCabinet::at(i)->writeData(f);
             }
             return 0;
         } catch (...) {
@@ -249,7 +238,7 @@ extern "C" {
     int rdiag_displayOnly(int i, int k)
     {
         try {
-            DiagramCabinet::item(i).displayOnly(k);
+            DiagramCabinet::at(i)->displayOnly(k);
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -259,8 +248,7 @@ extern "C" {
     int rbuild_new()
     {
         try {
-            ReactionPathBuilder* d = new ReactionPathBuilder();
-            return BuilderCabinet::add(d);
+            return BuilderCabinet::add(make_shared<ReactionPathBuilder>());
         } catch (...) {
             return handleAllExceptions(-1, ERR);
         }
@@ -280,7 +268,7 @@ extern "C" {
     {
         try {
             ofstream flog(logfile);
-            BuilderCabinet::item(i).init(flog, KineticsCabinet::item(k));
+            BuilderCabinet::at(i)->init(flog, *KineticsCabinet::at(k));
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -296,8 +284,8 @@ extern "C" {
             if (iquiet > 0) {
                 quiet = true;
             }
-            BuilderCabinet::item(i).build(KineticsCabinet::item(k), el, fdot,
-                                          DiagramCabinet::item(idiag), quiet);
+            BuilderCabinet::at(i)->build(*KineticsCabinet::at(k), el, fdot,
+                                         *DiagramCabinet::at(idiag), quiet);
             return 0;
         } catch (...) {
             return handleAllExceptions(-1, ERR);

@@ -1,5 +1,8 @@
 """
-This example demonstrates how Cantera can be used with the 'multiprocessing'
+Parallelizing transport property calculations
+=============================================
+
+This example demonstrates how Cantera can be used with the `multiprocessing`
 module.
 
 Because Cantera Python objects are built on top of C++ objects which cannot be
@@ -9,7 +12,8 @@ do this is by storing the objects in (module) global variables, which are
 initialized once per worker process.
 
 Requires: cantera >= 2.5.0
-Keywords: transport, benchmarking, parallel computing
+
+.. tags:: Python, transport, benchmarking, parallel computing
 """
 
 import multiprocessing
@@ -28,7 +32,7 @@ def init_process(mech):
     initialize any Cantera objects we need to use.
     """
     gases[mech] = ct.Solution(mech)
-    gases[mech].transport_model = 'Multi'
+    gases[mech].transport_model = 'multicomponent'
 
 
 def get_thermal_conductivity(args):

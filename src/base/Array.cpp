@@ -7,15 +7,10 @@
 
 #include "cantera/base/Array.h"
 #include "cantera/base/utilities.h"
+#include "cantera/base/global.h"
 
 namespace Cantera
 {
-
-Array2D::Array2D()
-    : m_nrows(0)
-    , m_ncols(0)
-{
-}
 
 Array2D::Array2D(const size_t m, const size_t n, const double v)
     : m_nrows(m)
@@ -56,7 +51,7 @@ void Array2D::resize(size_t n, size_t m, double v)
     m_data.resize(n*m, v);
 }
 
-void Array2D::appendColumn(const vector_fp& c)
+void Array2D::appendColumn(const vector<double>& c)
 {
     m_ncols++;
     m_data.resize(m_nrows * m_ncols);
@@ -102,7 +97,6 @@ void Array2D::getColumn(size_t m, double* const col)
     }
 }
 
-
 std::ostream& operator<<(std::ostream& s, const Array2D& m)
 {
     size_t nr = m.nRows();
@@ -119,7 +113,7 @@ std::ostream& operator<<(std::ostream& s, const Array2D& m)
 
 void operator*=(Array2D& m, double a)
 {
-    scale(m.begin(), m.end(), m.begin(), a);
+    scale(m.data().begin(), m.data().end(), m.data().begin(), a);
 }
 
 }

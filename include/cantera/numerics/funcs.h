@@ -15,6 +15,13 @@
 namespace Cantera
 {
 
+/**
+ * @defgroup mathUtils  Numerical Integration and Interpolation
+ * Collection of numerical utility functions for integration, interpolation and data
+ * fitting.
+ * @ingroup numerics
+*/
+
 //! Linearly interpolate a function defined on a discrete grid.
 /*!
  * Vector xpts contains a monotonic sequence of grid points, and vector fpts
@@ -26,18 +33,19 @@ namespace Cantera
  * @param xpts value of the grid points
  * @param fpts value of the interpolant at the grid points
  * @returns the value of of the interpolated function at x.
+ * @ingroup mathUtils
  */
-doublereal linearInterp(doublereal x, const vector_fp& xpts,
-                        const vector_fp& fpts);
+double linearInterp(double x, const vector<double>& xpts, const vector<double>& fpts);
 
 //! Numerical integration of a function using the trapezoidal rule.
 /*!
- * Vector x contanins a monotonic sequence of grid points, and
+ * Vector x contains a monotonic sequence of grid points, and
  * Vector f contains function values defined at these points.
  * The size of x and f must be the same.
  *
  * @param  f vector of function value
  * @param  x vector of function coordinate
+ * @ingroup mathUtils
  */
 double trapezoidal(const Eigen::ArrayXd& f, const Eigen::ArrayXd& x);
 
@@ -46,26 +54,28 @@ double trapezoidal(const Eigen::ArrayXd& f, const Eigen::ArrayXd& x);
 //! For even number, Simpson's rule is used for the first
 //! N-2 intervals with a trapezoidal rule on the last interval.
 /*!
- * Vector x contanins a monotonic sequence of grid points, and
+ * Vector x contains a monotonic sequence of grid points, and
  * Vector f contains function values defined at these points.
  * The size of x and f must be the same.
  *
  * @param  f vector of function value
  * @param  x vector of function coordinate
+ * @ingroup mathUtils
  */
 double simpson(const Eigen::ArrayXd& f, const Eigen::ArrayXd& x);
 
 //! Numerical integration of a function.
 /*!
- * Vector x contanins a monotonic sequence of grid points, and
+ * Vector x contains a monotonic sequence of grid points, and
  * Vector f contains function values defined at these points.
  * The size of x and f must be the same.
  *
  * @param  method method name
  * @param  f vector of function value
  * @param  x vector of function coordinate
+ * @ingroup mathUtils
  */
-double numericalQuadrature(const std::string& method,
+double numericalQuadrature(const string& method,
                            const Eigen::ArrayXd& f,
                            const Eigen::ArrayXd& x);
 }

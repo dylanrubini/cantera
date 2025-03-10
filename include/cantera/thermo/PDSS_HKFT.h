@@ -3,7 +3,7 @@
  *    Declarations for the class PDSS_HKFT (pressure dependent standard state)
  *    which handles calculations for a single species in a phase using the
  *    HKFT standard state
- *    (see \ref pdssthermo and class \link Cantera::PDSS_HKFT PDSS_HKFT\endlink).
+ *    (see @ref pdssthermo and class @link Cantera::PDSS_HKFT PDSS_HKFT@endlink).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -35,56 +35,45 @@ public:
 
     // See PDSS.h for documentation of functions overridden from Class PDSS
 
-    virtual doublereal enthalpy_mole() const;
+    double enthalpy_mole() const override;
 
-    //! Return the molar enthalpy in units of J kmol-1
-    /*!
-     * Returns the species standard state enthalpy in J kmol-1 at the
-     * current temperature and pressure.
-     *
-     *  Note this is just an extra routine to check the arithmetic
-     *
-     * @returns the species standard state enthalpy in J kmol-1
-     */
-    doublereal enthalpy_mole2() const;
-
-    virtual doublereal intEnergy_mole() const;
-    virtual doublereal entropy_mole() const;
-    virtual doublereal gibbs_mole() const;
-    virtual doublereal cp_mole() const;
-    virtual doublereal molarVolume() const;
-    virtual doublereal density() const;
+    double intEnergy_mole() const override;
+    double entropy_mole() const override;
+    double gibbs_mole() const override;
+    double cp_mole() const override;
+    double molarVolume() const override;
+    double density() const override;
 
     //! @}
     //! @name Properties of the Reference State of the Species in the Solution
     //! @{
 
-    doublereal refPressure() const {
+    double refPressure() const {
         return m_p0;
     }
 
-    virtual doublereal gibbs_RT_ref() const;
-    virtual doublereal enthalpy_RT_ref() const;
-    virtual doublereal entropy_R_ref() const;
-    virtual doublereal cp_R_ref() const;
-    virtual doublereal molarVolume_ref() const;
+    double gibbs_RT_ref() const override;
+    double enthalpy_RT_ref() const override;
+    double entropy_R_ref() const override;
+    double cp_R_ref() const override;
+    double molarVolume_ref() const override;
 
     //! @}
     //! @name Mechanical Equation of State Properties
     //! @{
 
-    virtual void setState_TP(doublereal temp, doublereal pres);
+    void setState_TP(double temp, double pres) override;
 
     //! @}
     //! @name Initialization of the Object
     //! @{
 
-    void setParent(VPStandardStateTP* phase, size_t k) {
+    void setParent(VPStandardStateTP* phase, size_t k) override {
         m_tp = phase;
         m_spindex = k;
     }
 
-    virtual void initThermo();
+    void initThermo() override;
 
      //! Set enthalpy of formation at Pr, Tr [J/kmol]
     void setDeltaH0(double dh0);
@@ -104,37 +93,7 @@ public:
     void set_c(double* c);
     void setOmega(double omega); //!< Set omega [J/kmol]
 
-    virtual void getParameters(AnyMap& eosNode) const;
-
-    //! This utility function reports back the type of parameterization and
-    //! all of the parameters for the species, index.
-    /*!
-     * The following parameters are reported
-     *
-     * -   c[0] = m_deltaG_formation_tr_pr;
-     * -   c[1] = m_deltaH_formation_tr_pr;
-     * -   c[2] = m_Mu0_tr_pr;
-     * -   c[3] = m_Entrop_tr_pr;
-     * -   c[4] =  m_a1;
-     * -   c[5] =  m_a2;
-     * -   c[6] =  m_a3;
-     * -   c[7] =  m_a4;
-     * -   c[8] =  m_c1;
-     * -   c[9] =  m_c2;
-     * -   c[10] = m_omega_pr_tr;
-     * .
-     *
-     * @param kindex    Species index
-     * @param type      Integer type of the standard type
-     * @param c         Vector of coefficients used to set the parameters for
-     *                  the standard state.
-     * @param minTemp   output - Minimum temperature
-     * @param maxTemp   output - Maximum temperature
-     * @param refPressure output - reference pressure (Pa).
-     */
-    virtual void reportParams(size_t& kindex, int& type, doublereal* const c,
-                              doublereal& minTemp, doublereal& maxTemp,
-                              doublereal& refPressure) const;
+    void getParameters(AnyMap& eosNode) const override;
     //! @}
 
 private:
@@ -144,24 +103,17 @@ private:
     //! Main routine that actually calculates the Gibbs free energy difference
     //! between the reference state at Tr, Pr and T,P
     /*!
-     *  This is eEqn. 59 in Johnson et al. (1992).
+     *  This is Eqn. 59 in Johnson et al. @cite johnson1992.
      */
-    doublereal deltaG() const;
+    double deltaG() const;
 
     //! Main routine that actually calculates the entropy difference
     //! between the reference state at Tr, Pr and T,P
     /*!
-     *  This is Eqn. 61 in Johnson et al. (1992). Actually, there appears to
+     *  This is Eqn. 61 in Johnson et al. @cite johnson1992. Actually, there appears to
      *  be an error in the latter. This is a correction.
      */
-    doublereal deltaS() const;
-
-    //! Routine that actually calculates the enthalpy difference
-    //! between the reference state at Tr, Pr and T,P
-    /*!
-     *  This is an extra routine that was added to check the arithmetic
-     */
-    doublereal deltaH() const;
+    double deltaS() const;
 
     //! Internal formula for the calculation of a_g()
     /*!
@@ -174,7 +126,7 @@ private:
      *                 - 2 2nd derivative wrt temperature
      *                 - 3 derivative wrt pressure
      */
-    doublereal ag(const doublereal temp, const int ifunc = 0) const;
+    double ag(const double temp, const int ifunc = 0) const;
 
     //! Internal formula for the calculation of b_g()
     /*!
@@ -187,11 +139,12 @@ private:
      *                 - 2 2nd derivative wrt temperature
      *                 - 3 derivative wrt pressure
      */
-    doublereal bg(const doublereal temp, const int ifunc = 0) const;
+    double bg(const double temp, const int ifunc = 0) const;
 
     //! function g appearing in the formulation
     /*!
-     * Function g appearing in the Johnson et al formulation
+     * Function @f$ g @f$ (Eqn. 49) appearing in the Johnson et al. @cite johnson1992
+     * formulation.
      *
      * @param temp      Temperature kelvin
      * @param pres      Pressure (pascal)
@@ -201,12 +154,12 @@ private:
      *                 - 2 2nd derivative wrt temperature
      *                 - 3 derivative wrt pressure
      */
-    doublereal g(const doublereal temp, const doublereal pres, const int ifunc = 0) const;
+    double g(const double temp, const double pres, const int ifunc = 0) const;
 
     //! Difference function f appearing in the formulation
     /*!
-     * Function f appearing in the Johnson et al formulation of omega_j
-     *   Eqn. 33 ref
+     * Function @f$ f @f$ (Eqn. 52) appearing in the Johnson et al. @cite johnson1992
+     * formulation of @f$ \omega_j @f$ (Eqn. 46).
      *
      * @param temp      Temperature kelvin
      * @param pres      Pressure (pascal)
@@ -216,7 +169,7 @@ private:
      *                 - 2 2nd derivative wrt temperature
      *                 - 3 derivative wrt pressure
      */
-    doublereal f(const doublereal temp, const doublereal pres, const int ifunc = 0) const;
+    double f(const double temp, const double pres, const int ifunc = 0) const;
 
     //! Evaluate the Gstar value appearing in the HKFT formulation
     /*!
@@ -228,8 +181,7 @@ private:
      *                 - 2 2nd derivative wrt temperature
      *                 - 3 derivative wrt pressure
      */
-    doublereal gstar(const doublereal temp, const doublereal pres,
-                     const int ifunc = 0) const;
+    double gstar(const double temp, const double pres, const int ifunc = 0) const;
 
     //! Function to look up Element Free Energies
     /*!
@@ -243,7 +195,7 @@ private:
      * @exception CanteraError
      *    If a match is not found, a CanteraError is thrown as well
      */
-    doublereal LookupGe(const std::string& elemName);
+    double LookupGe(const string& elemName);
 
     //! Translate a Gibbs free energy of formation value to a NIST-based Chemical potential
     /*!
@@ -258,15 +210,15 @@ private:
      *  derived from the equation of state for water.
      *  This object doesn't own the object. Just a shallow pointer.
      */
-    PDSS_Water* m_waterSS;
+    PDSS_Water* m_waterSS = nullptr;
 
     UnitSystem m_units;
 
     //! density of standard-state water. internal temporary variable
-    mutable doublereal m_densWaterSS;
+    mutable double m_densWaterSS = -1.0;
 
     //!  Pointer to the water property calculator
-    std::unique_ptr<WaterProps> m_waterProps;
+    unique_ptr<WaterProps> m_waterProps;
 
     //! Input value of deltaG of Formation at Tr and Pr    (cal gmol-1)
     /*!
@@ -275,7 +227,7 @@ private:
      *  This is the delta G for the formation reaction of the
      *  ion from elements in their stable state at Tr, Pr.
      */
-    doublereal m_deltaG_formation_tr_pr;
+    double m_deltaG_formation_tr_pr = NAN;
 
     //!  Input value of deltaH of Formation at Tr and Pr    (cal gmol-1)
     /*!
@@ -284,7 +236,7 @@ private:
      *  This is the delta H for the formation reaction of the
      *  ion from elements in their stable state at Tr, Pr.
      */
-    doublereal m_deltaH_formation_tr_pr;
+    double m_deltaH_formation_tr_pr = NAN;
 
     //! Value of the Absolute Gibbs Free Energy NIST scale at T_r and P_r
     /*!
@@ -293,49 +245,49 @@ private:
      *
      *  J kmol-1
      */
-    doublereal m_Mu0_tr_pr;
+    double m_Mu0_tr_pr = 0.0;
 
     //! Input value of S_j at Tr and Pr    (cal gmol-1 K-1)
     /*!
      *  Tr = 298.15   Pr = 1 atm
      */
-    doublereal m_Entrop_tr_pr;
+    double m_Entrop_tr_pr = NAN;
 
     //! Input a1 coefficient (cal gmol-1 bar-1)
-    doublereal m_a1;
+    double m_a1 = 0.0;
 
     //!  Input a2 coefficient (cal gmol-1)
-    doublereal m_a2;
+    double m_a2 = 0.0;
 
     //!  Input a3 coefficient (cal K gmol-1 bar-1)
-    doublereal m_a3;
+    double m_a3 = 0.0;
 
     //!  Input a4 coefficient (cal K gmol-1)
-    doublereal m_a4;
+    double m_a4 = 0.0;
 
     //!  Input c1 coefficient (cal gmol-1 K-1)
-    doublereal m_c1;
+    double m_c1 = 0.0;
 
     //!  Input c2 coefficient (cal K gmol-1)
-    doublereal m_c2;
+    double m_c2 = 0.0;
 
     //! Input  omega_pr_tr coefficient(cal gmol-1)
-    doublereal m_omega_pr_tr;
+    double m_omega_pr_tr = 0.0;
 
     //! y = dZdT = 1/(esp*esp) desp/dT at 298.15 and 1 bar
-    doublereal m_Y_pr_tr;
+    double m_Y_pr_tr = 0.0;
 
     //! Z = -1 / relEpsilon at 298.15 and 1 bar
-    doublereal m_Z_pr_tr;
+    double m_Z_pr_tr = 0.0;
 
     //! Reference pressure is 1 atm in units of bar= 1.0132
-    doublereal m_presR_bar;
+    double m_presR_bar = OneAtm * 1.0E-5;
 
     //! small value that is not quite zero
-    doublereal m_domega_jdT_prtr;
+    double m_domega_jdT_prtr = 0.0;
 
     //! Charge of the ion
-    doublereal m_charge_j;
+    double m_charge_j = 0.0;
 
     //!  Static variable determining error exiting
     /*!

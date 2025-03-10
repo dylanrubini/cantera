@@ -1,12 +1,15 @@
 """
+Using `ExtensibleReactor` to implement wall inertia
+===================================================
+
 Solve an ignition problem where the normal reactor governing equations are
 extended with additional equations implemented in Python.
 
-This demonstrates an approach for solving problems where Cantera's built-in
-reactor models are not sufficient for describing the system in question. Unlike
-the 'custom.py' example, in this example Cantera's existing Reactor and
-ReactorNet code is still used, with only the modifications to the standard
-equations implemented in Python by extending the ExtensibleReactor class.
+This demonstrates an approach for solving problems where Cantera's built-in reactor
+models are not sufficient for describing the system in question. Unlike the
+:doc:`custom.py <custom>` example, in this example Cantera's existing `Reactor` and
+`ReactorNet` code is still used, with only the modifications to the standard equations
+implemented in Python by extending the `ExtensibleReactor` class.
 
 Wall objects in Cantera are normally massless, with the velocity either imposed
 or proportional to the pressure difference. Here, we simulate a wall where the
@@ -14,8 +17,9 @@ acceleration is proportional to the pressure difference, and the velocity is
 determined by integrating the equation of motion. This requires adding a new
 variable to the reactor's state vector which represents the wall velocity.
 
-Requires: cantera >= 2.6.0, matplotlib >= 2.0
-Keywords: combustion, reactor network, user-defined model, plotting
+Requires: cantera >= 3.0, matplotlib >= 2.0
+
+.. tags:: Python, combustion, reactor network, user-defined model, plotting
 """
 
 import cantera as ct
@@ -47,7 +51,7 @@ class InertialWallReactor(ct.ExtensibleIdealGasReactor):
         # This method is used to set the state of the Reactor and Wall objects
         # based on the new values for the state vector provided by the ODE solver
         self.v_wall = y[self.i_wall]
-        self.walls[0].set_velocity(self.v_wall)
+        self.walls[0].velocity = self.v_wall
 
     def after_eval(self, t, LHS, RHS):
         # Calculate the time derivative for the additional equation

@@ -14,14 +14,15 @@ namespace Cantera
 
 /**
  * A class for mass flow controllers. The mass flow rate is constant or
- * specified as a function of time..
+ * specified as a function of time.
+ * @ingroup flowDeviceGroup
  */
 class MassFlowController : public FlowDevice
 {
 public:
-    MassFlowController();
+    using FlowDevice::FlowDevice;  // inherit constructors
 
-    virtual std::string type() const {
+    string type() const override {
         return "MassFlowController";
     }
 
@@ -31,10 +32,10 @@ public:
     //! Set the mass flow coefficient.
     /*!
      * *m* has units of kg/s. The mass flow rate is computed as:
-     * \f[\dot{m} = m g(t) \f]
+     * @f[\dot{m} = m g(t) @f]
      * where *g* is a function of time that is set by `setTimeFunction`.
      * If no function is specified, the mass flow rate defaults to:
-     * \f[\dot{m} = m \f]
+     * @f[\dot{m} = m @f]
      */
     void setMassFlowCoeff(double m) {
         m_coeff = m;
@@ -45,40 +46,44 @@ public:
         return m_coeff;
     }
 
-    virtual void setPressureFunction(Func1* f) {
+    void setPressureFunction(Func1* f) override {
         throw NotImplementedError("MassFlowController::setPressureFunction");
     }
 
     //! If a function of time has been specified for mdot, then update the
     //! stored mass flow rate. Otherwise, mdot is a constant, and does not
     //! need updating.
-    virtual void updateMassFlowRate(double time);
+    void updateMassFlowRate(double time) override;
 };
 
 /**
  * A class for flow controllers where the flow rate is equal to the flow rate
- * of a "master" mass flow controller plus a correction proportional to the
+ * of a primary mass flow controller plus a correction proportional to the
  * pressure difference between the inlet and outlet.
+ * @ingroup flowDeviceGroup
  */
 class PressureController : public FlowDevice
 {
 public:
-    PressureController();
+    using FlowDevice::FlowDevice;  // inherit constructors
 
-    virtual std::string type() const {
+    string type() const override {
         return "PressureController";
     }
 
-
-    virtual bool ready() {
-        return FlowDevice::ready() && m_master != 0;
+    bool ready() override {
+        return FlowDevice::ready() && m_primary != 0;
     }
 
-    void setMaster(FlowDevice* master) {
-        m_master = master;
+    //! Set the primary mass flow controller.
+    /*!
+     * @since New in %Cantera 3.0.
+     */
+    void setPrimary(FlowDevice* primary) {
+        m_primary = primary;
     }
 
-    virtual void setTimeFunction(Func1* g) {
+    void setTimeFunction(Func1* g) override {
         throw NotImplementedError("PressureController::setTimeFunction");
     }
 
@@ -86,11 +91,11 @@ public:
     //! rate
     /*!
      * *c* has units of kg/s/Pa. The mass flow rate is computed as:
-     * \f[\dot{m} = \dot{m}_{master} + c f(\Delta P) \f]
+     * @f[\dot{m} = \dot{m}_{primary} + c f(\Delta P) @f]
      * where *f* is a functions of pressure drop that is set by
      * `setPressureFunction`. If no functions is specified, the mass flow
      * rate defaults to:
-     * \f[\dot{m} = \dot{m}_{master} + c \Delta P \f]
+     * @f[\dot{m} = \dot{m}_{primary} + c \Delta P @f]
      */
     void setPressureCoeff(double c) {
         m_coeff = c;
@@ -101,10 +106,10 @@ public:
         return m_coeff;
     }
 
-    virtual void updateMassFlowRate(double time);
+    void updateMassFlowRate(double time) override;
 
 protected:
-    FlowDevice* m_master;
+    FlowDevice* m_primary = nullptr;
 };
 
 //! Supply a mass flow rate that is a function of the pressure drop across the
@@ -113,13 +118,14 @@ protected:
  * The default behavior is a linearly proportional to the pressure difference.
  * Note that real valves do not have this behavior, so this class does not
  * model real, physical valves.
+ * @ingroup flowDeviceGroup
  */
 class Valve : public FlowDevice
 {
 public:
-    Valve();
+    using FlowDevice::FlowDevice;  // inherit constructors
 
-    virtual std::string type() const {
+    string type() const override {
         return "Valve";
     }
 
@@ -127,11 +133,11 @@ public:
     //! rate
     /*!
      * *c* has units of kg/s/Pa. The mass flow rate is computed as:
-     * \f[\dot{m} = c g(t) f(\Delta P) \f]
+     * @f[\dot{m} = c g(t) f(\Delta P) @f]
      * where *g* and *f* are functions of time and pressure drop that are set
      * by `setTimeFunction` and `setPressureFunction`, respectively. If no functions are
      * specified, the mass flow rate defaults to:
-     * \f[\dot{m} = c \Delta P \f]
+     * @f[\dot{m} = c \Delta P @f]
      */
     void setValveCoeff(double c) {
         m_coeff = c;
@@ -143,7 +149,7 @@ public:
     }
 
     //! Compute the current mass flow rate, based on the pressure difference.
-    virtual void updateMassFlowRate(double time);
+    void updateMassFlowRate(double time) override;
 };
 
 }

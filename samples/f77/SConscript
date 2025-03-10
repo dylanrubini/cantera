@@ -1,14 +1,11 @@
-from os.path import join as pjoin, relpath
-from buildutils import *
+from buildutils import compiler_flag_list
 
 Import('env', 'install', 'buildSample')
 localenv = env.Clone()
 
-localenv['mak_stdlib'] = ['-l' + lib for lib in env['cxx_stdlib']]
-
 # (program name, [source files])
 samples = [("ctlib", ["ctlib.f"]),
-           ("demo", ["demo.f"]),
+           ("demo", ["f77_demo.f"]),
            ("isentropic", ["isentropic.f"])]
 
 ftn_demo = localenv.SharedObject('demo_ftnlib.cpp',
@@ -20,10 +17,13 @@ for program_name, fortran_sources in samples:
                 CPPPATH=['#build/src/fortran', '#include'],
                 LIBS=env['cantera_libs']+['cantera_fortran']+env['cxx_stdlib'],
                 LIBPATH=[env['sundials_libdir'], localenv['blas_lapack_dir'],
-                         env['extra_lib_dirs'], '#build/lib'],
+                         env['extra_lib_dirs'], env["hdf_libdir"], '#build/lib'],
                 LINK='$FORTRAN_LINK')
 
 # Generate SConstruct file to be installed
+linkflags = ["-g", localenv["thread_flags"]]
+
+flag_excludes = [r"\$\(", "/TP", r"\$\)", "/nologo"]
 incdirs = [localenv["ct_incroot"]]
 libdirs = [localenv["ct_libdir"]]
 if localenv["package_build"]:
@@ -31,23 +31,25 @@ if localenv["package_build"]:
     # conda package for now.
     # Users should compile against their local SDKs, which should be backwards
     # compatible with the SDK used for building.
-    excludes = (
-        "-isysroot", "-mmacosx", "-march", "-mtune", "-fdebug-prefix-map")
-    cc_flags = compiler_flag_list(localenv["CCFLAGS"] + localenv["CXXFLAGS"],
-        excludes)
+    flag_excludes.extend(["-mmacosx", "-march", "-mtune", "-fdebug-prefix-map",
+                          "-isysroot", ".*/_build_env/"])
 else:
-    incdirs.extend([localenv["sundials_include"], localenv["boost_inc_dir"]])
-    incdirs.extend(localenv["extra_inc_dirs"])
-    incdirs = list(set(incdirs))
-    libdirs.extend([localenv["sundials_libdir"], localenv["blas_lapack_dir"]])
-    libdirs.extend(localenv["extra_lib_dirs"])
-    libdirs = list(set(libdirs))
+    linkflags.append(f"-Wl,-rpath,{localenv['ct_shlibdir']}")
 
-    cc_flags = localenv["CCFLAGS"] + localenv["CXXFLAGS"]
+    incdirs.extend([localenv["sundials_include"], localenv["boost_inc_dir"]])
+    incdirs.append(localenv["hdf_include"])
+    incdirs.extend(localenv["extra_inc_dirs"])
+    incdirs = sorted(set(incdirs))
+
+    libdirs.extend([localenv["sundials_libdir"], localenv["blas_lapack_dir"]])
+    libdirs.append(localenv["hdf_libdir"])
+    libdirs.extend(localenv["extra_lib_dirs"])
+    libdirs = sorted(set(libdirs))
 
 libs = ["cantera_fortran"] + localenv["cantera_libs"] + localenv["cxx_stdlib"]
-linkflags = ("-g", localenv["thread_flags"], f"-Wl,-rpath,{localenv['ct_libdir']}")
 
+cc_flags = compiler_flag_list(localenv["CCFLAGS"] + localenv["CXXFLAGS"],
+                              env["CC"], flag_excludes)
 localenv["tmpl_compiler_flags"] = repr(cc_flags)
 localenv['tmpl_cantera_incdirs'] = repr([x for x in incdirs if x])
 localenv['tmpl_cantera_libs'] = repr(libs)
@@ -55,33 +57,16 @@ localenv['tmpl_cantera_libdirs'] = repr([x for x in libdirs if x])
 localenv['tmpl_cantera_linkflags'] = repr([x for x in linkflags if x])
 localenv['tmpl_cantera_frameworks'] = repr(localenv['FRAMEWORKS'])
 
-if localenv["package_build"]:
-    # We do not want to specify the conda compilers from the build environment,
-    # because those won't be installed on the user's system.
-    if localenv["OS"] == "Darwin":
-        localenv["F77"] = "gfortran"
-        localenv["CC"] = "clang"
-    elif env["OS"] == "Windows":
-        # compilation needs the Visual Studio Command Prompt
-        localenv["F77"] = "ifx"
-        localenv["CC"] = "cl"
-    else:
-        localenv["F77"] = "gfortran"
-        localenv["CC"] = "gcc"
-
-localenv["mak_compiler_flags"] = " ".join(cc_flags)
+if localenv['package_build']:
+    # For package builds, use environment variables or rely on SCons to find the
+    # default compilers
+    localenv['tmpl_cc'] = "env['CC'] = os.environ.get('CC', env['CC'])"
+    localenv['tmpl_f77'] = "env['F77'] = os.environ.get('F77', env['F77'])"
+else:
+    # Otherwise, use the same compilers that were used to build Cantera, with the
+    # environment variables optionally overriding
+    localenv['tmpl_cc'] = env.subst("env['cc'] = os.environ.get('cc', '$cc')")
+    localenv['tmpl_f77'] = env.subst("env['F77'] = os.environ.get('F77', '$F77')")
 
 sconstruct = localenv.SubstFile('SConstruct', 'SConstruct.in')
 install("$inst_sampledir/f77", sconstruct)
-
-if localenv["OS"] != "Windows":
-    # Generate Makefile to be installed
-    mak_path = pjoin(localenv["ct_incroot"], "cantera", "Cantera.mak")
-    if " " in mak_path:
-        # There is no reasonable way to handle spaces in Makefile 'include'
-        # statement, so we fall back to using the relative path instead
-        mak_path = relpath(mak_path, pjoin(localenv["ct_sampledir"], "f77"))
-    localenv["make_Cantera_dot_mak"] = mak_path
-
-    makefile = localenv.SubstFile("Makefile", "Makefile.in")
-    install("$inst_sampledir/f77", makefile)

@@ -1,3 +1,5 @@
+//! @file Species.cpp
+
 // This file is part of Cantera. See License.txt in the top-level directory or
 // at https://cantera.org/license.txt for license and copyright information.
 
@@ -12,19 +14,12 @@
 #include "cantera/base/global.h"
 #include <iostream>
 #include <limits>
-#include <set>
 
 using namespace std;
 
 namespace Cantera {
 
-Species::Species()
-    : charge(0.0)
-    , size(1.0)
-{
-}
-
-Species::Species(const std::string& name_, const compositionMap& comp_,
+Species::Species(const string& name_, const Composition& comp_,
                  double charge_, double size_)
     : name(name_)
     , composition(comp_)
@@ -33,22 +28,18 @@ Species::Species(const std::string& name_, const compositionMap& comp_,
 {
 }
 
-Species::~Species()
-{
-}
-
 double Species::molecularWeight() {
     if (m_molecularWeight == Undef) {
         double weight = 0.0;
         const auto& elements = elementWeights();
-        for (const auto& comp : composition) {
-            auto search = elements.find(comp.first);
+        for (const auto& [eName, stoich] : composition) {
+            auto search = elements.find(eName);
             if (search != elements.end()) {
                 if (search->second < 0) {
                     throw CanteraError("setMolecularWeight",
-                        "element '{}' has no stable isotopes", comp.first);
+                        "element '{}' has no stable isotopes", eName);
                 }
-                weight += search->second * comp.second;
+                weight += search->second * stoich;
             }
         }
         setMolecularWeight(weight);
@@ -83,10 +74,16 @@ AnyMap Species::parameters(const ThermoPhase* phase, bool withInput) const
 
     if (charge != 0) {
         speciesNode["charge"] = charge;
+    } else {
+        speciesNode.exclude("charge");
     }
+
     if (size != 1) {
         speciesNode["size"] = size;
+    } else {
+        speciesNode.exclude("size");
     }
+
     if (thermo) {
         AnyMap thermoNode = thermo->parameters(withInput);
         if (thermoNode.size()) {
@@ -115,13 +112,13 @@ AnyMap Species::parameters(const ThermoPhase* phase, bool withInput) const
 
 unique_ptr<Species> newSpecies(const AnyMap& node)
 {
-    unique_ptr<Species> s(new Species(node["name"].asString(),
-                                      node["composition"].asMap<double>()));
+    auto s = make_unique<Species>(node["name"].asString(),
+                                  node["composition"].asMap<double>());
 
     if (node.hasKey("thermo")) {
         s->thermo = newSpeciesThermo(node["thermo"].as<AnyMap>());
     } else {
-        s->thermo.reset(new SpeciesThermoInterpType());
+        s->thermo = make_shared<SpeciesThermoInterpType>();
     }
 
     s->size = node.getDouble("sites", 1.0);
@@ -136,13 +133,13 @@ unique_ptr<Species> newSpecies(const AnyMap& node)
 
     // Store input parameters in the "input" map, unless they are stored in a
     // child object
-    const static std::set<std::string> known_keys{
+    const static set<string> known_keys{
         "thermo", "transport"
     };
     s->input.setUnits(node.units());
-    for (const auto& item : node) {
-        if (known_keys.count(item.first) == 0) {
-            s->input[item.first] = item.second;
+    for (const auto& [key, child] : node) {
+        if (known_keys.count(key) == 0) {
+            s->input[key] = child;
         }
     }
     s->input.applyUnits();
@@ -151,9 +148,9 @@ unique_ptr<Species> newSpecies(const AnyMap& node)
     return s;
 }
 
-std::vector<shared_ptr<Species>> getSpecies(const AnyValue& items)
+vector<shared_ptr<Species>> getSpecies(const AnyValue& items)
 {
-    std::vector<shared_ptr<Species> > all_species;
+    vector<shared_ptr<Species>> all_species;
     for (const auto& node : items.asVector<AnyMap>()) {
         all_species.emplace_back(newSpecies(node));
     }

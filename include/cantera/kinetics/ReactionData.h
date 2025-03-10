@@ -21,10 +21,13 @@ class Kinetics;
 //! Data container holding shared data used for ReactionRate calculation
 /**
  * The base class defines variables and methods used by all specializations.
+ * @ingroup reactionGroup
  */
 struct ReactionData
 {
-    ReactionData() : temperature(1.), logT(0.), recipT(1.), m_temperature_buf(-1.) {}
+    ReactionData() = default;
+
+    virtual ~ReactionData() = default;
 
     //! Update data container based on temperature *T*
     /**
@@ -58,7 +61,7 @@ struct ReactionData
      * @warning  This method is an experimental part of the %Cantera API and
      *      may be changed or removed without notice.
      */
-    virtual void update(double T, const vector_fp& extra) {
+    virtual void update(double T, const vector<double>& extra) {
         throw NotImplementedError("ReactionData::update",
             "ReactionData type does not use extra vector argument.");
     }
@@ -106,12 +109,12 @@ struct ReactionData
         temperature = NAN;
     }
 
-    double temperature; //!< temperature
-    double logT; //!< logarithm of temperature
-    double recipT; //!< inverse of temperature
+    double temperature = 1.0; //!< temperature
+    double logT = 0.0; //!< logarithm of temperature
+    double recipT = 1.0; //!< inverse of temperature
 
 protected:
-    double m_temperature_buf; //!< buffered temperature
+    double m_temperature_buf = -1.0; //!< buffered temperature
 };
 
 }

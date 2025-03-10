@@ -7,24 +7,21 @@
 #define CT_WALL_H
 
 #include "cantera/base/ctexceptions.h"
-#include "cantera/zeroD/ReactorSurface.h"
 #include "cantera/zeroD/ReactorBase.h"
 
 namespace Cantera
 {
 
-class Kinetics;
-class SurfPhase;
 class Func1;
 
 /**
  * Base class for 'walls' (walls, pistons, etc.) connecting reactors.
- * @ingroup ZeroD
+ * @ingroup wallGroup
  */
 class WallBase
 {
 public:
-    WallBase();
+    WallBase(const string& name="(none)") : m_name(name) {}
 
     virtual ~WallBase() {}
     WallBase(const WallBase&) = delete;
@@ -32,25 +29,41 @@ public:
 
     //! String indicating the wall model implemented. Usually
     //! corresponds to the name of the derived class.
-    virtual std::string type() const {
+    virtual string type() const {
         return "WallBase";
     }
 
-    //! Rate of volume change (m^3/s) for the adjacent reactors.
+    //! Retrieve wall name.
+    string name() const {
+        return m_name;
+    }
+
+    //! Set wall name.
+    void setName(const string& name) {
+        m_name = name;
+    }
+
+    //! Set the default name of a wall. Returns `false` if it was previously set.
+    bool setDefaultName(map<string, int>& counts);
+
+    //! Rate of volume change (m^3/s) for the adjacent reactors at current reactor
+    //! network time.
     /*!
      * This method is called by Reactor::evalWalls(). Base class method
      * does nothing (that is, constant volume), but may be overloaded.
+     * @since New in %Cantera 3.0.
      */
-    virtual double vdot(double t) {
+    virtual double expansionRate() {
         return 0.0;
     }
 
-    //! Heat flow rate through the wall (W).
+    //! Heat flow rate through the wall (W) at current reactor network time.
     /*!
      * This method is called by Reactor::evalWalls(). Base class method
      * does nothing (that is, an adiabatic wall), but may be overloaded.
+     * @since New in %Cantera 3.0.
      */
-    virtual double Q(double t) {
+    virtual double heatRate() {
         return 0.0;
     }
 
@@ -79,36 +92,53 @@ public:
     }
 
     //! Return a reference to the Reactor or Reservoir to the right of the wall.
-    const ReactorBase& right() {
+    ReactorBase& right() {
         return *m_right;
     }
 
+    //! Set current reactor network time
+    /*!
+     * @since New in %Cantera 3.0.
+     */
+    void setSimTime(double time) {
+        m_time = time;
+    }
+
 protected:
-    ReactorBase* m_left;
-    ReactorBase* m_right;
+    string m_name;  //!< Wall name.
+    bool m_defaultNameSet = false;  //!< `true` if default name has been previously set.
 
-    std::vector<ReactorSurface> m_surf;
+    ReactorBase* m_left = nullptr;
+    ReactorBase* m_right = nullptr;
 
-    double m_area;
+    //! current reactor network time
+    double m_time = 0.0;
+
+    double m_area = 1.0;
 };
 
 //! Represents a wall between between two ReactorBase objects.
 /*!
  * Walls can move (changing the volume of the adjacent reactors) and allow heat
  * transfer between reactors.
+ * @ingroup wallGroup
  */
 class Wall : public WallBase
 {
 public:
-    Wall();
+    using WallBase::WallBase;  // inherit constructors
 
     //! String indicating the wall model implemented. Usually
     //! corresponds to the name of the derived class.
-    virtual std::string type() const {
+    string type() const override {
         return "Wall";
     }
 
-    //! Set the wall velocity to a specified function of time, \f$ v(t) \f$.
+    //! Wall velocity @f$ v(t) @f$ at current reactor network time.
+    //! @since New in %Cantera 3.0.
+    double velocity() const;
+
+    //! Set the wall velocity to a specified function of time, @f$ v(t) @f$.
     void setVelocity(Func1* f=0) {
         if (f) {
             m_vf = f;
@@ -118,17 +148,22 @@ public:
     //! Rate of volume change (m^3/s) for the adjacent reactors.
     /*!
      * The volume rate of change is given by
-     * \f[
+     * @f[
      *     \dot V = K A (P_{left} - P_{right}) + F(t)
-     * \f]
-     * where *K* is the specified expansion rate coefficient, *A* is the wall
-     * area, and *F(t)* is a specified function of time. Positive values for
-     * `vdot` correspond to increases in the volume of reactor on left, and
-     * decreases in the volume of the reactor on the right.
+     * @f]
+     * where *K* is the specified expansion rate coefficient, *A* is the wall area,
+     * and and *F(t)* is a specified function evaluated at the current network time.
+     * Positive values for `expansionRate` correspond to increases in the volume of
+     * reactor on left, and decreases in the volume of the reactor on the right.
+     * @since New in %Cantera 3.0.
      */
-    virtual double vdot(double t);
+    double expansionRate() override;
 
-    //! Specify the heat flux function \f$ q_0(t) \f$.
+    //! Heat flux function @f$ q_0(t) @f$ evaluated at current reactor network time.
+    //! @since New in %Cantera 3.0.
+    double heatFlux() const;
+
+    //! Specify the heat flux function @f$ q_0(t) @f$.
     void setHeatFlux(Func1* q) {
         m_qf = q;
     }
@@ -136,14 +171,15 @@ public:
     //! Heat flow rate through the wall (W).
     /*!
      * The heat flux is given by
-     * \f[
+     * @f[
      *     Q = h A (T_{left} - T_{right}) + A G(t)
-     * \f]
+     * @f]
      * where *h* is the heat transfer coefficient, *A* is the wall area, and
-     * *G(t)* is a specified function of time. Positive values denote a flux
-     * from left to right.
+     * *G(t)* is a specified function of time evaluated at the current network
+     * time. Positive values denote a flux from left to right.
+     * @since New in %Cantera 3.0.
      */
-    virtual double Q(double t);
+    double heatRate() override;
 
     void setThermalResistance(double Rth) {
         m_rrth = 1.0/Rth;
@@ -186,19 +222,19 @@ public:
 protected:
 
     //! expansion rate coefficient
-    double m_k;
+    double m_k = 0.0;
 
     //! heat transfer coefficient
-    double m_rrth;
+    double m_rrth = 0.0;
 
     //! emissivity
-    double m_emiss;
+    double m_emiss = 0.0;
 
     //! Velocity function
-    Func1* m_vf;
+    Func1* m_vf = nullptr;
 
     //! Heat flux function
-    Func1* m_qf;
+    Func1* m_qf = nullptr;
 };
 
 }

@@ -9,7 +9,8 @@
 #ifndef VCS_VOLPHASE_H
 #define VCS_VOLPHASE_H
 
-#include "cantera/equil/vcs_SpeciesProperties.h"
+#include "vcs_SpeciesProperties.h"
+#include "vcs_defs.h"
 #include "cantera/base/Array.h"
 
 namespace Cantera
@@ -50,7 +51,7 @@ class VCS_SOLVE;
  * contains structures that point to the species belonging to this phase in the
  * global vcs species list.
  *
- * This object is considered not to own the underlying Cantera ThermoPhase
+ * This object is considered not to own the underlying %Cantera ThermoPhase
  * object for the phase.
  *
  * This object contains an idea of the temperature and pressure. It checks to
@@ -246,12 +247,12 @@ public:
      */
     void setState_T(const double temperature_Kelvin);
 
-    // Downloads the ln ActCoeff Jacobian into the VCS version of the
-    // ln ActCoeff Jacobian.
-    /*
+    //! Downloads the ln ActCoeff Jacobian into the VCS version of the
+    //! ln ActCoeff Jacobian.
+    /**
      * This is essentially a scatter operation.
      *
-     * @param LnAcJac_VCS Jacobian parameter
+     * @param LnACJac_VCS Jacobian parameter
      *     The Jacobians are actually d( lnActCoeff) / d (MolNumber);
      *     dLnActCoeffdMolNumber(k,j)
      *
@@ -260,7 +261,7 @@ public:
      */
     void sendToVCS_LnActCoeffJac(Array2D& LnACJac_VCS);
 
-    //! Set the pointer for Cantera's ThermoPhase parameter
+    //! Set the pointer for %Cantera's ThermoPhase parameter
     /*!
      * When we first initialize the ThermoPhase object, we read the state of the
      * ThermoPhase into vcs_VolPhase object.
@@ -316,21 +317,22 @@ private:
 
 public:
     //! Return a const reference to the mole fractions stored in the object.
-    const vector_fp & moleFractions() const;
+    const vector<double> & moleFractions() const;
 
     double moleFraction(size_t klocal) const;
 
     //! Sets the creationMoleNum's within the phase object
     /*!
      * @param n_k Pointer to a vector of n_k's
+     * @param creationGlobalRxnNumbers  Vector of global creation reaction numbers
      */
-    void setCreationMoleNumbers(const double* const n_k, const std::vector<size_t> &creationGlobalRxnNumbers);
+    void setCreationMoleNumbers(const double* const n_k, const vector<size_t> &creationGlobalRxnNumbers);
 
     //! Return a const reference to the creationMoleNumbers stored in the object.
     /*!
      * @returns a const reference to the vector of creationMoleNumbers
      */
-    const vector_fp & creationMoleNumbers(std::vector<size_t> &creationGlobalRxnNumbers) const;
+    const vector<double> & creationMoleNumbers(vector<size_t> &creationGlobalRxnNumbers) const;
 
     //! Returns whether the phase is an ideal solution phase
     bool isIdealSoln() const;
@@ -395,9 +397,6 @@ public:
      * @param spIndex local species index (0 to the number of species
      *                in the phase)
      * @param spGlobalIndex  Global species index (across all phases)
-     *
-     * @returns the VCS_SOLVE species index of the that species This changes as
-     *         rearrangements are carried out.
      */
     void setSpGlobalIndexVCS(const size_t spIndex, const size_t spGlobalIndex);
 
@@ -424,13 +423,13 @@ public:
     //! Returns the number of element constraints
     size_t nElemConstraints() const;
 
-    //! Name of the element constraint with index \c e.
+    //! Name of the element constraint with index @c e.
     /*!
      * @param e Element index.
      */
-    std::string elementName(const size_t e) const;
+    string elementName(const size_t e) const;
 
-    //! Type of the element constraint with index \c e.
+    //! Type of the element constraint with index @c e.
     /*!
      * @param e Element index.
      */
@@ -470,7 +469,7 @@ public:
     size_t nSpecies() const;
 
     //! Return the name corresponding to the equation of state
-    std::string eos_name() const;
+    string eos_name() const;
 
 private:
     //! Evaluate the activity coefficients at the current conditions
@@ -527,7 +526,7 @@ private:
 
 private:
     //! Backtrack value of VCS_SOLVE *
-    VCS_SOLVE* m_owningSolverObject;
+    VCS_SOLVE* m_owningSolverObject = nullptr;
 
 public:
     //! Original ID of the phase in the problem.
@@ -535,23 +534,23 @@ public:
      * If a non-ideal phase splits into two due to a miscibility gap, these
      * numbers will stay the same after the split.
      */
-    size_t VP_ID_;
+    size_t VP_ID_ = npos;
 
     //! If true, this phase consists of a single species
-    bool m_singleSpecies;
+    bool m_singleSpecies = true;
 
     //! If true, this phase is a gas-phase like phase
     /*!
      * A RTlog(p/1atm) term is added onto the chemical potential for inert
      * species if this is true.
      */
-    bool m_gasPhase;
+    bool m_gasPhase = false;
 
     //! Type of the equation of state
     /*!
      * The known types are listed at the top of this file.
      */
-    int m_eqnState;
+    int m_eqnState = VCS_EOS_CONSTANT;
 
     //! This is the element number for the charge neutrality condition of the
     //! phase
@@ -559,7 +558,7 @@ public:
      *  If it has one.  If it does not have a charge neutrality
      * constraint, then this value is equal to -1
      */
-    size_t ChargeNeutralityElement;
+    size_t ChargeNeutralityElement = npos;
 
     //! Convention for the activity formulation
     /*!
@@ -567,24 +566,24 @@ public:
      *  * 1 = Molality based activities, mu = mu_0 + ln a_molality. Standard
      *    state is based on unity molality
      */
-    int p_activityConvention;
+    int p_activityConvention = 0;
 
 private:
     //! Number of element constraints within the problem
     /*!
      *  This is usually equal to the number of elements.
      */
-    size_t m_numElemConstraints;
+    size_t m_numElemConstraints = 0;
 
     //! vector of strings containing the element constraint names
     /*!
      * Length =  nElemConstraints
      */
-    std::vector<std::string> m_elementNames;
+    vector<string> m_elementNames;
 
     //! boolean indicating whether an element constraint is active
     //! for the current  problem
-    vector_int m_elementActive;
+    vector<int> m_elementActive;
 
     //! Type of the element constraint
     /*!
@@ -597,7 +596,7 @@ private:
      *   a species has neg 0 or pos value of that constraint (other than
      *   charge)
      */
-    vector_int m_elementType;
+    vector<int> m_elementType;
 
     //! Formula Matrix for the phase
     /*!
@@ -614,26 +613,26 @@ private:
      *  - metal electron -> VCS_SPECIES_INTERFACIALVOLTAGE.
      *    (unknown is the interfacial voltage (volts))
      */
-    vector_int m_speciesUnknownType;
+    vector<int> m_speciesUnknownType;
 
     //! Index of the element number in the global list of elements stored in VCS_SOLVE
-    std::vector<size_t> m_elemGlobalIndex;
+    vector<size_t> m_elemGlobalIndex;
 
     //! Number of species in the phase
-    size_t m_numSpecies;
+    size_t m_numSpecies = 0;
 
 public:
     //! String name for the phase
-    std::string PhaseName;
+    string PhaseName;
 
 private:
     //!  Total moles of inert in the phase
-    double m_totalMolesInert;
+    double m_totalMolesInert = 0.0;
 
     //! Boolean indicating whether the phase is an ideal solution
     //! and therefore its molar-based activity coefficients are
     //! uniformly equal to one.
-    bool m_isIdealSoln;
+    bool m_isIdealSoln = false;
 
     //! Current state of existence:
     /*!
@@ -649,7 +648,7 @@ private:
      *   because it consists of a single species, which is identified with the
      *   voltage, for example, its an electron metal phase.
      */
-    int m_existence;
+    int m_existence = VCS_PHASE_EXIST_NO;
 
     // Index of the first MF species in the list of unknowns for this phase
     /*!
@@ -659,7 +658,7 @@ private:
      *  to 0 for single species phases, where we set by hand the mole fraction
      *  of species 0 to one.
      */
-    int m_MFStartIndex;
+    int m_MFStartIndex = 0;
 
     //! Index into the species vectors
     /*!
@@ -667,31 +666,31 @@ private:
      *  Note, as part of the vcs algorithm, the order of the species
      *  vector is changed during the algorithm
      */
-    std::vector<size_t> IndSpecies;
+    vector<size_t> IndSpecies;
 
     //! Vector of Species structures for the species belonging to this phase
     /*!
      * The index into this vector is the species index within the phase.
      */
-    std::vector<vcs_SpeciesProperties*> ListSpeciesPtr;
+    vector<vcs_SpeciesProperties*> ListSpeciesPtr;
 
     /**
      *  If we are using Cantera, this is the pointer to the ThermoPhase
      *  object. If not, this is null.
      */
-    ThermoPhase* TP_ptr;
+    ThermoPhase* TP_ptr = nullptr;
 
     //!  Total mols in the phase. units are kmol
-    double v_totalMoles;
+    double v_totalMoles = 0.0;
 
     //! Vector of the current mole fractions for species in the phase
-    vector_fp Xmol_;
+    vector<double> Xmol_;
 
     //! Vector of current creationMoleNumbers_
     /*!
      *  These are the actual unknowns in the phase stability problem
      */
-    vector_fp creationMoleNumbers_;
+    vector<double> creationMoleNumbers_;
 
     //! Vector of creation global reaction numbers for the phase stability problem
     /*!
@@ -708,14 +707,14 @@ private:
      *
      * Length = number of species in phase
      */
-    std::vector<size_t> creationGlobalRxnNumbers_;
+    vector<size_t> creationGlobalRxnNumbers_;
 
     //! If the potential is a solution variable in VCS, it acts as a species.
     //! This is the species index in the phase for the potential
-    size_t m_phiVarIndex;
+    size_t m_phiVarIndex = npos;
 
     //! Total Volume of the phase. Units are m**3.
-    mutable double m_totalVol;
+    mutable double m_totalVol = 0.0;
 
     //! Vector of calculated SS0 chemical potentials for the
     //! current Temperature.
@@ -724,7 +723,7 @@ private:
      * in temperature. Pressure effects have to be added in to get to the
      * standard state. Units are J/kmol.
      */
-    mutable vector_fp SS0ChemicalPotential;
+    mutable vector<double> SS0ChemicalPotential;
 
     //! Vector of calculated Star chemical potentials for the
     //! current Temperature and pressure.
@@ -732,20 +731,20 @@ private:
      * Note, This is the chemical potential at unit activity. Thus, we can call
      * it the standard state chemical potential as well. Units are J/kmol.
      */
-    mutable vector_fp StarChemicalPotential;
+    mutable vector<double> StarChemicalPotential;
 
     //! Vector of the Star molar Volumes of the species. units  m3 / kmol
-    mutable vector_fp StarMolarVol;
+    mutable vector<double> StarMolarVol;
 
     //! Vector of the Partial molar Volumes of the species. units  m3 / kmol
-    mutable vector_fp PartialMolarVol;
+    mutable vector<double> PartialMolarVol;
 
     //! Vector of calculated activity coefficients for the current state
     /*!
      * Whether or not this vector is current is determined by the bool
      * #m_UpToDate_AC.
      */
-    mutable vector_fp ActCoeff;
+    mutable vector<double> ActCoeff;
 
     //! Vector of the derivatives of the ln activity coefficient wrt to the
     //! current mole number multiplied by the current phase moles
@@ -763,14 +762,14 @@ private:
      *  - VCS_STATECALC_NEW
      *  - VCS_STATECALC_TMP
      */
-    int m_vcsStateStatus;
+    int m_vcsStateStatus = VCS_STATECALC_OLD;
 
     //! Value of the potential for the phase (Volts)
-    double m_phi;
+    double m_phi = 0.0;
 
     //! Boolean indicating whether the object has an up-to-date mole number vector
     //! and potential with respect to the current vcs state calc status
-    bool m_UpToDate;
+    bool m_UpToDate = false;
 
     //! Boolean indicating whether activity coefficients are up to date.
     /*!
@@ -778,7 +777,7 @@ private:
      * called when they are needed (and when the state has changed so that they
      * need to be recalculated).
      */
-    mutable bool m_UpToDate_AC;
+    mutable bool m_UpToDate_AC = false;
 
     //! Boolean indicating whether Star volumes are up to date.
     /*!
@@ -787,7 +786,7 @@ private:
      * need to be recalculated). Star volumes are sensitive to temperature and
      * pressure
      */
-    mutable bool m_UpToDate_VolStar;
+    mutable bool m_UpToDate_VolStar = false;
 
     //! Boolean indicating whether partial molar volumes are up to date.
     /*!
@@ -796,25 +795,25 @@ private:
      * need to be recalculated). partial molar volumes are sensitive to
      * everything
      */
-    mutable bool m_UpToDate_VolPM;
+    mutable bool m_UpToDate_VolPM = false;
 
     //! Boolean indicating whether GStar is up to date.
     /*!
      * GStar is sensitive to the temperature and the pressure, only
      */
-    mutable bool m_UpToDate_GStar;
+    mutable bool m_UpToDate_GStar = false;
 
     //! Boolean indicating whether G0 is up to date.
     /*!
      * G0 is sensitive to the temperature and the pressure, only
      */
-    mutable bool m_UpToDate_G0;
+    mutable bool m_UpToDate_G0 = false;
 
     //! Current value of the temperature for this object, and underlying objects
-    double Temp_;
+    double Temp_ = 273.15;
 
     //! Current value of the pressure for this object, and underlying objects
-    double Pres_;
+    double Pres_ = OneAtm;
 };
 
 }

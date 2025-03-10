@@ -6,13 +6,14 @@
 // at https://cantera.org/license.txt for license and copyright information.
 
 #include "cantera/kinetics/KineticsFactory.h"
-#include "cantera/kinetics/GasKinetics.h"
+#include "cantera/kinetics/BulkKinetics.h"
 #include "cantera/kinetics/InterfaceKinetics.h"
 #include "cantera/kinetics/EdgeKinetics.h"
+#include "cantera/kinetics/Reaction.h"
 #include "cantera/thermo/ThermoPhase.h"
 #include "cantera/base/stringUtils.h"
-
-using namespace std;
+#include "cantera/base/Solution.h"
+#include <boost/algorithm/string.hpp>
 
 namespace Cantera
 {
@@ -22,17 +23,32 @@ std::mutex KineticsFactory::kinetics_mutex;
 
 KineticsFactory::KineticsFactory() {
     reg("none", []() { return new Kinetics(); });
-    addAlias("none", "Kinetics");
-    addAlias("none", "None");
-    reg("gas", []() { return new GasKinetics(); });
-    addAlias("gas", "gaskinetics");
-    addAlias("gas", "Gas");
+    addDeprecatedAlias("none", "Kinetics");
+    addDeprecatedAlias("none", "None");
+    reg("bulk", []() { return new BulkKinetics(); });
+    addAlias("bulk", "gas");
+    addDeprecatedAlias("bulk", "gaskinetics");
+    addDeprecatedAlias("bulk", "Gas");
     reg("surface", []() { return new InterfaceKinetics(); });
     addAlias("surface", "interface");
-    addAlias("surface", "Surf");
-    addAlias("surface", "surf");
+    addDeprecatedAlias("surface", "Surf");
+    addDeprecatedAlias("surface", "surf");
     reg("edge", []() { return new EdgeKinetics(); });
-    addAlias("edge", "Edge");
+    addDeprecatedAlias("edge", "Edge");
+}
+
+KineticsFactory* KineticsFactory::factory() {
+    std::unique_lock<std::mutex> lock(kinetics_mutex);
+    if (!s_factory) {
+        s_factory = new KineticsFactory;
+    }
+    return s_factory;
+}
+
+void KineticsFactory::deleteFactory() {
+    std::unique_lock<std::mutex> lock(kinetics_mutex);
+    delete s_factory;
+    s_factory = 0;
 }
 
 Kinetics* KineticsFactory::newKinetics(const string& model)
@@ -40,11 +56,18 @@ Kinetics* KineticsFactory::newKinetics(const string& model)
     return create(toLowerCopy(model));
 }
 
-unique_ptr<Kinetics> newKinetics(const vector<ThermoPhase*>& phases,
-                                 const AnyMap& phaseNode,
-                                 const AnyMap& rootNode)
+shared_ptr<Kinetics> newKinetics(const string& model)
 {
-    std::string kinType = phaseNode.getString("kinetics", "none");
+    shared_ptr<Kinetics> kin(KineticsFactory::factory()->newKinetics(model));
+    return kin;
+}
+
+shared_ptr<Kinetics> newKinetics(const vector<shared_ptr<ThermoPhase>>& phases,
+                                 const AnyMap& phaseNode,
+                                 const AnyMap& rootNode,
+                                 shared_ptr<Solution> soln)
+{
+    string kinType = phaseNode.getString("kinetics", "none");
     kinType = KineticsFactory::factory()->canonicalize(kinType);
     if (kinType == "none") {
         // determine phase with minimum number of dimensions
@@ -60,21 +83,24 @@ unique_ptr<Kinetics> newKinetics(const vector<ThermoPhase*>& phases,
         }
     }
 
-    unique_ptr<Kinetics> kin(KineticsFactory::factory()->newKinetics(kinType));
+    shared_ptr<Kinetics> kin(KineticsFactory::factory()->newKinetics(kinType));
+    if (soln) {
+        soln->setKinetics(kin);
+    }
     for (auto& phase : phases) {
-        kin->addPhase(*phase);
+        kin->addThermo(phase);
     }
     kin->init();
     addReactions(*kin, phaseNode, rootNode);
     return kin;
 }
 
-unique_ptr<Kinetics> newKinetics(const std::vector<ThermoPhase*>& phases,
-                                 const std::string& filename,
-                                 const std::string& phase_name)
+shared_ptr<Kinetics> newKinetics(const vector<shared_ptr<ThermoPhase>>& phases,
+                                 const string& filename)
 {
+    string reaction_phase = phases.at(0)->name();
     AnyMap root = AnyMap::fromYamlFile(filename);
-    AnyMap& phaseNode = root["phases"].getMapWhere("name", phase_name);
+    AnyMap& phaseNode = root["phases"].getMapWhere("name", reaction_phase);
     return newKinetics(phases, phaseNode, root);
 }
 
@@ -82,6 +108,8 @@ void addReactions(Kinetics& kin, const AnyMap& phaseNode, const AnyMap& rootNode
 {
     kin.skipUndeclaredThirdBodies(
         phaseNode.getBool("skip-undeclared-third-bodies", false));
+    kin.setExplicitThirdBodyDuplicateHandling(
+        phaseNode.getString("explicit-third-body-duplicates", "warn"));
 
     loadExtensions(rootNode);
 
@@ -115,7 +143,7 @@ void addReactions(Kinetics& kin, const AnyMap& phaseNode, const AnyMap& rootNode
                 rules.push_back(item.begin()->second.asString());
             }
         }
-    } else if (kin.kineticsType() != "None") {
+    } else if (kin.kineticsType() != "none") {
         if (!phaseNode.hasKey("kinetics")) {
             // Do nothing - default surface or edge kinetics require separate detection
             // while not adding reactions

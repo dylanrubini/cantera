@@ -110,11 +110,6 @@ cdef class Kinetics(_SolutionBase):
         def __get__(self):
             return self.kinetics.nPhases()
 
-    property reaction_phase_index:
-        """The index of the phase where the reactions occur."""
-        def __get__(self):
-            return self.kinetics.reactionPhaseIndex()
-
     def _check_phase_index(self, n):
         if not 0 <= n < self.n_phases:
             raise ValueError("Phase index ({0}) out of range".format(n))
@@ -176,12 +171,11 @@ cdef class Kinetics(_SolutionBase):
 
     def modify_reaction(self, int irxn, Reaction rxn):
         """
-        Modify the `Reaction` with index ``irxn`` to have the same rate
-        parameters as ``rxn``. ``rxn`` must have the same reactants and products
-        and be of the same type (for example, `ElementaryReaction`, `FalloffReaction`,
-        `PlogReaction`, etc.) as the existing reaction. This method does not
-        modify the third-body efficiencies, reaction orders, or reversibility of
-        the reaction.
+        Modify the `Reaction` with index ``irxn`` to have the same rate parameters as
+        ``rxn``. ``rxn`` must have the same reactants and products and use the same rate
+        parameterization (for example, `ArrheniusRate`, `FalloffRate`, `PlogRate`, etc.)
+        as the existing reaction. This method does not modify the third-body
+        efficiencies, reaction orders, or reversibility of the reaction.
         """
         self.kinetics.modifyReaction(irxn, rxn._reaction)
 
@@ -278,24 +272,6 @@ cdef class Kinetics(_SolutionBase):
             return get_from_sparse(self.kinetics.reactantStoichCoeffs(),
                                    self.n_total_species, self.n_reactions)
 
-    property reactant_stoich_coeffs3:
-        """
-        The array of reactant stoichiometric coefficients. Element ``[k,i]`` of
-        this array is the reactant stoichiometric coefficient of species ``k`` in
-        reaction ``i``.
-
-        For sparse output, set ``ct.use_sparse(True)``.
-
-        .. deprecated:: 3.0
-
-            Method to be removed after Cantera 3.0. Replaceable by
-            `Kinetics.reactant_stoich_coeffs`
-        """
-        def __get__(self):
-            warnings.warn("Method to be removed after Cantera 3.0; use property "
-                        "'reactant_stoich_coeffs' instead.", DeprecationWarning)
-            return self.reactant_stoich_coeffs
-
     property product_stoich_coeffs:
         """
         The array of product stoichiometric coefficients. Element ``[k,i]`` of
@@ -311,24 +287,6 @@ cdef class Kinetics(_SolutionBase):
         def __get__(self):
             return get_from_sparse(self.kinetics.productStoichCoeffs(),
                                    self.n_total_species, self.n_reactions)
-
-    property product_stoich_coeffs3:
-        """
-        The array of product stoichiometric coefficients. Element ``[k,i]`` of
-        this array is the product stoichiometric coefficient of species ``k`` in
-        reaction ``i``.
-
-        For sparse output, set ``ct.use_sparse(True)``.
-
-        .. deprecated:: 3.0
-
-            Method to be removed after Cantera 3.0. Replaceable by
-            `Kinetics.product_stoich_coeffs`
-        """
-        def __get__(self):
-            warnings.warn("Method to be removed after Cantera 3.0; use property "
-                        "'product_stoich_coeffs' instead.", DeprecationWarning)
-            return self.product_stoich_coeffs
 
     property product_stoich_coeffs_reversible:
         """
@@ -423,7 +381,7 @@ cdef class Kinetics(_SolutionBase):
         """
         Property setting behavior of derivative evaluation.
 
-        For ``GasKinetics``, the following keyword/value pairs are supported:
+        For :ct:`BulkKinetics`, the following keyword/value pairs are supported:
 
         -  ``skip-third-bodies`` (boolean) ... if `False` (default), third body
            concentrations are considered for the evaluation of derivatives
@@ -443,9 +401,9 @@ cdef class Kinetics(_SolutionBase):
         def __get__(self):
             cdef CxxAnyMap settings
             self.kinetics.getDerivativeSettings(settings)
-            return anymap_to_dict(settings)
+            return anymap_to_py(settings)
         def __set__(self, settings):
-            self.kinetics.setDerivativeSettings(dict_to_anymap(settings))
+            self.kinetics.setDerivativeSettings(py_to_anymap(settings))
 
     property forward_rate_constants_ddT:
         """
@@ -468,8 +426,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives for forward rate constants with respect to molar
         concentration at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_reaction_array(self, kin_getFwdRateConstants_ddC)
@@ -495,8 +455,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives for forward rates-of-progress with respect to molar
         concentration at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_reaction_array(self, kin_getFwdRatesOfProgress_ddC)
@@ -510,11 +472,34 @@ cdef class Kinetics(_SolutionBase):
         Note that for derivatives with respect to :math:`X_i`, all other :math:`X_j`
         are held constant, rather than enforcing :math:`\sum X_j = 1`.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.kinetics.fwdRatesOfProgress_ddX(),
+                                   self.n_reactions, self.n_total_species)
+
+    property forward_rates_of_progress_ddCi:
+        """
+        Calculate derivatives for forward rates-of-progress with respect to species
+        concentrations at constant temperature, pressure and remaining species
+        concentrations.
+        For sparse output, set ``ct.use_sparse(True)``.
+
+        Note that for derivatives with respect to :math:`c_i`, all other :math:`c_j`
+        are held constant.
+
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return get_from_sparse(self.kinetics.fwdRatesOfProgress_ddCi(),
                                    self.n_reactions, self.n_total_species)
 
     property reverse_rates_of_progress_ddT:
@@ -538,8 +523,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives for reverse rates-of-progress with respect to molar
         concentration at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_reaction_array(self, kin_getRevRatesOfProgress_ddC)
@@ -553,11 +540,34 @@ cdef class Kinetics(_SolutionBase):
         Note that for derivatives with respect to :math:`X_i`, all other :math:`X_j`
         are held constant, rather than enforcing :math:`\sum X_j = 1`.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.kinetics.revRatesOfProgress_ddX(),
+                                   self.n_reactions, self.n_total_species)
+
+    property reverse_rates_of_progress_ddCi:
+        """
+        Calculate derivatives for reverse rates-of-progress with respect to species
+        concentrations at constant temperature, pressure and remaining species
+        concentrations.
+        For sparse output, set ``ct.use_sparse(True)``.
+
+        Note that for derivatives with respect to :math:`c_i`, all other :math:`c_j`
+        are held constant.
+
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return get_from_sparse(self.kinetics.revRatesOfProgress_ddCi(),
                                    self.n_reactions, self.n_total_species)
 
     property net_rates_of_progress_ddT:
@@ -581,8 +591,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives for net rates-of-progress with respect to molar
         concentration at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_reaction_array(self, kin_getNetRatesOfProgress_ddC)
@@ -596,11 +608,33 @@ cdef class Kinetics(_SolutionBase):
         Note that for derivatives with respect to :math:`X_i`, all other :math:`X_j`
         are held constant, rather than enforcing :math:`\sum X_j = 1`.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.kinetics.netRatesOfProgress_ddX(),
+                                   self.n_reactions, self.n_total_species)
+
+    property net_rates_of_progress_ddCi:
+        """
+        Calculate derivatives for net rates-of-progress with respect to species
+        concentrations at constant temperature, pressure and remaining species
+        concentrations. For sparse output, set ``ct.use_sparse(True)``.
+
+        Note that for derivatives with respect to :math:`c_i`, all other :math:`c_j`
+        are held constant.
+
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return get_from_sparse(self.kinetics.netRatesOfProgress_ddCi(),
                                    self.n_reactions, self.n_total_species)
 
     property creation_rates_ddT:
@@ -624,8 +658,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives of species creation rates with respect to molar
         concentration at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_species_array(self, kin_getCreationRates_ddC)
@@ -639,11 +675,36 @@ cdef class Kinetics(_SolutionBase):
         Note that for derivatives with respect to :math:`X_i`, all other :math:`X_j`
         are held constant, rather than enforcing :math:`\sum X_j = 1`.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.kinetics.creationRates_ddX(),
+                                   self.n_total_species, self.n_total_species)
+
+    property creation_rates_ddCi:
+        """
+        Calculate derivatives for species creation rates with respect to species
+        concentration at constant temperature, pressure, and concentration of all other
+        species. For sparse output, set ``ct.use_sparse(True)``.
+
+        The method returns a matrix with `n_total_species` rows and `n_total_species`
+        columns.
+
+        For a derivative with respect to :math:`c_i`, all other :math:`c_i` are
+        held constant.
+
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return get_from_sparse(self.kinetics.creationRates_ddCi(),
                                    self.n_total_species, self.n_total_species)
 
     property destruction_rates_ddT:
@@ -667,8 +728,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives of species destruction rates with respect to molar
         concentration at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_species_array(self, kin_getDestructionRates_ddC)
@@ -682,11 +745,34 @@ cdef class Kinetics(_SolutionBase):
         Note that for derivatives with respect to :math:`X_i`, all other :math:`X_j`
         are held constant, rather than enforcing :math:`\sum X_j = 1`.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.kinetics.destructionRates_ddX(),
+                                   self.n_total_species, self.n_total_species)
+
+    property destruction_rates_ddCi:
+        """
+        Calculate derivatives for species destruction rates with respect to species
+        concentration at constant temperature, pressure, and concentration of all other
+        species. For sparse output, set ``ct.use_sparse(True)``.
+
+        The method returns a matrix with `n_total_species` rows and `n_total_species` columns.
+        For a derivative with respect to :math:`c_i`, all other :math:`c_i` are
+        held constant.
+
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return get_from_sparse(self.kinetics.destructionRates_ddCi(),
                                    self.n_total_species, self.n_total_species)
 
     property net_production_rates_ddT:
@@ -710,8 +796,10 @@ cdef class Kinetics(_SolutionBase):
         Calculate derivatives of species net production rates with respect to molar
         density at constant temperature, pressure and mole fractions.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_species_array(self, kin_getNetProductionRates_ddC)
@@ -725,11 +813,34 @@ cdef class Kinetics(_SolutionBase):
         Note that for derivatives with respect to :math:`X_i`, all other :math:`X_j`
         are held constant, rather than enforcing :math:`\sum X_j = 1`.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return get_from_sparse(self.kinetics.netProductionRates_ddX(),
+                                   self.n_total_species, self.n_total_species)
+
+    property net_production_rates_ddCi:
+        """
+        Calculate derivatives for species net production rates with respect to species
+        concentration at constant temperature, pressure, and concentration of all other
+        species. For sparse output, set ``ct.use_sparse(True)``.
+
+        The method returns a matrix with `n_total_species` rows and `n_total_species` columns.
+        For a derivative with respect to :math:`c_i`, all other :math:`c_i` are
+        held constant.
+
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+        .. versionadded:: 3.0
+        """
+        def __get__(self):
+            return get_from_sparse(self.kinetics.netProductionRates_ddCi(),
                                    self.n_total_species, self.n_total_species)
 
     property delta_enthalpy:
@@ -810,7 +921,7 @@ cdef class InterfaceKinetics(Kinetics):
         super().__init__(infile, name, *args, **kwargs)
         if not kwargs.get("init", True):
             return
-        if pystr(self.kinetics.kineticsType()) not in ("Surf", "Edge"):
+        if pystr(self.kinetics.kineticsType()) not in ("surface", "edge"):
             raise TypeError("Underlying Kinetics class is not of the correct type.")
         self._setup_phase_indices()
 

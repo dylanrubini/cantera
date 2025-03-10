@@ -14,3 +14,7 @@ class CsFunc(Func):
 
     is_handle_release_func: bool
     handle_class_name: str | None
+
+    def unsafe(self) -> bool:
+        """Identify pointers within argument lists."""
+        return any(p.p_type.endswith("*") for p in self.arglist)

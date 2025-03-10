@@ -26,17 +26,16 @@ public:
      * @param id     name (ID) of the phase in the input file. If empty, the
      *               first phase definition in the input file will be used.
      */
-    explicit RedlichKwongMFTP(const std::string& infile="",
-                              const std::string& id="");
+    explicit RedlichKwongMFTP(const string& infile="", const string& id="");
 
-    virtual std::string type() const {
-        return "RedlichKwong";
+    string type() const override {
+        return "Redlich-Kwong";
     }
 
     //! @name Molar Thermodynamic properties
     //! @{
-    virtual doublereal cp_mole() const;
-    virtual doublereal cv_mole() const;
+    double cp_mole() const override;
+    double cv_mole() const override;
     //! @}
     //! @name Mechanical Properties
     //! @{
@@ -45,33 +44,33 @@ public:
     /*!
      *  Since the mass density, temperature, and mass fractions are stored,
      *  this method uses these values to implement the
-     *  mechanical equation of state \f$ P(T, \rho, Y_1, \dots, Y_K) \f$.
+     *  mechanical equation of state @f$ P(T, \rho, Y_1, \dots, Y_K) @f$.
      *
-     * \f[
+     * @f[
      *    P = \frac{RT}{v-b_{mix}} - \frac{a_{mix}}{T^{0.5} v \left( v + b_{mix} \right) }
-     * \f]
+     * @f]
      */
-    virtual doublereal pressure() const;
+    double pressure() const override;
 
     //! @}
 
 public:
 
-    //! Returns the standard concentration \f$ C^0_k \f$, which is used to
+    //! Returns the standard concentration @f$ C^0_k @f$, which is used to
     //! normalize the generalized concentration.
     /*!
      * This is defined as the concentration by which the generalized
      * concentration is normalized to produce the activity. In many cases, this
      * quantity will be the same for all species in a phase. Since the activity
      * for an ideal gas mixture is simply the mole fraction, for an ideal gas
-     * \f$ C^0_k = P/\hat R T \f$.
+     * @f$ C^0_k = P/\hat R T @f$.
      *
      * @param k Optional parameter indicating the species. The default is to
      *          assume this refers to species 0.
      * @return
      *   Returns the standard Concentration in units of m3 kmol-1.
      */
-    virtual doublereal standardConcentration(size_t k=0) const;
+    double standardConcentration(size_t k=0) const override;
 
     //! Get the array of non-dimensional activity coefficients at the current
     //! solution temperature, pressure, and solution concentration.
@@ -82,33 +81,19 @@ public:
      *
      * @param ac Output vector of activity coefficients. Length: m_kk.
      */
-    virtual void getActivityCoefficients(doublereal* ac) const;
+    void getActivityCoefficients(double* ac) const override;
 
     //! @name  Partial Molar Properties of the Solution
     //! @{
 
-    //! Get the array of non-dimensional species chemical potentials.
-    //! These are partial molar Gibbs free energies.
-    /*!
-     * \f$ \mu_k / \hat R T \f$.
-     * Units: unitless
-     *
-     * We close the loop on this function, here, calling getChemPotentials() and
-     * then dividing by RT. No need for child classes to handle.
-     *
-     * @param mu    Output vector of non-dimensional species chemical potentials
-     *              Length: m_kk.
-     */
-    virtual void getChemPotentials_RT(doublereal* mu) const;
-
-    virtual void getChemPotentials(doublereal* mu) const;
-    virtual void getPartialMolarEnthalpies(doublereal* hbar) const;
-    virtual void getPartialMolarEntropies(doublereal* sbar) const;
-    virtual void getPartialMolarIntEnergies(doublereal* ubar) const;
-    virtual void getPartialMolarCp(double* cpbar) const {
+    void getChemPotentials(double* mu) const override;
+    void getPartialMolarEnthalpies(double* hbar) const override;
+    void getPartialMolarEntropies(double* sbar) const override;
+    void getPartialMolarIntEnergies(double* ubar) const override;
+    void getPartialMolarCp(double* cpbar) const override {
         throw NotImplementedError("RedlichKwongMFTP::getPartialMolarCp");
     }
-    virtual void getPartialMolarVolumes(doublereal* vbar) const;
+    void getPartialMolarVolumes(double* vbar) const override;
     //! @}
 
 public:
@@ -120,16 +105,15 @@ public:
     //! To see how they are used, see importPhase().
     //! @{
 
-    virtual bool addSpecies(shared_ptr<Species> spec);
-    virtual void initThermo();
-    virtual void getSpeciesParameters(const std::string& name,
-                                      AnyMap& speciesNode) const;
+    bool addSpecies(shared_ptr<Species> spec) override;
+    void initThermo() override;
+    void getSpeciesParameters(const string& name, AnyMap& speciesNode) const override;
 
     //! Set the pure fluid interaction parameters for a species
     /*!
      *  The "a" parameter for species *i* in the Redlich-Kwong model is assumed
      *  to be a linear function of temperature:
-     *  \f[ a = a_0 + a_1 T \f]
+     *  @f[ a = a_0 + a_1 T @f]
      *
      *  @param species   Name of the species
      *  @param a0        constant term in the expression for the "a" parameter
@@ -138,17 +122,16 @@ public:
      *      "a" parameter of the specified species [Pa-m^6/kmol^2/K]
      *  @param b         "b" parameter in the Redlich-Kwong model [m^3/kmol]
      */
-    void setSpeciesCoeffs(const std::string& species, double a0, double a1,
-                              double b);
+    void setSpeciesCoeffs(const string& species, double a0, double a1, double b);
 
     //! Set values for the interaction parameter between two species
     /*!
      *  The "a" parameter for interactions between species *i* and *j* is
      *  assumed by default to be computed as:
-     *  \f[ a_{ij} = \sqrt(a_{i,0} a_{j,0}) + \sqrt(a_{i,1} a_{j,1}) T \f]
+     *  @f[ a_{ij} = \sqrt(a_{i,0} a_{j,0}) + \sqrt(a_{i,1} a_{j,1}) T @f]
      *
      *  This function overrides the defaults with the specified parameters:
-     *  \f[ a_{ij} = a_{ij,0} + a_{ij,1} T \f]
+     *  @f[ a_{ij} = a_{ij,0} + a_{ij,1} T @f]
      *
      *  @param species_i   Name of one species
      *  @param species_j   Name of the other species
@@ -156,22 +139,26 @@ public:
      *  @param a1          temperature-proportional term in the "a" expression
      *      [Pa-m^6/kmol^2/K]
      */
-    void setBinaryCoeffs(const std::string& species_i,
-                         const std::string& species_j, double a0, double a1);
+    void setBinaryCoeffs(const string& species_i,
+                         const string& species_j, double a0, double a1);
     //! @}
 
 protected:
     // Special functions inherited from MixtureFugacityTP
-    virtual doublereal sresid() const;
-    virtual doublereal hresid() const;
+    double sresid() const override;
+    double hresid() const override;
 
 public:
-    virtual doublereal liquidVolEst(doublereal TKelvin, doublereal& pres) const;
-    virtual doublereal densityCalc(doublereal T, doublereal pressure, int phase, doublereal rhoguess);
+    double liquidVolEst(double TKelvin, double& pres) const override;
+    double densityCalc(double T, double pressure, int phase, double rhoguess) override;
 
-    virtual doublereal densSpinodalLiquid() const;
-    virtual doublereal densSpinodalGas() const;
-    virtual doublereal dpdVCalc(doublereal TKelvin, doublereal molarVol, doublereal& presCalc) const;
+    double densSpinodalLiquid() const override;
+    double densSpinodalGas() const override;
+    double dpdVCalc(double TKelvin, double molarVol, double& presCalc) const override;
+
+    double isothermalCompressibility() const override;
+    double thermalExpansionCoeff() const override;
+    double soundSpeed() const override;
 
     //! Calculate dpdV and dpdT at the current conditions
     /*!
@@ -185,7 +172,7 @@ public:
      *  temperature. This function updates the internal numbers based on the
      *  state of the object.
      */
-    virtual void updateMixingExpressions();
+    void updateMixingExpressions() override;
 
     //! Calculate the a and the b parameters given the temperature
     /*!
@@ -196,13 +183,13 @@ public:
      * @param aCalc (output)  Returns the a value
      * @param bCalc (output)  Returns the b value.
      */
-    void calculateAB(doublereal temp, doublereal& aCalc, doublereal& bCalc) const;
+    void calculateAB(double temp, double& aCalc, double& bCalc) const;
 
     // Special functions not inherited from MixtureFugacityTP
 
-    doublereal da_dt() const;
+    double da_dt() const;
 
-    void calcCriticalConditions(doublereal& pc, doublereal& tc, doublereal& vc) const;
+    void calcCriticalConditions(double& pc, double& tc, double& vc) const override;
 
     //! Prepare variables and call the function to solve the cubic equation of state
     int solveCubic(double T, double pres, double a, double b, double Vroot[3]) const;
@@ -213,75 +200,75 @@ protected:
      *  - 0 = There is no temperature parameterization of a or b
      *  - 1 = The a_ij parameter is a linear function of the temperature
      */
-    int m_formTempParam;
+    int m_formTempParam = 0;
 
     //! Value of b in the equation of state
     /*!
      *  m_b is a function of the temperature and the mole fraction.
      */
-    doublereal m_b_current;
+    double m_b_current = 0.0;
 
     //! Value of a in the equation of state
     /*!
      *  a_b is a function of the temperature and the mole fraction.
      */
-    doublereal m_a_current;
+    double m_a_current = 0.0;
 
-    vector_fp a_vec_Curr_;
-    vector_fp b_vec_Curr_;
+    vector<double> a_vec_Curr_;
+    vector<double> b_vec_Curr_;
 
     Array2D a_coeff_vec;
 
     //! Explicitly-specified binary interaction parameters
-    std::map<std::string, std::map<std::string, std::pair<double, double>>> m_binaryParameters;
+    map<string, map<string, pair<double, double>>> m_binaryParameters;
 
     enum class CoeffSource { EoS, CritProps, Database };
     //! For each species, specifies the source of the a and b coefficients
-    std::vector<CoeffSource> m_coeffSource;
+    vector<CoeffSource> m_coeffSource;
 
-    int NSolns_;
+    int NSolns_ = 0;
 
-    doublereal Vroot_[3];
+    double Vroot_[3] = {0.0, 0.0, 0.0};
 
     //! Temporary storage - length = m_kk.
-    mutable vector_fp m_pp;
+    mutable vector<double> m_pp;
 
     // Partial molar volumes of the species
-    mutable vector_fp m_partialMolarVolumes;
+    mutable vector<double> m_partialMolarVolumes;
 
     //! The derivative of the pressure wrt the volume
     /*!
      * Calculated at the current conditions. temperature and mole number kept
      * constant
      */
-    mutable doublereal dpdV_;
+    mutable double dpdV_ = 0.0;
 
     //! The derivative of the pressure wrt the temperature
     /*!
      *  Calculated at the current conditions. Total volume and mole number kept
      *  constant
      */
-    mutable doublereal dpdT_;
+    mutable double dpdT_ = 0.0;
 
     //! Vector of derivatives of pressure wrt mole number
     /*!
      *  Calculated at the current conditions. Total volume, temperature and
      *  other mole number kept constant
      */
-    mutable vector_fp dpdni_;
+    mutable vector<double> dpdni_;
 
 private:
     //! Omega constant for a -> value of a in terms of critical properties
     /*!
      *  this was calculated from a small nonlinear solve
      */
-    static const doublereal omega_a;
+    static const double omega_a;
 
     //! Omega constant for b
-    static const doublereal omega_b;
+    static const double omega_b;
 
     //! Omega constant for the critical molar volume
-    static const doublereal omega_vc;
+    static const double omega_vc;
 };
 }
 

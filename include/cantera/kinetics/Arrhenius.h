@@ -28,25 +28,17 @@ class AnyMap;
  */
 struct ArrheniusData : public ReactionData
 {
-    virtual bool update(const ThermoPhase& phase, const Kinetics& kin);
+    bool update(const ThermoPhase& phase, const Kinetics& kin) override;
     using ReactionData::update;
 };
 
-
-/**
- *  @defgroup arrheniusGroup  Arrhenius-type Parameterizations
- *
- *  This section describes the parameterizations used to describe the standard
- *  Arrhenius rate parameterization and derived models.
- *
- *  @ingroup chemkinetics
- */
 
 //! Base class for Arrhenius-type Parameterizations
 /*!
  * This base class provides a minimally functional interface that allows for parameter
  * access from derived classes as well as classes that use Arrhenius-type expressions
  * internally, for example FalloffRate and PlogRate.
+ * @ingroup arrheniusGroup
  */
 class ArrheniusBase : public ReactionRate
 {
@@ -64,20 +56,18 @@ public:
     ArrheniusBase(double A, double b, double Ea);
 
     //! Constructor based on AnyValue content
-    ArrheniusBase(const AnyValue& rate,
-                  const UnitSystem& units, const UnitStack& rate_units)
-    {
-        setRateParameters(rate, units, rate_units);
-    }
+    ArrheniusBase(const AnyValue& rate, const UnitSystem& units,
+                  const UnitStack& rate_units);
 
-    explicit ArrheniusBase(const AnyMap& node, const UnitStack& rate_units={})
-    {
-        setParameters(node, rate_units);
-    }
+    explicit ArrheniusBase(const AnyMap& node, const UnitStack& rate_units={});
 
     //! Perform object setup based on AnyValue node information
     /*!
-     *  @param rate  AnyValue containing rate information
+     *  Used to set parameters from a child of the reaction node, which may have
+     *  different names for different rate parameterizations, such as falloff rates.
+     *
+     *  @param rate  Child of the reaction node containing Arrhenius rate parameters.
+     *      For example, the `rate-coefficient` node for a standard Arrhenius reaction.
      *  @param units  Unit system
      *  @param rate_units  Unit definitions specific to rate information
      */
@@ -85,18 +75,18 @@ public:
                            const UnitSystem& units,
                            const UnitStack& rate_units);
 
-    //! Return parameters
+    //! Get Arrhenius parameters used to populate the `rate-coefficient` or
+    //! equivalent field
     void getRateParameters(AnyMap& node) const;
 
-    virtual void setParameters(
-        const AnyMap& node, const UnitStack& rate_units) override;
+    void setParameters(const AnyMap& node, const UnitStack& rate_units) override;
 
-    virtual void getParameters(AnyMap& node) const override;
+    void getParameters(AnyMap& node) const override;
 
     //! Check rate expression
-    virtual void check(const std::string& equation) override;
+    void check(const string& equation) override;
 
-    virtual void validate(const std::string& equation, const Kinetics& kin) override;
+    void validate(const string& equation, const Kinetics& kin) override;
 
     //! Return the pre-exponential factor *A* (in m, kmol, s to powers depending
     //! on the reaction order)
@@ -127,24 +117,18 @@ public:
         return m_Ea_R * GasConstant;
     }
 
-    // Return units of the reaction rate expression
-    const Units& rateUnits() const {
-        return m_rate_units;
-    }
-
     //! Return reaction order associated with the reaction rate
     double order() const {
         return m_order;
     }
 
     //! Set units of the reaction rate expression
-    void setRateUnits(const UnitStack& rate_units) {
+    void setRateUnits(const UnitStack& rate_units) override {
+        ReactionRate::setRateUnits(rate_units);
         if (rate_units.size() > 1) {
-            m_rate_units = rate_units.product();
-            m_order = 1 - m_rate_units.dimension("quantity");
+            m_order = 1 - rate_units.product().dimension("quantity");
         } else {
             m_order = NAN;
-            m_rate_units = rate_units.standardUnits();
         }
     }
 
@@ -166,20 +150,19 @@ protected:
     double m_E4_R = 0.; //!< Optional 4th energy parameter (in temperature units)
     double m_logA = NAN; //!< Logarithm of pre-exponential factor
     double m_order = NAN; //!< Reaction order
-    std::string m_A_str = "A"; //!< The string for the pre-exponential factor
-    std::string m_b_str = "b"; //!< The string for temperature exponent
-    std::string m_Ea_str = "Ea"; //!< The string for activation energy
-    std::string m_E4_str = ""; //!< The string for an optional 4th parameter
-    Units m_rate_units{0.}; //!< Reaction rate units
+    string m_A_str = "A"; //!< The string for the pre-exponential factor
+    string m_b_str = "b"; //!< The string for temperature exponent
+    string m_Ea_str = "Ea"; //!< The string for activation energy
+    string m_E4_str = ""; //!< The string for an optional 4th parameter
 };
 
 //! Arrhenius reaction rate type depends only on temperature
 /*!
  * A reaction rate coefficient of the following form.
  *
- *   \f[
+ *   @f[
  *        k_f =  A T^b \exp (-Ea/RT)
- *   \f]
+ *   @f]
  *
  * @ingroup arrheniusGroup
  */
@@ -189,10 +172,10 @@ public:
     using ArrheniusBase::ArrheniusBase; // inherit constructors
 
     unique_ptr<MultiRateBase> newMultiRate() const override {
-        return unique_ptr<MultiRateBase>(new MultiRate<ArrheniusRate, ArrheniusData>);
+        return make_unique<MultiRate<ArrheniusRate, ArrheniusData>>();
     }
 
-    virtual const std::string type() const override {
+    const string type() const override {
         return "Arrhenius";
     }
 

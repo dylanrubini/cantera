@@ -2,30 +2,19 @@
  *  @file Integrator.h
  */
 
-/**
- * @defgroup odeGroup ODE Integrators
- */
-
 // This file is part of Cantera. See License.txt in the top-level directory or
 // at https://cantera.org/license.txt for license and copyright information.
 
 #ifndef CT_INTEGRATOR_H
 #define CT_INTEGRATOR_H
 #include "FuncEval.h"
-#include "PreconditionerBase.h"
+#include "SystemJacobian.h"
 
 #include "cantera/base/global.h"
 #include "cantera/base/AnyMap.h"
 
 namespace Cantera
 {
-
-const int DIAG = 1;
-const int DENSE = 2;
-const int NOJAC = 4;
-const int JAC = 8;
-const int GMRES = 16;
-const int BAND = 32;
 
 /**
  * Specifies the method used to integrate the system of equations.
@@ -68,8 +57,8 @@ public:
      * @param n      Number of equations
      * @param abstol array of N absolute tolerance values
      */
-    virtual void setTolerances(doublereal reltol, size_t n,
-                               doublereal* abstol) {
+    virtual void setTolerances(double reltol, size_t n,
+                               double* abstol) {
         warn("setTolerances");
     }
 
@@ -78,7 +67,7 @@ public:
      * @param reltol scalar relative tolerance
      * @param abstol scalar absolute tolerance
      */
-    virtual void setTolerances(doublereal reltol, doublereal abstol) {
+    virtual void setTolerances(double reltol, double abstol) {
         warn("setTolerances");
     }
 
@@ -87,28 +76,14 @@ public:
      * @param reltol scalar relative tolerance
      * @param abstol scalar absolute tolerance
      */
-    virtual void setSensitivityTolerances(doublereal reltol, doublereal abstol)
+    virtual void setSensitivityTolerances(double reltol, double abstol)
     { }
-
-    //! Set the problem type.
-    /*!
-     * @param probtype    Type of the problem
-     *
-     * @deprecated This function is to be removed along with the integer constants used
-     * in conditionals to set the problem type currently. This includes DENSE, JAC,
-     * NOJAC, BAND, and DIAG
-     */
-    virtual void setProblemType(int probtype) {
-        warn_deprecated("Integrator::setProblemType()",
-            "To be removed. Set linear solver type with setLinearSolverType");
-        warn("setProblemType");
-    }
 
     //! Set the linear solver type.
     /*!
      * @param linSolverType    Type of the linear solver
      */
-    virtual void setLinearSolverType(const std::string& linSolverType) {
+    virtual void setLinearSolverType(const string& linSolverType) {
         warn("setLinearSolverType");
     }
 
@@ -116,7 +91,7 @@ public:
     /*!
      * @param preconditioner preconditioner object used for the linear solver
      */
-    virtual void setPreconditioner(shared_ptr<PreconditionerBase> preconditioner) {
+    virtual void setPreconditioner(shared_ptr<SystemJacobian> preconditioner) {
         m_preconditioner = preconditioner;
         if (preconditioner->preconditionerSide() == "none") {
             m_prec_side = PreconditionerSide::NO_PRECONDITION;
@@ -148,12 +123,12 @@ public:
     }
 
     //! Return preconditioner reference to object
-    virtual shared_ptr<PreconditionerBase> preconditioner() {
+    virtual shared_ptr<SystemJacobian> preconditioner() {
         return m_preconditioner;
     }
 
     //! Return the integrator problem type
-    virtual std::string linearSolverType() const {
+    virtual string linearSolverType() const {
         warn("linearSolverType");
         return "";
     }
@@ -164,11 +139,11 @@ public:
      * @param t0   initial time
      * @param func RHS evaluator object for system of equations.
      */
-    virtual void initialize(doublereal t0, FuncEval& func) {
+    virtual void initialize(double t0, FuncEval& func) {
         warn("initialize");
     }
 
-    virtual void reinitialize(doublereal t0, FuncEval& func) {
+    virtual void reinitialize(double t0, FuncEval& func) {
         warn("reinitialize");
     }
 
@@ -177,7 +152,7 @@ public:
      * @param tout Integrate to this time. Note that this is the
      *             absolute time value, not a time interval.
      */
-    virtual void integrate(doublereal tout) {
+    virtual void integrate(double tout) {
         warn("integrate");
     }
 
@@ -186,19 +161,19 @@ public:
      * @param tout integrate to this time. Note that this is the
      * absolute time value, not a time interval.
      */
-    virtual doublereal step(doublereal tout) {
+    virtual double step(double tout) {
         warn("step");
         return 0.0;
     }
 
     //! The current value of the solution of equation k.
-    virtual doublereal& solution(size_t k) {
+    virtual double& solution(size_t k) {
         warn("solution");
         return m_dummy;
     }
 
     //! The current value of the solution of the system of equations.
-    virtual doublereal* solution() {
+    virtual double* solution() {
         warn("solution");
         return 0;
     }
@@ -224,6 +199,11 @@ public:
     //! The number of function evaluations.
     virtual int nEvals() const {
         warn("nEvals");
+        return 0;
+    }
+
+    virtual int maxOrder() const {
+        warn("maxOrder");
         return 0;
     }
 
@@ -288,24 +268,53 @@ public:
         return stats;
     }
 
+    virtual int maxNonlinIterations() const {
+        warn("maxNonlinIterations");
+        return 0;
+    }
+    virtual void setMaxNonlinIterations(int n) {
+        warn("setMaxNonlinIterations");
+    }
+
+    virtual int maxNonlinConvFailures() const {
+        warn("maxNonlinConvFailures");
+        return 0;
+    }
+    virtual void setMaxNonlinConvFailures(int n) {
+        warn("setMaxNonlinConvFailures");
+    }
+
+    virtual bool algebraicInErrorTest() const {
+        warn("algebraicInErrorTest");
+        return true;
+    }
+    virtual void includeAlgebraicInErrorTest(bool yesno) {
+        warn("includeAlgebraicInErrorTest");
+    }
+
 protected:
     //! Pointer to preconditioner object used in integration which is
     //! set by setPreconditioner and initialized inside of
     //! ReactorNet::initialize()
-    shared_ptr<PreconditionerBase> m_preconditioner;
+    shared_ptr<SystemJacobian> m_preconditioner;
     //! Type of preconditioning used in applyOptions
     PreconditionerSide m_prec_side = PreconditionerSide::NO_PRECONDITION;
+    // methods for DAE solvers
 
 private:
-    doublereal m_dummy;
-    void warn(const std::string& msg) const {
+    double m_dummy;
+    void warn(const string& msg) const {
         writelog(">>>> Warning: method "+msg+" of base class "
                  +"Integrator called. Nothing done.\n");
     }
 };
 
-// defined in ODE_integrators.cpp
-Integrator* newIntegrator(const std::string& itype);
+// defined in Integrators.cpp
+
+//! Create new Integrator object
+//! @param itype Integration mode; either @c CVODE or @c IDA
+//! @ingroup odeGroup
+Integrator* newIntegrator(const string& itype);
 
 } // namespace
 

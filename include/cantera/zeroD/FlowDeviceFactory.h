@@ -17,32 +17,14 @@ namespace Cantera
 //! This class is mainly used via the newFlowDevice() function, for example:
 //!
 //! ```cpp
-//!     unique_ptr<FlowDevice> mfc(newFlowDevice("MassFlowController"));
+//!     shared_ptr<FlowDevice> mfc = newFlowDevice("MassFlowController");
 //! ```
-//!
-//! @ingroup ZeroD
-class FlowDeviceFactory : public Factory<FlowDevice>
+class FlowDeviceFactory : public Factory<FlowDevice, const string&>
 {
 public:
-    static FlowDeviceFactory* factory() {
-        std::unique_lock<std::mutex> lock(flowDevice_mutex);
-        if (!s_factory) {
-            s_factory = new FlowDeviceFactory;
-        }
-        return s_factory;
-    }
+    static FlowDeviceFactory* factory();
 
-    virtual void deleteFactory() {
-        std::unique_lock<std::mutex> lock(flowDevice_mutex);
-        delete s_factory;
-        s_factory = 0;
-    }
-
-    //! Create a new flow device by type name.
-    /*!
-     * @param flowDeviceType the type to be created.
-     */
-    virtual FlowDevice* newFlowDevice(const std::string& flowDeviceType);
+    void deleteFactory() override;
 
 private:
     static FlowDeviceFactory* s_factory;
@@ -50,13 +32,22 @@ private:
     FlowDeviceFactory();
 };
 
-//! Create a FlowDevice object of the specified type
-//! @ingroup ZeroD
-inline FlowDevice* newFlowDevice(const std::string& model)
-{
-    return FlowDeviceFactory::factory()->newFlowDevice(model);
-}
+//! @defgroup flowDeviceGroup Flow Devices
+//! Flow device objects connect zero-dimensional reactors.
+//! FlowDevice objects should be instantiated via the newFlowDevice function, for
+//! example:
+//!
+//! ```cpp
+//!     shared_ptr<FlowDevice> mfc = newFlowDevice("MassFlowController", "my_mfc");
+//! ```
+//! @ingroup zerodGroup
+//! @{
 
+//! Create a FlowDevice object of the specified type
+//! @since Starting in %Cantera 3.1, this method returns a `shared_ptr<FlowDevice>`
+shared_ptr<FlowDevice> newFlowDevice(const string& model, const string& name="(none)");
+
+//! @}
 }
 
 #endif

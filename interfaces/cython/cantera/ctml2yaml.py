@@ -21,35 +21,26 @@ from email.utils import formatdate
 import warnings
 import copy
 
-from typing import Any, Dict, Union, Iterable, Optional, List, Tuple
+from typing import Any, Dict, Union, Iterable, Optional, List, Tuple, TypedDict
 from typing import TYPE_CHECKING
 
 import numpy as np
-
-try:
-    from ruamel import yaml
-except ImportError:
-    import ruamel_yaml as yaml  # type: ignore
+from ruamel import yaml
 
 # yaml.version_info is a tuple with the three parts of the version
 yaml_version = yaml.version_info
-# We choose ruamel.yaml 0.15.34 as the minimum version
-# since it is the highest version available in the Ubuntu
-# 18.04 repositories and seems to work. Older versions such as
-# 0.13.14 on CentOS7 and 0.10.23 on Ubuntu 16.04 raise an exception
-# that they are missing the RoundTripRepresenter
-yaml_min_version = (0, 15, 34)
+# We choose ruamel.yaml 0.17.16 as the minimum version since it is the highest version
+# available in the Ubuntu 22.04 repositories.
+yaml_min_version = (0, 17, 16)
 if yaml_version < yaml_min_version:
     raise RuntimeError(
-        "The minimum supported version of ruamel.yaml is 0.15.34. If you "
+        "The minimum supported version of ruamel.yaml is 0.17.16. If you "
         "installed ruamel.yaml from your operating system's package manager, "
         "please install an updated version using pip or conda."
     )
 
-if TYPE_CHECKING:
-    # This is available in the built-in typing module in Python 3.8
-    from typing_extensions import TypedDict
 
+if TYPE_CHECKING:
     QUANTITY = Union[float, str]
 
     RK_EOS_DICT = TypedDict(
@@ -163,24 +154,15 @@ class MissingNodeText(LookupError):
         super().__init__(message)
 
 
-# Improved float formatting requires Numpy >= 1.14
-HAS_FMT_FLT_POS = hasattr(np, "format_float_positional")
-
-
 def float2string(data: float) -> str:
     """Format a float into a string.
 
     :param data: The floating point data to be formatted.
 
-    Uses *NumPy*'s ``format_float_positional()`` and ``format_float_scientific()`` if
-    they are is available, requires ``numpy >= 1.14``. In that case, values with
-    magnitude between 0.01 and 10000 are formatted using ``format_float_positional ()``
-    and other values are formatted using ``format_float_scientific()``. If those *NumPy*
-    functions are not available, returns the ``repr`` of the input.
+    Values with magnitude between 0.01 and 10000 are formatted using
+    ``format_float_positional()`` and other values are formatted using
+    ``format_float_scientific()``.
     """
-    if not HAS_FMT_FLT_POS:
-        return repr(data)
-
     if data == 0:
         return "0.0"
     elif 0.01 <= abs(data) < 10000:
@@ -253,8 +235,7 @@ def split_species_value_string(node: etree.Element) -> Dict[str, float]:
     values are the number associated with each species. This is useful for things like
     elemental composition, mole fraction mappings, coverage mappings, etc.
 
-    The algorithm is reimplemented from ``compositionMap::parseCompString`` in
-    ``base/stringUtils.cpp``.
+    The algorithm is reimplemented from :ct:`parseCompString`.
     """
     text = clean_node_text(node)
     pairs = FlowMap({})
@@ -2641,7 +2622,7 @@ def convert(
     metadata = BlockMap(
         {
             "generator": "ctml2yaml",
-            "cantera-version": "3.0.0a3",
+            "cantera-version": "3.2.0a1",
             "date": formatdate(localtime=True),
         }
     )
@@ -2656,8 +2637,10 @@ def convert(
             emitter.dump(output_reactions, output_file)
 
 
-def main():
-    """Parse command line arguments and pass them to `convert`."""
+def create_argparser():
+    """
+    Create argparse parser
+    """
     parser = argparse.ArgumentParser(
         description="Convert legacy CTML input files to YAML format",
         epilog=(
@@ -2668,6 +2651,13 @@ def main():
     )
     parser.add_argument("input", help="The input CTML filename. Must be specified.")
     parser.add_argument("output", nargs="?", help="The output YAML filename. Optional.")
+
+    return parser
+
+
+def main():
+    """Parse command line arguments and pass them to `convert`."""
+    parser = create_argparser()
     if len(sys.argv) not in [2, 3]:
         if len(sys.argv) > 3:
             print(

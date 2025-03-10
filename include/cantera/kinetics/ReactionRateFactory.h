@@ -1,7 +1,7 @@
 /**
  *  @file ReactionRateFactory.h
  *  Factory class for reaction rate objects. Used by classes that implement kinetics
- *  (see \ref reactionGroup and class \link Cantera::ReactionRate ReactionRate\endlink).
+ *  (see @ref reactionGroup and class @link Cantera::ReactionRate ReactionRate@endlink).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -20,14 +20,38 @@ class Kinetics;
 class Units;
 
 /**
+ * @defgroup arrheniusGroup Arrhenius-type Parameterizations
+ * Classes implementing the standard Arrhenius rate parameterization and derived models.
+ * @ingroup reactionGroup
+ */
+
+/**
+ * @defgroup falloffGroup Falloff Parameterizations
+ * Classes implementing fall-off in reaction rate constants due to intermolecular energy
+ * transfer and derived models.
+ * @ingroup reactionGroup
+ */
+
+/**
+ * @defgroup surfaceGroup Interface Rate Parameterizations
+ * Classes implementing reaction rates that involve interfaces.
+ * @ingroup reactionGroup
+ */
+
+/**
+ * @defgroup otherRateGroup Other Reaction Rate Parameterizations
+ * Classes implementing other reaction rate parameterizations.
+ * @ingroup reactionGroup
+ */
+
+
+/**
  * Factory class to construct reaction rate calculators.
  * The reaction factory is accessed through the static method factory:
  *
  * @code
  * Rate* f = ReactionRateFactory::factory()->newReactionRate(type, c)
  * @endcode
- *
- * @ingroup reactionGroup
  */
 class ReactionRateFactory
     : public Factory<ReactionRate, const AnyMap&, const UnitStack&>
@@ -38,19 +62,9 @@ public:
      * created. Since there is no need to instantiate more than one factory,
      * on all subsequent calls, a pointer to the existing factory is returned.
      */
-    static ReactionRateFactory* factory() {
-        std::unique_lock<std::mutex> lock(rate_mutex);
-        if (!s_factory) {
-            s_factory = new ReactionRateFactory;
-        }
-        return s_factory;
-    }
+    static ReactionRateFactory* factory();
 
-    virtual void deleteFactory() {
-        std::unique_lock<std::mutex> lock(rate_mutex);
-        delete s_factory;
-        s_factory = 0;
-    }
+    void deleteFactory() override;
 
 private:
     //! Pointer to the single instance of the factory
@@ -63,12 +77,14 @@ private:
     static std::mutex rate_mutex;
 };
 
+//! @addtogroup reactionGroup
+//! @{
 
 //! Create a new empty ReactionRate object
 /*!
  * @param type string identifying type of reaction rate.
  */
-shared_ptr<ReactionRate> newReactionRate(const std::string& type);
+shared_ptr<ReactionRate> newReactionRate(const string& type);
 
 //! Create a new Rate object using the specified parameters
 /*!
@@ -84,6 +100,8 @@ shared_ptr<ReactionRate> newReactionRate(
  * @param rate_node AnyMap node describing reaction rate.
  */
 shared_ptr<ReactionRate> newReactionRate(const AnyMap& rate_node);
+
+//! @}
 
 }
 #endif

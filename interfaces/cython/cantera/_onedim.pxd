@@ -9,6 +9,13 @@ from .solutionbase cimport *
 from .kinetics cimport *
 from .func1 cimport *
 from .thermo cimport *
+from .jacobians cimport *
+
+
+cdef extern from "cantera/oneD/DomainFactory.h" namespace "Cantera":
+    cdef shared_ptr[CxxDomain1D] CxxNewDomain1D "newDomain" (
+        string, shared_ptr[CxxSolution], string) except +translate_exception
+
 
 cdef extern from "cantera/oneD/Domain1D.h":
     cdef cppclass CxxDomain1D "Cantera::Domain1D":
@@ -30,14 +37,17 @@ cdef extern from "cantera/oneD/Domain1D.h":
         double steady_atol(size_t)
         double transient_rtol(size_t)
         double transient_atol(size_t)
-        double grid(size_t)
+        double z(size_t)
         void setupGrid(size_t, double*) except +translate_exception
         void setID(string)
         string& id()
+        string domainType "type"()
+        shared_ptr[CxxSolutionArray] toArray(cbool) except +translate_exception
+        void fromArray(shared_ptr[CxxSolutionArray]) except +translate_exception
 
 
 cdef extern from "cantera/oneD/Boundary1D.h":
-    cdef cppclass CxxBoundary1D "Cantera::Boundary1D":
+    cdef cppclass CxxBoundary1D "Cantera::Boundary1D" (CxxDomain1D):
         double temperature()
         void setTemperature(double)
         double mdot()
@@ -46,37 +56,19 @@ cdef extern from "cantera/oneD/Boundary1D.h":
         void setMoleFractions(double*) except +translate_exception
         void setMoleFractions(string) except +translate_exception
         double massFraction(size_t)
-
-    cdef cppclass CxxInlet1D "Cantera::Inlet1D":
-        CxxInlet1D(shared_ptr[CxxSolution])
         double spreadRate()
         void setSpreadRate(double)
 
-    cdef cppclass CxxOutlet1D "Cantera::Outlet1D":
-        CxxOutlet1D(shared_ptr[CxxSolution])
-
-    cdef cppclass CxxOutletRes1D "Cantera::OutletRes1D":
-        CxxOutletRes1D(shared_ptr[CxxSolution])
-
-    cdef cppclass CxxSymm1D "Cantera::Symm1D":
-        CxxSymm1D(shared_ptr[CxxSolution])
-
-    cdef cppclass CxxSurf1D "Cantera::Surf1D":
-        CxxSurf1D(shared_ptr[CxxSolution])
-
-    cdef cppclass CxxReactingSurf1D "Cantera::ReactingSurf1D":
-        CxxReactingSurf1D() # deprecated in Python API (Cantera 3.0)
-        CxxReactingSurf1D(shared_ptr[CxxSolution]) except +translate_exception
-        void setKineticsMgr(CxxInterfaceKinetics*) except +translate_exception
+    cdef cppclass CxxReactingSurf1D "Cantera::ReactingSurf1D" (CxxBoundary1D):
+        CxxReactingSurf1D()
         void enableCoverageEquations(cbool) except +translate_exception
         cbool coverageEnabled()
 
 
-cdef extern from "cantera/oneD/StFlow.h":
-    cdef cppclass CxxStFlow "Cantera::StFlow":
-        CxxStFlow(shared_ptr[CxxSolution], int, int) except +translate_exception
+cdef extern from "cantera/oneD/Flow1D.h":
+    cdef cppclass CxxFlow1D "Cantera::Flow1D" (CxxDomain1D):
         void setTransportModel(const string&) except +translate_exception
-        void setTransport(CxxTransport&) except +translate_exception
+        string type()
         string transportModel()
         void setPressure(double)
         void enableRadiation(cbool)
@@ -84,6 +76,11 @@ cdef extern from "cantera/oneD/StFlow.h":
         double radiativeHeatLoss(size_t)
         double pressure()
         void setFixedTempProfile(vector[double]&, vector[double]&)
+        size_t getSolvingStage() except +translate_exception
+        void setSolvingStage(size_t) except +translate_exception
+        void solveElectricField() except +translate_exception
+        void fixElectricField() except +translate_exception
+        cbool doElectricField(size_t) except +translate_exception
         void setBoundaryEmissivities(double, double)
         double leftEmissivity()
         double rightEmissivity()
@@ -92,39 +89,41 @@ cdef extern from "cantera/oneD/StFlow.h":
         cbool doEnergy(size_t)
         void enableSoret(cbool) except +translate_exception
         cbool withSoret()
+        void setFluxGradientBasis(ThermoBasis) except +translate_exception
+        ThermoBasis fluxGradientBasis()
         void setFreeFlow()
         void setAxisymmetricFlow()
-        string flowType()
-
-
-cdef extern from "cantera/oneD/IonFlow.h":
-    cdef cppclass CxxIonFlow "Cantera::IonFlow":
-        CxxIonFlow(shared_ptr[CxxSolution], int, int) except +translate_exception
-        void setSolvingStage(int)
-        void solveElectricField()
-        void fixElectricField()
-        cbool doElectricField(size_t)
+        void enableTwoPointControl(cbool) except +translate_exception
+        cbool twoPointControlEnabled()
+        double leftControlPointTemperature() except +translate_exception
+        double leftControlPointCoordinate() except +translate_exception
+        void setLeftControlPointTemperature(double) except +translate_exception
+        double rightControlPointTemperature() except +translate_exception
+        double rightControlPointCoordinate() except +translate_exception
+        void setRightControlPointTemperature(double) except +translate_exception
 
 
 cdef extern from "cantera/oneD/Sim1D.h":
     cdef cppclass CxxSim1D "Cantera::Sim1D":
-        CxxSim1D(vector[CxxDomain1D*]&) except +translate_exception
+        CxxSim1D(vector[shared_ptr[CxxDomain1D]]&) except +translate_exception
         void setValue(size_t, size_t, size_t, double) except +translate_exception
         void setProfile(size_t, size_t, vector[double]&, vector[double]&) except +translate_exception
         void setFlatProfile(size_t, size_t, double) except +translate_exception
-        void showSolution() except +translate_exception
+        void show() except +translate_exception
         void setTimeStep(double, size_t, int*) except +translate_exception
         void restoreTimeSteppingSolution() except +translate_exception
         void restoreSteadySolution() except +translate_exception
         void setMaxTimeStepCount(int)
         int maxTimeStepCount()
+        void setLinearSolver(shared_ptr[CxxSystemJacobian]) except +translate_exception
+        shared_ptr[CxxSystemJacobian] linearSolver()
         void getInitialSoln() except +translate_exception
         void solve(int, cbool) except +translate_exception
         void refine(int) except +translate_exception
         void setRefineCriteria(size_t, double, double, double, double) except +translate_exception
         vector[double] getRefineCriteria(int) except +translate_exception
-        void save(string, string, string, int) except +translate_exception
-        void restore(string, string, int) except +translate_exception
+        void save(string&, string&, string&, cbool, int, string&) except +translate_exception
+        CxxAnyMap restore(string&, string&) except +translate_exception
         void writeStats(int) except +translate_exception
         void clearStats()
         void resize() except +translate_exception
@@ -155,6 +154,10 @@ cdef extern from "cantera/oneD/Sim1D.h":
         void setInterrupt(CxxFunc1*) except +translate_exception
         void setTimeStepCallback(CxxFunc1*)
         void setSteadyCallback(CxxFunc1*)
+        void setLeftControlPoint(double) except +translate_exception
+        void setRightControlPoint(double) except +translate_exception
+
+        void setJacobianPerturbation(double, double, double)
 
 
 cdef extern from "cantera/thermo/IdealGasPhase.h":
@@ -162,47 +165,20 @@ cdef extern from "cantera/thermo/IdealGasPhase.h":
 
 
 cdef class Domain1D:
+    cdef shared_ptr[CxxDomain1D] _domain
     cdef CxxDomain1D* domain
     cdef _SolutionBase gas
-    cdef object _weakref_proxy
     cdef public pybool have_user_tolerances
 
 cdef class Boundary1D(Domain1D):
     cdef CxxBoundary1D* boundary
 
-cdef class Inlet1D(Boundary1D):
-    cdef CxxInlet1D* inlet
-
-cdef class Outlet1D(Boundary1D):
-    cdef CxxOutlet1D* outlet
-
-cdef class OutletReservoir1D(Boundary1D):
-    cdef CxxOutletRes1D* outlet
-
-cdef class SymmetryPlane1D(Boundary1D):
-    cdef CxxSymm1D* symm
-
-cdef class Surface1D(Boundary1D):
-    cdef CxxSurf1D* surf
-
 cdef class ReactingSurface1D(Boundary1D):
     cdef CxxReactingSurf1D* surf
     cdef public Kinetics surface
 
-cdef class _FlowBase(Domain1D):
-    cdef CxxStFlow* flow
-
-cdef class IdealGasFlow(_FlowBase):
-    pass
-
-cdef class FreeFlow(IdealGasFlow):
-    pass
-
-cdef class IonFlow(_FlowBase):
-    pass
-
-cdef class AxisymmetricStagnationFlow(IdealGasFlow):
-    pass
+cdef class FlowBase(Domain1D):
+    cdef CxxFlow1D* flow
 
 cdef class Sim1D:
     cdef CxxSim1D* sim

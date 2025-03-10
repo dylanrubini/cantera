@@ -10,20 +10,18 @@
 #include "cantera/thermo/ThermoPhase.h"
 #include "cantera/base/utilities.h"
 
-using namespace std;
-
 namespace Cantera
 {
 
-void IdealGasReactor::setThermoMgr(ThermoPhase& thermo)
+void IdealGasReactor::setThermo(ThermoPhase& thermo)
 {
     //! @todo: Add a method to ThermoPhase that indicates whether a given
     //! subclass is compatible with this reactor model
-    if (thermo.type() != "IdealGas") {
-        throw CanteraError("IdealGasReactor::setThermoMgr",
+    if (thermo.type() != "ideal-gas") {
+        throw CanteraError("IdealGasReactor::setThermo",
                            "Incompatible phase type provided");
     }
-    Reactor::setThermoMgr(thermo);
+    Reactor::setThermo(thermo);
 }
 
 void IdealGasReactor::getState(double* y)
@@ -52,13 +50,13 @@ void IdealGasReactor::getState(double* y)
     getSurfaceInitialConditions(y + m_nsp + 3);
 }
 
-void IdealGasReactor::initialize(doublereal t0)
+void IdealGasReactor::initialize(double t0)
 {
     Reactor::initialize(t0);
     m_uk.resize(m_nsp, 0.0);
 }
 
-void IdealGasReactor::updateState(doublereal* y)
+void IdealGasReactor::updateState(double* y)
 {
     // The components of y are [0] the total mass, [1] the total volume,
     // [2] the temperature, [3...K+3] are the mass fractions of each species,
@@ -66,7 +64,7 @@ void IdealGasReactor::updateState(doublereal* y)
     m_mass = y[0];
     m_vol = y[1];
     m_thermo->setMassFractions_NoNorm(y+3);
-    m_thermo->setState_TR(y[2], m_mass / m_vol);
+    m_thermo->setState_TD(y[2], m_mass / m_vol);
     updateConnected(true);
     updateSurfaceState(y + m_nsp + 3);
 }
@@ -80,8 +78,8 @@ void IdealGasReactor::eval(double time, double* LHS, double* RHS)
     evalWalls(time);
     m_thermo->restoreState(m_state);
     m_thermo->getPartialMolarIntEnergies(&m_uk[0]);
-    const vector_fp& mw = m_thermo->molecularWeights();
-    const doublereal* Y = m_thermo->massFractions();
+    const vector<double>& mw = m_thermo->molecularWeights();
+    const double* Y = m_thermo->massFractions();
 
     if (m_chem) {
         m_kin->getNetProductionRates(&m_wdot[0]); // "omega dot"
@@ -153,7 +151,7 @@ size_t IdealGasReactor::componentIndex(const string& nm) const
     }
 }
 
-std::string IdealGasReactor::componentName(size_t k) {
+string IdealGasReactor::componentName(size_t k) {
     if (k == 2) {
         return "temperature";
     } else {

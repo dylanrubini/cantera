@@ -8,17 +8,18 @@
 #include "cantera/base/stringUtils.h"
 #include "cantera/base/ExtensionManagerFactory.h"
 
+#define BOOST_DLL_USE_STD_FS
+#include <boost/dll/import.hpp>
+#include <boost/algorithm/string.hpp>
+
 #include <fstream>
 #include <sstream>
 #include <mutex>
 
-using std::string;
-using std::endl;
+namespace ba = boost::algorithm;
 
 #ifdef _WIN32
 #include <windows.h>
-#else
-#include <sys/stat.h>
 #endif
 
 #ifdef _MSC_VER
@@ -34,32 +35,14 @@ static std::mutex dir_mutex;
 //! Mutex for creating singletons within the application object
 static std::mutex app_mutex;
 
-int get_modified_time(const std::string& path) {
-#ifdef _WIN32
-    HANDLE hFile = CreateFile(path.c_str(), 0, 0,
-                              NULL, OPEN_EXISTING, 0, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        throw CanteraError("get_modified_time", "Couldn't open file:" + path);
-    }
-    FILETIME modified;
-    GetFileTime(hFile, NULL, NULL, &modified);
-    CloseHandle(hFile);
-    return static_cast<int>(modified.dwLowDateTime);
-#else
-    struct stat attrib;
-    stat(path.c_str(), &attrib);
-    return static_cast<int>(attrib.st_mtime);
-#endif
-}
-
 Application::Messages::Messages()
 {
     // install a default logwriter that writes to standard
     // output / standard error
-    logwriter.reset(new Logger());
+    logwriter = make_unique<Logger>();
 }
 
-void Application::Messages::addError(const std::string& r, const std::string& msg)
+void Application::Messages::addError(const string& r, const string& msg)
 {
     if (msg.size() != 0) {
         errorMessage.push_back(
@@ -83,7 +66,7 @@ void Application::Messages::setLogger(Logger* _logwriter)
     logwriter.reset(_logwriter);
 }
 
-void Application::Messages::writelog(const std::string& msg)
+void Application::Messages::writelog(const string& msg)
 {
     logwriter->write(msg);
 }
@@ -93,7 +76,7 @@ void Application::Messages::writelogendl()
     logwriter->writeendl();
 }
 
-void Application::Messages::warnlog(const std::string& warning, const std::string& msg)
+void Application::Messages::warnlog(const string& warning, const string& msg)
 {
     logwriter->warn(warning, msg);
 }
@@ -124,13 +107,7 @@ void Application::ThreadMessages::removeThreadMessages()
     }
 }
 
-Application::Application() :
-    m_suppress_deprecation_warnings(false),
-    m_fatal_deprecation_warnings(false),
-    m_suppress_thermo_warnings(false),
-    m_suppress_warnings(false),
-    m_fatal_warnings(false),
-    m_use_legacy_rate_constants(false)
+Application::Application()
 {
     // install a default logwriter that writes to standard
     // output / standard error
@@ -155,8 +132,7 @@ void Application::ApplicationDestroy()
     }
 }
 
-void Application::warn_deprecated(const std::string& method,
-                                  const std::string& extra)
+void Application::warn_deprecated(const string& method, const string& extra)
 {
     if (m_fatal_deprecation_warnings) {
         throw CanteraError(method, "Deprecated: " + extra);
@@ -167,9 +143,7 @@ void Application::warn_deprecated(const std::string& method,
     warnlog("Deprecation", fmt::format("{}: {}", method, extra));
 }
 
-void Application::warn(const std::string& warning,
-                       const std::string& method,
-                       const std::string& extra)
+void Application::warn(const string& warning, const string& method, const string& extra)
 {
     if (m_fatal_warnings) {
         throw CanteraError(method, extra);
@@ -185,8 +159,8 @@ void Application::thread_complete()
 }
 
 #ifdef _WIN32
-long int Application::readStringRegistryKey(const std::string& keyName, const std::string& valueName,
-        std::string& value, const std::string& defaultValue)
+long int Application::readStringRegistryKey(const string& keyName, const string& valueName,
+        string& value, const string& defaultValue)
 {
     HKEY key;
     long open_error = RegOpenKeyEx(HKEY_LOCAL_MACHINE, keyName.c_str(), 0, KEY_READ, &key);
@@ -213,7 +187,7 @@ void Application::Messages::popError()
     }
 }
 
-std::string Application::Messages::lastErrorMessage()
+string Application::Messages::lastErrorMessage()
 {
     if (!errorMessage.empty()) {
         return errorMessage.back();
@@ -225,7 +199,7 @@ std::string Application::Messages::lastErrorMessage()
 void Application::Messages::getErrors(std::ostream& f)
 {
     for (size_t j = 0; j < errorMessage.size(); j++) {
-        f << errorMessage[j] << endl;
+        f << errorMessage[j] << std::endl;
     }
     errorMessage.clear();
 }
@@ -249,13 +223,15 @@ void Application::setDefaultDirectories()
     // the OS-dependent path separator (in the same manner as the PATH
     // environment variable).
 #ifdef _WIN32
-    std::string pathsep = ";";
+    string pathsep = ";";
+    string dirsep = "\\";
 #else
-    std::string pathsep = ":";
+    string pathsep = ":";
+    string dirsep = "/";
 #endif
 
-    if (getenv("CANTERA_DATA") != 0) {
-        string s = string(getenv("CANTERA_DATA"));
+    if (getenv("CANTERA_DATA") != nullptr) {
+        string s(getenv("CANTERA_DATA"));
         size_t start = 0;
         size_t end = s.find(pathsep);
         while (end != npos) {
@@ -266,11 +242,18 @@ void Application::setDefaultDirectories()
         inputDirs.push_back(s.substr(start,end));
     }
 
+    // If a conda environment is active, add the location of the Cantera data directory
+    // that may exist in that environment.
+    if (getenv("CONDA_PREFIX") != nullptr) {
+        string s(getenv("CONDA_PREFIX"));
+        inputDirs.push_back(s + dirsep + "share" + dirsep + "cantera" + dirsep + "data");
+    }
+
 #ifdef _WIN32
     // Under Windows, the Cantera setup utility records the installation
     // directory in the registry. Data files are stored in the 'data'
     // subdirectory of the main installation directory.
-    std::string installDir;
+    string installDir;
     readStringRegistryKey("SOFTWARE\\Cantera\\Cantera " CANTERA_SHORT_VERSION,
                           "InstallDir", installDir, "");
     if (installDir != "") {
@@ -279,7 +262,7 @@ void Application::setDefaultDirectories()
         // Scripts for converting mechanisms to YAML are installed in
         // the 'bin' subdirectory. Add that directory to the PYTHONPATH.
         const char* old_pythonpath = getenv("PYTHONPATH");
-        std::string pythonpath = "PYTHONPATH=" + installDir + "\\bin";
+        string pythonpath = "PYTHONPATH=" + installDir + "\\bin";
         if (old_pythonpath) {
             pythonpath += ";";
             pythonpath.append(old_pythonpath);
@@ -287,11 +270,6 @@ void Application::setDefaultDirectories()
         _putenv(pythonpath.c_str());
     }
 
-#endif
-
-#ifdef DARWIN
-    // add a default data location for Mac OS X
-    inputDirs.push_back("/Applications/Cantera/data");
 #endif
 
     // CANTERA_DATA is defined in file config.h. This file is written during the
@@ -303,7 +281,7 @@ void Application::setDefaultDirectories()
 #endif
 }
 
-void Application::addDataDirectory(const std::string& dir)
+void Application::addDataDirectory(const string& dir)
 {
     std::unique_lock<std::mutex> dirLock(dir_mutex);
     if (inputDirs.empty()) {
@@ -332,13 +310,13 @@ void Application::addDataDirectory(const std::string& dir)
     inputDirs.insert(inputDirs.begin(), d);
 }
 
-std::string Application::findInputFile(const std::string& name)
+string Application::findInputFile(const string& name)
 {
     std::unique_lock<std::mutex> dirLock(dir_mutex);
     string::size_type islash = name.find('/');
     string::size_type ibslash = name.find('\\');
     string::size_type icolon = name.find(':');
-    std::vector<string>& dirs = inputDirs;
+    vector<string>& dirs = inputDirs;
 
     // Expand "~/" to user's home directory, if possible
     if (name.find("~/") == 0 || name.find("~\\") == 0) {
@@ -399,12 +377,57 @@ std::string Application::findInputFile(const std::string& name)
 
 void Application::loadExtension(const string& extType, const string& name)
 {
+    if (!usingSharedLibrary()) {
+        throw CanteraError("Application::loadExtension",
+            "Loading extensions requires linking to the Cantera shared library\n"
+            "rather than the static library");
+    }
     if (m_loaded_extensions.count({extType, name})) {
         return;
     }
-    auto manager = ExtensionManagerFactory::build(extType);
-    manager->registerRateBuilders(name);
+
+    if (extType == "python" && !ExtensionManagerFactory::factory().exists("python")) {
+        string errors;
+
+        // type of imported symbol: void function with no arguments
+        typedef void (loader_t)();
+
+        // Only one Python module can be loaded at a time, and a handle needs to be held
+        // to prevent it from being unloaded.
+        static function<loader_t> loader;
+        bool loaded = false;
+
+        for (const auto& py_ver : m_pythonSearchVersions) {
+            string py_ver_underscore = ba::replace_all_copy(py_ver, ".", "_");
+            try {
+                loader = boost::dll::import_alias<loader_t>(
+                    "cantera_python" + py_ver_underscore, // library name
+                    "registerPythonExtensionManager", // symbol to import
+                    // append extensions and prefixes, search normal library path, and
+                    // expose all loaded symbols (specifically, those from libpython)
+                    boost::dll::load_mode::search_system_folders
+                    | boost::dll::load_mode::append_decorations
+                    | boost::dll::load_mode::rtld_global
+                );
+                loader();
+                loaded = true;
+                break;
+            } catch (std::exception& err) {
+                errors += fmt::format("\nPython {}: {}\n", py_ver, err.what());
+            }
+        }
+        if (!loaded) {
+            throw CanteraError("Application::loadExtension",
+                "Error loading Python extension support. Tried the following:{}",
+                errors);
+        }
+    }
+    ExtensionManagerFactory::build(extType)->registerRateBuilders(name);
     m_loaded_extensions.insert({extType, name});
+}
+
+void Application::searchPythonVersions(const string& versions) {
+    ba::split(m_pythonSearchVersions, versions, ba::is_any_of(","));
 }
 
 Application* Application::s_app = 0;

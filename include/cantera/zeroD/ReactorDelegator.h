@@ -29,21 +29,21 @@ public:
     virtual void setNEq(size_t n) = 0;
 
     //! Get the net rate of volume change (for example, from moving walls) [m^3/s]
-    virtual double vdot() const = 0;
+    virtual double expansionRate() const = 0;
 
     //! Set the net rate of volume change (for example, from moving walls) [m^3/s]
-    virtual void setVdot(double v) = 0;
+    virtual void setExpansionRate(double v) = 0;
 
     //! Get the net heat transfer rate (for example, through walls) into the
     //! reactor [W]. This value is initialized and calculated as part of
     //! Reactor::evalWalls().
-    virtual double qdot() const = 0;
+    virtual double heatRate() const = 0;
 
     //! Set the net heat transfer rate (for example, through walls) into the
     //! reactor [W]. For a value set using this method to affect the calculations done
     //! by Reactor::eval, this method should be called in either a "replace" or "after"
     //! delegate for Reactor::evalWalls().
-    virtual void setQdot(double q) = 0;
+    virtual void setHeatRate(double q) = 0;
 
     //! Set the state of the thermo object to correspond to the state of the reactor
     virtual void restoreThermoState() = 0;
@@ -54,11 +54,14 @@ public:
 };
 
 //! Delegate methods of the Reactor class to external functions
+//! @ingroup reactorGroup
 template <class R>
 class ReactorDelegator : public Delegator, public R, public ReactorAccessor
 {
 public:
-    ReactorDelegator() {
+    ReactorDelegator(shared_ptr<Solution> contents, const string& name="(none)")
+        : R(contents, name)
+    {
         install("initialize", m_initialize, [this](double t0) { R::initialize(t0); });
         install("syncState", m_syncState, [this]() { R::syncState(); });
         install("getState", m_getState,
@@ -88,116 +91,119 @@ public:
         install("componentName", m_componentName,
             [this](size_t k) { return R::componentName(k); });
         install("componentIndex", m_componentIndex,
-            [this](const std::string& nm) { return R::componentIndex(nm); });
+            [this](const string& nm) { return R::componentIndex(nm); });
         install("speciesIndex", m_speciesIndex,
-            [this](const std::string& nm) { return R::speciesIndex(nm); });
+            [this](const string& nm) { return R::speciesIndex(nm); });
     }
 
     // Overrides of Reactor methods
 
-    virtual void initialize(double t0) override {
+    string type() const override {
+        return fmt::format("Extensible{}", R::type());
+    }
+
+    void initialize(double t0) override {
         m_initialize(t0);
     }
 
-    virtual void syncState() override {
+    void syncState() override {
         m_syncState();
     }
 
-    virtual void getState(double* y) override {
+    void getState(double* y) override {
         std::array<size_t, 1> sizes{R::neq()};
         m_getState(sizes, y);
     }
 
-    virtual void updateState(double* y) override {
+    void updateState(double* y) override {
         std::array<size_t, 1> sizes{R::neq()};
         m_updateState(sizes, y);
     }
 
-    virtual void updateSurfaceState(double* y) override {
+    void updateSurfaceState(double* y) override {
         std::array<size_t, 1> sizes{R::m_nv_surf};
         m_updateSurfaceState(sizes, y);
     }
 
-    virtual void getSurfaceInitialConditions(double* y) override {
+    void getSurfaceInitialConditions(double* y) override {
         std::array<size_t, 1> sizes{R::m_nv_surf};
         m_getSurfaceInitialConditions(sizes, y);
     }
 
-    virtual void updateConnected(bool updatePressure) override {
+    void updateConnected(bool updatePressure) override {
         m_updateConnected(updatePressure);
     }
 
-    virtual void eval(double t, double* LHS, double* RHS) override {
+    void eval(double t, double* LHS, double* RHS) override {
         std::array<size_t, 2> sizes{R::neq(), R::neq()};
         m_eval(sizes, t, LHS, RHS);
     }
 
-    virtual void evalWalls(double t) override {
+    void evalWalls(double t) override {
         m_evalWalls(t);
     }
 
-    virtual void evalSurfaces(double* LHS, double* RHS, double* sdot) override
-    {
+    void evalSurfaces(double* LHS, double* RHS, double* sdot) override {
         std::array<size_t, 3> sizes{R::m_nv_surf, R::m_nv_surf, R::m_nsp};
         m_evalSurfaces(sizes, LHS, RHS, sdot);
     }
 
-    virtual std::string componentName(size_t k) override {
+    string componentName(size_t k) override {
         return m_componentName(k);
     }
 
-    virtual size_t componentIndex(const std::string& nm) const override {
+    size_t componentIndex(const string& nm) const override {
         return m_componentIndex(nm);
     }
 
-    virtual size_t speciesIndex(const std::string& nm) const override {
+    size_t speciesIndex(const string& nm) const override {
         return m_speciesIndex(nm);
     }
 
     // Public access to protected Reactor variables needed by derived classes
 
-    virtual void setNEq(size_t n) override {
+    void setNEq(size_t n) override {
         R::m_nv = n;
     }
 
-    virtual double vdot() const override {
+    double expansionRate() const override {
         return R::m_vdot;
     }
 
-    virtual void setVdot(double v) override {
+    void setExpansionRate(double v) override {
         R::m_vdot = v;
     }
 
-    virtual double qdot() const override {
+    double heatRate() const override {
         return R::m_Qdot;
     }
 
-    virtual void setQdot(double q) override {
+    void setHeatRate(double q) override {
         R::m_Qdot = q;
     }
 
-    virtual void restoreThermoState() override {
+    void restoreThermoState() override {
         R::m_thermo->restoreState(R::m_state);
     }
 
-    virtual void restoreSurfaceState(size_t n) override {
+    void restoreSurfaceState(size_t n) override {
         R::m_surfaces.at(n)->syncState();
     }
 
 private:
-    std::function<void(double)> m_initialize;
-    std::function<void()> m_syncState;
-    std::function<void(std::array<size_t, 1>, double*)> m_getState;
-    std::function<void(std::array<size_t, 1>, double*)> m_updateState;
-    std::function<void(std::array<size_t, 1>, double*)> m_updateSurfaceState;
-    std::function<void(std::array<size_t, 1>, double*)> m_getSurfaceInitialConditions;
-    std::function<void(bool)> m_updateConnected;
-    std::function<void(std::array<size_t, 2>, double, double*, double*)> m_eval;
-    std::function<void(double)> m_evalWalls;
-    std::function<void(std::array<size_t, 3>, double*, double*, double*)> m_evalSurfaces;
-    std::function<std::string(size_t)> m_componentName;
-    std::function<size_t(const std::string&)> m_componentIndex;
-    std::function<size_t(const std::string&)> m_speciesIndex;
+    function<void(double)> m_initialize;
+    function<void()> m_syncState;
+    function<void(std::array<size_t, 1>, double*)> m_getState;
+    function<void(std::array<size_t, 1>, double*)> m_updateState;
+    function<void(std::array<size_t, 1>, double*)> m_updateSurfaceState;
+    function<void(std::array<size_t, 1>, double*)> m_getSurfaceInitialConditions;
+    function<void(bool)> m_updateConnected;
+    function<void(std::array<size_t, 2>, double, double*, double*)> m_eval;
+    function<void(double)> m_evalWalls;
+    function<void(std::array<size_t, 3>, double*, double*, double*)> m_evalSurfaces;
+    function<string(size_t)> m_componentName;
+    function<size_t(const string&)> m_componentIndex;
+    function<size_t(const string&)> m_speciesIndex;
 };
 
 }

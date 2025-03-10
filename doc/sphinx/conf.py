@@ -13,14 +13,17 @@
 
 import sys, os, re
 from pathlib import Path
+from sphinx_gallery.sorting import ExplicitOrder
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-sys.path.insert(0, os.path.abspath('../../build/python'))
+sys.path.insert(0, os.path.abspath('../../python'))
 
 sys.path.append(os.path.abspath('.'))
 sys.path.append(os.path.abspath('./exts'))
+
+import ctutils
 
 # -- General configuration -----------------------------------------------------
 
@@ -30,25 +33,135 @@ needs_sphinx = '2.0'
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 
-# sphinxcontrib.matlab has been added to add the MATLAB domain for the
-# documentation of the MATLAB functions. It is a new requirement to build the
-# documentation in 2.2. It should be loaded before sphinx.ext.autodoc because
-# loading it after gives errors when autodocumenting the Python interface.
 extensions = [
-              'sphinxcontrib.matlab',
               'sphinx.ext.autodoc',
               'sphinx.ext.todo',
               'sphinx.ext.autosummary',
+              'sphinxarg.ext',
               'sphinxcontrib.doxylink',
-              'sphinxcontrib.katex',  # Use KaTeX because it's faster and the main site uses it
+              'sphinxcontrib.bibtex',
               'sphinx.ext.intersphinx',
+              'myst_nb',
+              'sphinx_gallery.gen_gallery',
+              'sphinx_tags',
+              'sphinx_design',
+              'sphinx_copybutton',
               ]
+
+sphinx_gallery_conf = {
+    'filename_pattern': r'\.py',
+    'example_extensions': {'.py', '.cpp', '.h', '.c', '.f', '.f90', '.m'},
+    "filetype_parsers": {'.h': 'C++', '.m': 'Matlab'},
+    'ignore_pattern': r'(__.*__\.py|test_examples\.m)',
+    'image_srcset': ["2x"],
+    'remove_config_comments': True,
+    'ignore_repr_types': r'(matplotlib\.(text|axes|legend)|graphviz\.(sources\.Source|graphs\.Graph|graphs\.Digraph))',
+    'image_scrapers': ('matplotlib', ctutils.GraphvizScraper()),
+    'examples_dirs': [
+       '../samples/python/',
+       '../samples/cxx/',
+       '../samples/clib/',
+       '../samples/fortran/',
+       '../samples/matlab_experimental/',
+    ],
+    'gallery_dirs': [
+       'examples/python',
+       'examples/cxx',
+       'examples/clib',
+       'examples/fortran',
+       'examples/matlab_experimental',
+    ],
+    'subsection_order': ExplicitOrder([
+        '../samples/python/thermo',
+        '../samples/python/kinetics',
+        '../samples/python/transport',
+        '../samples/python/reactors',
+        '../samples/python/onedim',
+    ]),
+    'reference_url': {
+        'cantera': None,  # 'None' means the locally-documented module
+    }
+}
+
+suppress_warnings = ["config.cache"]  # Triggered by objects in sphinx_gallery_conf
+
+# Override sphinx-gallery's method for determining which examples should be executed.
+# There's really no way to achieve this with the `filename_pattern` option, and
+# `ignore_pattern` excludes the example entirely.
+skip_run = {
+    # multiprocessing can't see functions defined in __main__ when run by
+    # sphinx-gallery, at least on macOS.
+    "multiprocessing_viscosity.py",
+}
+
+# Installing scikits.odes is challenging on lots of systems (such as Apple Silicon), so
+# just skip running this example if it's not present.
+try:
+    import scikits.odes
+except ImportError:
+    skip_run.add("1D_packed_bed.py")
+
+def executable_script(src_file, gallery_conf):
+    """Validate if script has to be run according to gallery configuration.
+
+    Parameters
+    ----------
+    src_file : str
+        path to python script
+
+    gallery_conf : dict
+        Contains the configuration of Sphinx-Gallery
+
+    Returns
+    -------
+    bool
+        True if script has to be executed
+    """
+    filename = Path(src_file).name
+    if filename in skip_run:
+        return False
+    filename_pattern = gallery_conf["filename_pattern"]
+    execute = re.search(filename_pattern, src_file) and gallery_conf["plot_gallery"]
+    return execute
+
+import sphinx_gallery.gen_rst
+sphinx_gallery.gen_rst.executable_script = executable_script
+
+header_prefix = """
+:html_theme.sidebar_secondary.remove:
+
+.. py:currentmodule:: cantera
+
+"""
+
+sphinx_gallery.gen_rst.EXAMPLE_HEADER = header_prefix + sphinx_gallery.gen_rst.EXAMPLE_HEADER
+
+sphinx_gallery_conf["reset_argv"] = ctutils.ResetArgv()
+
+# Options for sphinx_tags extension
+tags_create_tags = True
+tags_create_badges = True
+tags_overview_title = "Index of example tags"
+tags_page_title = "Tag"
+tags_page_header = "Examples with this tag:"
+tags_badge_colors = {
+    "Python": "secondary",
+    "C++": "secondary",
+    "C": "secondary",
+    "Matlab": "secondary",
+    "Fortran 77": "secondary",
+    "Fortran 90": "secondary",
+}
 
 autodoc_default_options = {
     'members': True,
     'show-inheritance': True,
     'undoc-members': True,
 }
+
+bibtex_bibfiles = ["../../../doc/doxygen/cantera.bib"]
+bibtex_reference_style = 'author_year'
+bibtex_default_style = 'alpha'
 
 
 def setup(app):
@@ -84,29 +197,49 @@ def setup(app):
                     lines[i] = l.replace("*", r"\*")
     app.connect('autodoc-process-docstring', escape_splats)
 
-
 autoclass_content = 'both'
 
 doxylink = {
-        'ct': (os.path.abspath('../../build/docs/Cantera.tag'),
-               '../../doxygen/html/')
+    'ct': (os.path.abspath('../Cantera.tag'),
+           'cxx/')
 }
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3', None),
     'pandas': ('https://pandas.pydata.org/pandas-docs/stable/', None),
     'numpy': ('https://numpy.org/doc/stable/', None),
+    'pint': ('https://pint.readthedocs.io/en/stable/', None),
 }
 
-# Ensure that the primary domain is the Python domain, since we've added the
-# MATLAB domain with sphinxcontrib.matlab
+myst_heading_anchors = 2
+myst_enable_extensions = [
+    "dollarmath",
+    "amsmath",
+    "deflist",
+    "colon_fence",
+    "attrs_block",
+]
+
+mathjax3_config = {
+    'tex': {
+        'macros': {
+            't': ['\\mathrm{#1}', 1],
+            'pxpy': ['\\frac{\\partial #1}{\\partial #2}', 2]
+        }
+    }
+}
+
+# Ensure that the primary domain is the Python domain
 primary_domain = 'py'
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
 # The suffix of source filenames.
-source_suffix = '.rst'
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.md': 'myst-nb',
+}
 
 # The encoding of source files.
 #source_encoding = 'utf-8-sig'
@@ -116,13 +249,13 @@ master_doc = 'index'
 
 # General information about the project.
 project = 'Cantera'
-copyright = "2001-2022, Cantera Developers"
+copyright = "2001-2024, Cantera Developers"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 
-configh = Path('../../include/cantera/base/config.h').read_text()
+configh = Path('../../../include/cantera/base/config.h').read_text()
 # The short X.Y version.
 version = re.search('CANTERA_SHORT_VERSION "(.*?)"', configh).group(1)
 # The full version, including alpha/beta/rc tags.
@@ -140,7 +273,13 @@ release = re.search('CANTERA_VERSION "(.*?)"', configh).group(1)
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = []
+exclude_patterns = [
+    # Prevent MyST-nb from trying to read files generated by sphinx-gallery
+    # See https://github.com/executablebooks/MyST-NB/issues/363
+    "examples/python/**/*.py.md5",
+    "examples/python/**/*.ipynb",
+    "examples/python/**/*.py",
+]
 
 # The reST default role (used for this markup: `text`) to use for all documents.
 default_role = 'py:obj'
@@ -167,43 +306,40 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = 'cttheme'
-html_sidebars = {
-    '**': ['localtoc.html', 'relations.html', 'sourcelink.html', 'searchbox.html', 'numfocus.html'],
-}
+html_theme = 'pydata_sphinx_theme'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
 
-# Copy the Bootstrap 4 font families.
-font_families = [
-    # Default on Apple
-    '-apple-system',
-    # Default for older versions of Chrome on Mac
-    'BlinkMacSystemFont',
-    # Windows
-    '"Segoe UI"',
-    # Android
-    'Roboto',
-    # Standard fallbacks
-    '"Helvetica Neue"', 'Arial', 'sans-serif',
-    # Emoji fonts
-    '"Apple Color Emoji"', '"Segoe UI Emoji"', '"Segoe UI Symbol"']
-
-code_font_families = [
-    'SFMono-Regular',
-    'Menlo',
-    'Monaco',
-    'Consolas',
-    '"Liberation Mono"',
-    '"Courier New"', 'monospace'
-]
 html_theme_options = {
-    'font_family': ','.join(font_families),
-    'head_font_family': ','.join(font_families),
-    'caption_font_family': ','.join(font_families),
-    'code_font_family': ','.join(code_font_families),
+    "show_toc_level": 2,
+    "navbar_center": ["navbar-nav"],
+    "external_links": [
+      {"name": "Community", "url": "/community.html"},
+    ],
+    "header_links_before_dropdown": 6,
+    "navbar_align": "left",
+    "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],
+    "show_prev_next": False,
+    "logo": {
+        "link": "/index.html",
+        "alt_text": "Cantera",
+    },
+    "primary_sidebar_end": ["numfocus"],
+    "switcher": {
+        "json_url": "/dev/_static/doc-versions.json",
+        "version_match": version,
+    },
+    "check_switcher": False,
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/Cantera/cantera",
+            "icon": "fa-brands fa-square-github",
+            "type": "fontawesome",
+        }
+   ],
 }
 
 # Add any paths that contain custom themes here, relative to this directory.
@@ -218,17 +354,20 @@ html_short_title = "Cantera"
 
 # The name of an image file (relative to this directory) to place at the top
 # of the sidebar.
-#html_logo = None
+html_logo = '_static/images/cantera-logo.png'
 
 # The name of an image file (within the static path) to use as favicon of the
-# docs.  This file should be a Windows icon file (.ico) being 16x16 or 32x32
-# pixels large.
-# html_favicon = "_static/favicon.ico"
+# docs.  This file should be square image.
+html_favicon = "_static/images/favicon.png"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
+
+html_css_files = [
+    'custom.css',
+]
 
 # If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
 # using the given strftime format.

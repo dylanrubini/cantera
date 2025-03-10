@@ -61,13 +61,7 @@ from pathlib import Path
 from textwrap import fill, dedent, TextWrapper
 import cantera as ct
 from email.utils import formatdate
-from typing import Optional, Iterable
-
-try:
-    from typing import Literal
-except ImportError:
-    # Needed for Python 3.7 support
-    from typing_extensions import Literal
+from typing import Optional, Iterable, Literal
 
 if sys.version_info < (3, 9):
     class BooleanOptionalAction(argparse.Action):
@@ -176,7 +170,7 @@ def build_species_text(species: Iterable[ct.Species], max_width=80) -> str:
 
     .. versionadded:: 3.0
     """
-    species_names = {s.name: s.input_data.get("note", "") for s in species}
+    species_names = {s.name: str(s.input_data.get('note', '')) for s in species}
 
     # Notes shorter than 7 characters are probably related to thermo entries
     # and will be included with the thermo entry.
@@ -293,7 +287,7 @@ def build_thermodynamics_text(
         if spec.thermo.max_temp > max_temp:
             max_temp = spec.thermo.max_temp
 
-        note = input_data["thermo"].get("note", "")
+        note = str(input_data['thermo'].get('note', ''))
         if len(note) <= 6:
             comment = ""
             fmt_data["note"] = note
@@ -324,6 +318,7 @@ def build_thermodynamics_text(
         fmt_data["coeff_11_14"] = four_coeff_line.format(*low_coeffs[3:])
         text = fmt.format(**fmt_data)
         if comment:
+            comment = comment.replace("\n", "\n!")
             text = f"!{comment}\n" + text
         thermo_data[spec.name] = text
 
@@ -342,15 +337,19 @@ def build_thermodynamics_text(
     )
 
 
-def build_reactions_text(reactions: Iterable[ct.Reaction]):
+def build_reactions_text(reactions: Iterable[ct.Reaction], species: Iterable[ct.Species]):
     """
     Create the reaction definition section of this file.
 
     :param reactions:
         An iterable of `cantera.Reaction` instances to be included.
+    :param species:
+        An iterable of `cantera.Species` definitions for this file.
 
     .. versionadded:: 3.0
     """
+
+    species_names = {spec.name for spec in species}
 
     # Note: Cantera converts explicit reverse rate coefficients given by the ``REV``
     # keyword into two independent irreversible reactions. Therefore, there's no need to
@@ -478,11 +477,13 @@ def build_reactions_text(reactions: Iterable[ct.Reaction]):
         else:
             raise ValueError(f"Unknown reaction type: '{reac.reaction_type}'")
 
-        if reac.third_body is not None:
+        third = reac.third_body
+        if third is not None and third.name == "M" and len(third.efficiencies):
             reaction_lines.append(
                 " ".join(
                     f"{spec}/{value:.3E}/"
                     for spec, value in reac.third_body.efficiencies.items()
+                    if spec in species_names
                 )
             )
 
@@ -599,9 +600,9 @@ def convert(
         solution = ct.Solution(solution, phase_name)
 
     # NOTE: solution.transport_model returns back a string. If no transport model is
-    # present, the string is "None". We guard here against a future API change to
+    # present, the string is "none". We guard here against a future API change to
     # return the singleton None.
-    if solution.transport_model in ("None", None):
+    if solution.transport_model in ("none", None):
         transport_exists = False
     else:
         transport_exists = True
@@ -704,9 +705,9 @@ def convert(
         ]
         thermo_path.write_text("\n".join(thermo_text))
 
-    # TODO: Handle phases without reactions
     all_reactions = solution.reactions()
-    mechanism_text.append(build_reactions_text(all_reactions))
+    if all_reactions:
+        mechanism_text.append(build_reactions_text(all_reactions, all_species))
 
     if transport_path is None and transport_exists:
         mechanism_text.append(build_transport_text(all_species, separate_file=False))
@@ -722,13 +723,10 @@ def convert(
     return output_files
 
 
-def main():
+def create_argparser():
     """
-    Parse command line arguments and pass them to `convert`
-
-    .. versionadded:: 3.0
+    Create argparse parser
     """
-
     parser = argparse.ArgumentParser(
         description="Convert Cantera YAML input files to Chemkin-format mechanisms",
     )
@@ -800,7 +798,16 @@ def main():
         default=True,
         help="Check that the mechanism can be loaded back into Cantera.",
     )
+    return parser
 
+
+def main():
+    """
+    Parse command line arguments and pass them to `convert`
+
+    .. versionadded:: 3.0
+    """
+    parser = create_argparser()
     args = parser.parse_args()
 
     output_paths = convert(
@@ -825,7 +832,7 @@ def main():
             print("Validating mechanism...", end="")
             with tempfile.TemporaryDirectory() as td:
                 out_name = Path(td) / "test_mech.yaml"
-                ck2yaml.convert_mech(
+                ck2yaml.convert(
                     *ck_paths,
                     phase_name="gas",
                     out_name=out_name,

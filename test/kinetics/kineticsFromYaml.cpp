@@ -3,10 +3,12 @@
 #include "cantera/base/Solution.h"
 #include "cantera/base/Interface.h"
 #include "cantera/kinetics/KineticsFactory.h"
-#include "cantera/kinetics/GasKinetics.h"
+#include "cantera/kinetics/ReactionRateFactory.h"
+#include "cantera/kinetics/Reaction.h"
 #include "cantera/kinetics/Arrhenius.h"
 #include "cantera/kinetics/ChebyshevRate.h"
 #include "cantera/kinetics/Custom.h"
+#include "cantera/kinetics/ElectronCollisionPlasmaRate.h"
 #include "cantera/kinetics/Falloff.h"
 #include "cantera/kinetics/InterfaceRate.h"
 #include "cantera/kinetics/PlogRate.h"
@@ -19,7 +21,7 @@ using namespace Cantera;
 
 TEST(ReactionRate, ModifyArrheniusRate)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: N + NO <=> N2 + O,"
         " rate-constant: [-2.70000E+13 cm^3/mol/s, 0, 355 cal/mol],"
@@ -32,9 +34,26 @@ TEST(ReactionRate, ModifyArrheniusRate)
     EXPECT_FALSE(rr->allowNegativePreExponentialFactor());
 }
 
+TEST(ReactionRate, ArrheniusUnits)
+{
+    AnyMap rxn1 = AnyMap::fromYamlString(
+        "{rate-constant: [2.70000E+13 cm^3/mol/s, 0, 355 cal/mol]}");
+    ASSERT_THROW(newReactionRate(rxn1), InputFileError);
+
+    AnyMap rxn2 = AnyMap::fromYamlString(
+        "{units: {quantity: mol, length: cm},\n"
+         "nested: {rate-constant: [27.0, 0, 355 cal/mol]}}");
+    rxn2.applyUnits();
+    ASSERT_THROW(newReactionRate(rxn2["nested"].as<AnyMap>()), InputFileError);
+
+    AnyMap rxn3 = AnyMap::fromYamlString(
+        "{rate-constant: [2.70000E+13 m^3/kmol/s, 0, 355 cal/mol]}");
+    auto rate = newReactionRate(rxn3);
+}
+
 TEST(Reaction, ElementaryFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: N + NO <=> N2 + O,"
         " rate-constant: [-2.70000E+13 cm^3/mol/s, 0, 355 cal/mol],"
@@ -56,7 +75,7 @@ TEST(Reaction, ElementaryFromYaml)
 
 TEST(Reaction, ThreeBodyFromYaml1)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: 2 O + M = O2 + M,"
         " type: three-body,"
@@ -76,7 +95,7 @@ TEST(Reaction, ThreeBodyFromYaml1)
 
 TEST(Reaction, ThreeBodyFromYaml2)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: 2 O + M = O2 + M,"
         " rate-constant: [1.20000E+17 cm^6/mol^2/s, -1, 0],"
@@ -97,14 +116,14 @@ TEST(Reaction, ThreeBodyFromYaml2)
     EXPECT_TRUE(input.hasKey("efficiencies"));
 
     auto efficiencies = input["efficiencies"].asMap<double>();
-    EXPECT_EQ(efficiencies.size(), 2);
+    EXPECT_EQ(efficiencies.size(), 2u);
     EXPECT_EQ(efficiencies["AR"], 0.83);
     EXPECT_EQ(efficiencies["H2O"], 5.);
 }
 
 TEST(Reaction, ThreeBodyFromYaml3)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + M <=> CH2(S) + M,"
         " rate-constant: {A: 5.0e+9, b: 0.0, Ea: 0.0}}");
@@ -120,7 +139,7 @@ TEST(Reaction, ThreeBodyFromYaml3)
 
 TEST(Reaction, ThreeBodyFromYaml4)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2(S) + O2,"
         " type: three-body,"
@@ -142,7 +161,7 @@ TEST(Reaction, ThreeBodyFromYaml4)
 
 TEST(Reaction, ThreeBodyFromYaml5)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " rate-constant: {A: 5.0e+9, b: 0.0, Ea: 0.0},"
@@ -161,14 +180,14 @@ TEST(Reaction, ThreeBodyFromYaml5)
     EXPECT_FALSE(input.hasKey("type"));
     EXPECT_TRUE(input.hasKey("efficiencies"));
     auto efficiencies = input["efficiencies"].asMap<double>();
-    EXPECT_EQ(efficiencies.size(), 1);
+    EXPECT_EQ(efficiencies.size(), 1u);
     EXPECT_EQ(efficiencies.begin()->first, "O2");
     EXPECT_FALSE(input.hasKey("default-efficiency"));
 }
 
 TEST(Reaction, ThreeBodyFromYaml6)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " type: three-body,"
@@ -189,14 +208,14 @@ TEST(Reaction, ThreeBodyFromYaml6)
     EXPECT_EQ(input.getString("type", ""), "three-body");
     EXPECT_TRUE(input.hasKey("efficiencies"));
     auto efficiencies = input["efficiencies"].asMap<double>();
-    EXPECT_EQ(efficiencies.size(), 1);
+    EXPECT_EQ(efficiencies.size(), 1u);
     EXPECT_EQ(efficiencies.begin()->first, "O2");
     EXPECT_FALSE(input.hasKey("default-efficiency"));
 }
 
 TEST(Reaction, ThreeBodyFromYamlMissingM)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: 2 O <=> O2," // Missing "M" on each side of the equation
         " type: three-body,"
@@ -207,7 +226,7 @@ TEST(Reaction, ThreeBodyFromYamlMissingM)
 
 TEST(Reaction, ThreeBodyFromYamlMultiple)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " type: three-body," // ambiguous valid explicit third bodies
@@ -218,7 +237,7 @@ TEST(Reaction, ThreeBodyFromYamlMultiple)
 
 TEST(Reaction, ThreeBodyFromYamlIncompatible1)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " rate-constant: {A: 5.0e+9, b: 0.0, Ea: 0.0},"
@@ -230,7 +249,7 @@ TEST(Reaction, ThreeBodyFromYamlIncompatible1)
 
 TEST(Reaction, ThreeBodyFromYamlIncompatible2)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2(S) + O2,"
         " rate-constant: {A: 5.0e+9, b: 0.0, Ea: 0.0},"
@@ -242,7 +261,7 @@ TEST(Reaction, ThreeBodyFromYamlIncompatible2)
 
 TEST(Reaction, ThreeBodyFromYamlIncompatible3)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " rate-constant: {A: 5.0e+9, b: 0.0, Ea: 0.0},"
@@ -254,7 +273,7 @@ TEST(Reaction, ThreeBodyFromYamlIncompatible3)
 
 TEST(Reaction, ThreeBodyFromYamlIncompatible4)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " rate-constant: {A: 5.0e+9, b: 0.0, Ea: 0.0},"
@@ -265,7 +284,7 @@ TEST(Reaction, ThreeBodyFromYamlIncompatible4)
 
 TEST(Reaction, ThreeBodyFromYamlIncompatible5)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2 + O2,"
         " type: three-body,"
@@ -276,7 +295,7 @@ TEST(Reaction, ThreeBodyFromYamlIncompatible5)
 
 TEST(Reaction, FalloffFromYaml1)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: N2O (+M) = N2 + O (+ M),"
         " type: falloff,"
@@ -298,7 +317,7 @@ TEST(Reaction, FalloffFromYaml1)
 
 TEST(Reaction, FalloffFromYaml2)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: H + CH2 (+ N2) <=> CH3 (+N2),"
         " type: falloff,"
@@ -316,17 +335,17 @@ TEST(Reaction, FalloffFromYaml2)
     EXPECT_DOUBLE_EQ(rate->highRate().preExponentialFactor(), 6e11);
     EXPECT_DOUBLE_EQ(rate->lowRate().preExponentialFactor(), 1.04e20);
     EXPECT_DOUBLE_EQ(rate->lowRate().activationEnergy(), 1600);
-    vector_fp params(4);
+    vector<double> params;
     rate->getFalloffCoeffs(params);
+    ASSERT_EQ(params.size(), (size_t) 3);
     EXPECT_DOUBLE_EQ(params[0], 0.562);
     EXPECT_DOUBLE_EQ(params[1], 91.0);
-    EXPECT_DOUBLE_EQ(params[3], 0.0);
     EXPECT_EQ(R->input["source"].asString(), "somewhere");
 }
 
 TEST(Reaction, FalloffFromYaml3)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: HCN (+ M) <=> H + CN (+ M),"
         " type: falloff,"
@@ -346,7 +365,7 @@ TEST(Reaction, FalloffFromYaml3)
     EXPECT_DOUBLE_EQ(rate->lowRate().preExponentialFactor(), 3.57e26);
     EXPECT_DOUBLE_EQ(rate->highRate().activationEnergy(), 123800.0);
     EXPECT_DOUBLE_EQ(rate->lowRate().activationEnergy(), 124900.0);
-    vector_fp params(2);
+    vector<double> params(2);
     rate->getFalloffCoeffs(params);
     EXPECT_DOUBLE_EQ(params[0], 0.95);
     EXPECT_DOUBLE_EQ(params[1], -0.0001);
@@ -355,7 +374,7 @@ TEST(Reaction, FalloffFromYaml3)
 
 TEST(Reaction, ChemicallyActivatedFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH3 + OH (+M) <=> CH2O + H2 (+M),"
         " units: {length: cm, quantity: mol},"
@@ -373,7 +392,7 @@ TEST(Reaction, ChemicallyActivatedFromYaml)
 
 TEST(Reaction, PlogFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "equation: 'H + CH4 <=> H2 + CH3'\n"
         "units: {pressure: atm}\n"
@@ -387,7 +406,7 @@ TEST(Reaction, PlogFromYaml)
     auto R = newReaction(rxn, *(sol->kinetics()));
     EXPECT_FALSE(R->usesThirdBody());
     const auto& rateMap = std::dynamic_pointer_cast<PlogRate>(R->rate())->getRates();
-    std::vector<std::pair<double, ArrheniusRate>> rates(rateMap.begin(), rateMap.end());
+    vector<pair<double, ArrheniusRate>> rates(rateMap.begin(), rateMap.end());
     EXPECT_EQ(rates.size(), (size_t) 4);
     EXPECT_NEAR(rates[0].first, 0.039474 * OneAtm, 1e-6);
     EXPECT_NEAR(rates[2].first, OneAtm, 1e-6);
@@ -399,7 +418,7 @@ TEST(Reaction, PlogFromYaml)
 
 TEST(Reaction, ChebyshevFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "equation: 'CH4 <=> CH3 + H'\n"
         "type: Chebyshev\n"
@@ -427,7 +446,7 @@ TEST(Reaction, ChebyshevFromYaml)
 
 TEST(Reaction, BlowersMaselFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: O + H2 <=> H + OH,"
         " type: Blowers-Masel,"
@@ -462,7 +481,7 @@ TEST(Reaction, BlowersMaselFromYaml)
 
 TEST(Reaction, ThreeBodyBlowersMaselFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: CH2 + O2 <=> CH2(S) + O2,"
         " type: three-body-Blowers-Masel,"
@@ -482,7 +501,7 @@ TEST(Reaction, ThreeBodyBlowersMaselFromYaml)
 
 TEST(Reaction, InvalidBlowersMaselFromYaml)
 {
-    auto sol = newSolution("gri30.yaml", "", "None");
+    auto sol = newSolution("gri30.yaml", "", "none");
     AnyMap rxn = AnyMap::fromYamlString(
         "{equation: O + H2 <=> H + OH,"
         " type: three-body-Blowers-Masel,"
@@ -513,9 +532,33 @@ TEST(Reaction, TwoTempPlasmaFromYaml)
     EXPECT_DOUBLE_EQ(rate->activationElectronEnergy(), 700 * GasConstant);
 }
 
+TEST(Reaction, ElectronCollisionPlasmaFromYaml)
+{
+    auto sol = newSolution("oxygen-plasma.yaml", "discretized-electron-energy-plasma", "none");
+    AnyMap rxn = AnyMap::fromYamlString(
+        "{equation: O2 + E => E + O2,"
+        " type: electron-collision-plasma,"
+        " energy-levels: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],"
+        " cross-sections: [0.0, 5.97e-20, 6.45e-20, 6.74e-20, 6.93e-20, 7.2e-20, "
+        " 7.52e-20, 7.86e-20, 8.21e-20, 8.49e-20, 8.8e-20]}");
+
+    auto R = newReaction(rxn, *(sol->kinetics()));
+    EXPECT_EQ(R->reactants.at("O2"), 1);
+    EXPECT_EQ(R->reactants.at("E"), 1);
+    EXPECT_EQ(R->products.at("O2"), 1);
+    EXPECT_EQ(R->products.at("E"), 1);
+
+    const auto rate = std::dynamic_pointer_cast<ElectronCollisionPlasmaRate>(R->rate());
+
+    for (size_t k = 0; k < rate->energyLevels().size(); k++) {
+        EXPECT_DOUBLE_EQ(rate->energyLevels()[k], rxn["energy-levels"].asVector<double>()[k]);
+        EXPECT_DOUBLE_EQ(rate->crossSections()[k], rxn["cross-sections"].asVector<double>()[k]);
+    }
+}
+
 TEST(Reaction, PythonExtensibleRate)
 {
-    #ifndef CT_HAS_PYTHON
+    #ifdef CT_SKIP_PYTHON // Possibly set via test/SConscript
     GTEST_SKIP();
     #endif
     auto sol = newSolution("extensible-reactions.yaml");
@@ -523,15 +566,17 @@ TEST(Reaction, PythonExtensibleRate)
     EXPECT_EQ(R->type(), "square-rate");
     auto rate = R->rate();
     EXPECT_EQ(rate->type(), "square-rate");
-    EXPECT_DOUBLE_EQ(rate->eval(300), 3.14 * 300 * 300);
+    vector<double> kf(sol->kinetics()->nReactions());
+    sol->kinetics()->getFwdRateConstants(kf.data());
+    EXPECT_DOUBLE_EQ(kf[0], 3.14 * 300 * 300);
 }
 
-TEST(Kinetics, GasKineticsFromYaml1)
+TEST(Kinetics, BulkKineticsFromYaml1)
 {
     AnyMap infile = AnyMap::fromYamlFile("ideal-gas.yaml");
     auto& phaseNode = infile["phases"].getMapWhere("name", "simple-kinetics");
-    shared_ptr<ThermoPhase> thermo = newPhase(phaseNode, infile);
-    auto kin = newKinetics({thermo.get()}, phaseNode, infile);
+    shared_ptr<ThermoPhase> thermo = newThermo(phaseNode, infile);
+    auto kin = newKinetics({thermo}, phaseNode, infile);
     EXPECT_EQ(kin->nReactions(), (size_t) 2);
     const auto& R = kin->reaction(0);
     EXPECT_EQ(R->reactants.at("NO"), 1);
@@ -541,12 +586,12 @@ TEST(Kinetics, GasKineticsFromYaml1)
     EXPECT_DOUBLE_EQ(rate->preExponentialFactor(), 2.7e10);
 }
 
-TEST(Kinetics, GasKineticsFromYaml2)
+TEST(Kinetics, BulkKineticsFromYaml2)
 {
     AnyMap infile = AnyMap::fromYamlFile("ideal-gas.yaml");
     auto& phaseNode = infile["phases"].getMapWhere("name", "remote-kinetics");
-    shared_ptr<ThermoPhase> thermo = newPhase(phaseNode, infile);
-    auto kin = newKinetics({thermo.get()}, phaseNode, infile);
+    shared_ptr<ThermoPhase> thermo = newThermo(phaseNode, infile);
+    auto kin = newKinetics({thermo}, phaseNode, infile);
     EXPECT_EQ(kin->nReactions(), (size_t) 3);
 }
 
@@ -554,13 +599,13 @@ TEST(Kinetics, EfficienciesFromYaml)
 {
     AnyMap infile = AnyMap::fromYamlFile("ideal-gas.yaml");
     auto& phaseNode1 = infile["phases"].getMapWhere("name", "efficiency-error");
-    shared_ptr<ThermoPhase> thermo1 = newPhase(phaseNode1, infile);
+    shared_ptr<ThermoPhase> thermo1 = newThermo(phaseNode1, infile);
     // Reaction with efficiency defined for undeclared species "AR"
-    EXPECT_THROW(newKinetics({thermo1.get()}, phaseNode1, infile), CanteraError);
+    EXPECT_THROW(newKinetics({thermo1}, phaseNode1, infile), CanteraError);
 
     auto& phaseNode2 = infile["phases"].getMapWhere("name", "efficiency-skip");
-    shared_ptr<ThermoPhase> thermo2 = newPhase(phaseNode2, infile);
-    auto kin = newKinetics({thermo2.get()}, phaseNode2, infile);
+    shared_ptr<ThermoPhase> thermo2 = newThermo(phaseNode2, infile);
+    auto kin = newKinetics({thermo2}, phaseNode2, infile);
     EXPECT_EQ(kin->nReactions(), (size_t) 1);
 }
 
@@ -579,14 +624,29 @@ TEST(Kinetics, InterfaceKineticsFromYaml)
     auto R2 = kin->reaction(1);
     const auto rate2 = std::dynamic_pointer_cast<InterfaceArrheniusRate>(R2->rate());
     EXPECT_DOUBLE_EQ(rate2->preExponentialFactor(), 3.7e20);
-    Cantera::AnyMap coverage_deps;
+    AnyMap coverage_deps;
     rate2->getCoverageDependencies(coverage_deps);
     coverage_deps.applyUnits();
-    auto& cov_map = coverage_deps["H(s)"].as<Cantera::AnyMap>();
+    auto& cov_map = coverage_deps["H(s)"].as<AnyMap>();
     EXPECT_DOUBLE_EQ(cov_map["E"].asDouble(), -6e6);
+
 
     auto R3 = kin->reaction(2);
     EXPECT_TRUE(std::dynamic_pointer_cast<StickingArrheniusRate>(R3->rate()));
+
+    auto soln2 = newInterface("surface-phases.yaml", "Pt-multi-sites");
+    auto kin2 = soln2->kinetics();
+    auto R4 = kin2->reaction(3);
+    vector<double> coeffs{1.0e6, 3.0e6, -7.0e7, 5.0e6};
+    const auto rate4 = std::dynamic_pointer_cast<InterfaceArrheniusRate>(R4->rate());
+    AnyMap coverage_deps2;
+    rate4->getCoverageDependencies(coverage_deps2);
+    coverage_deps2.applyUnits();
+    auto& cov_map2 = coverage_deps2["O(s)"].as<AnyMap>();
+    auto& poly_dep = cov_map2["E"].asVector<AnyValue>();
+    for (size_t i = 0; i < poly_dep.size(); i++) {
+        EXPECT_DOUBLE_EQ(poly_dep[i].asDouble(), coeffs[i]);
+    }
 }
 
 TEST(Kinetics, BMInterfaceKineticsFromYaml)
@@ -604,10 +664,10 @@ TEST(Kinetics, BMInterfaceKineticsFromYaml)
     auto R2 = kin->reaction(0);
     const auto rate2 = std::dynamic_pointer_cast<InterfaceBlowersMaselRate>(R2->rate());
     EXPECT_DOUBLE_EQ(rate2->preExponentialFactor(), 3.7e20);
-    Cantera::AnyMap coverage_deps;
+    AnyMap coverage_deps;
     rate2->getCoverageDependencies(coverage_deps);
     coverage_deps.applyUnits();
-    auto& cov_map = coverage_deps["H(S)"].as<Cantera::AnyMap>();
+    auto& cov_map = coverage_deps["H(S)"].as<AnyMap>();
     EXPECT_DOUBLE_EQ(cov_map["E"].asDouble(), -6e6);
 
     auto R3 = kin->reaction(1);
@@ -619,7 +679,7 @@ TEST(Kinetics, ElectrochemFromYaml)
     auto soln = newInterface("surface-phases.yaml", "anode-surface");
     auto kin = soln->kinetics();
     soln->adjacent("graphite")->thermo()->setElectricPotential(0.4);
-    vector_fp ropf(kin->nReactions()), ropr(kin->nReactions());
+    vector<double> ropf(kin->nReactions()), ropr(kin->nReactions());
     kin->getFwdRatesOfProgress(ropf.data());
     kin->getRevRatesOfProgress(ropr.data());
 
@@ -631,7 +691,7 @@ TEST(KineticsFromYaml, NoKineticsModelOrReactionsField1)
 {
     auto soln = newSolution("phase-reaction-spec1.yaml",
                             "nokinetics-noreactions");
-    EXPECT_EQ(soln->kinetics()->kineticsType(), "None");
+    EXPECT_EQ(soln->kinetics()->kineticsType(), "none");
     EXPECT_EQ(soln->kinetics()->nReactions(), (size_t) 0);
 }
 
@@ -639,7 +699,7 @@ TEST(KineticsFromYaml, NoKineticsModelOrReactionsField2)
 {
     auto soln = newSolution("phase-reaction-spec2.yaml",
                             "nokinetics-noreactions");
-    EXPECT_EQ(soln->kinetics()->kineticsType(), "None");
+    EXPECT_EQ(soln->kinetics()->kineticsType(), "none");
     EXPECT_EQ(soln->kinetics()->nReactions(), (size_t) 0);
 }
 
@@ -647,7 +707,7 @@ TEST(KineticsFromYaml, KineticsModelWithReactionsNone1)
 {
     auto soln = newSolution("phase-reaction-spec1.yaml",
                             "kinetics-reactions-none");
-    EXPECT_EQ(soln->kinetics()->kineticsType(), "Gas");
+    EXPECT_EQ(soln->kinetics()->kineticsType(), "bulk");
     EXPECT_EQ(soln->kinetics()->nReactions(), (size_t) 0);
 }
 
@@ -655,7 +715,7 @@ TEST(KineticsFromYaml, KineticsModelWithReactionsNone2)
 {
     auto soln = newSolution("phase-reaction-spec2.yaml",
                             "kinetics-reactions-none");
-    EXPECT_EQ(soln->kinetics()->kineticsType(), "Gas");
+    EXPECT_EQ(soln->kinetics()->kineticsType(), "bulk");
     EXPECT_EQ(soln->kinetics()->nReactions(), (size_t) 0);
 }
 
@@ -677,7 +737,7 @@ TEST(KineticsFromYaml, KineticsModelWithoutReactionsSection3)
 {
     auto soln = newSolution("phase-reaction-spec1.yaml",
                             "kinetics-no-reaction-section3");
-    EXPECT_EQ(soln->kinetics()->kineticsType(), "Surf");
+    EXPECT_EQ(soln->kinetics()->kineticsType(), "surface");
     EXPECT_EQ(soln->kinetics()->nReactions(), (size_t) 0);
 }
 
@@ -692,7 +752,7 @@ TEST(KineticsFromYaml, KineticsModelWithoutReactionsField)
 {
     auto soln = newSolution("phase-reaction-spec2.yaml",
                             "kinetics-noreactions");
-    EXPECT_EQ(soln->kinetics()->kineticsType(), "Gas");
+    EXPECT_EQ(soln->kinetics()->kineticsType(), "bulk");
     EXPECT_EQ(soln->kinetics()->nReactions(), (size_t) 1);
 }
 
@@ -714,7 +774,7 @@ TEST(KineticsFromYaml, InvalidExtension)
 {
     AnyMap input = AnyMap::fromYamlFile("h2o2.yaml");
     newSolution(input["phases"].asVector<AnyMap>()[0], input);
-    std::vector<AnyMap> extensions(1);
+    vector<AnyMap> extensions(1);
     extensions[0]["type"] = "nonexistent";
     extensions[0]["name"] = "fake";
     input["extensions"] = extensions;
@@ -739,11 +799,12 @@ public:
 
     void compareReactions() {
         auto kin = soln->kinetics();
-        EXPECT_EQ(kin->reactionString(iOld), kin->reactionString(iNew));
+        EXPECT_EQ(kin->reaction(iOld)->equation(),
+                  kin->reaction(iNew)->equation());
         EXPECT_EQ(kin->isReversible(iOld), kin->isReversible(iNew));
 
-        vector_fp kf(kin->nReactions()), kr(kin->nReactions());
-        vector_fp ropf(kin->nReactions()), ropr(kin->nReactions());
+        vector<double> kf(kin->nReactions()), kr(kin->nReactions());
+        vector<double> ropf(kin->nReactions()), ropr(kin->nReactions());
         kin->getFwdRateConstants(kf.data());
         kin->getRevRateConstants(kr.data());
         kin->getFwdRatesOfProgress(ropf.data());
@@ -763,7 +824,7 @@ public:
 
 TEST_F(ReactionToYaml, elementary)
 {
-    soln = newSolution("h2o2.yaml", "", "None");
+    soln = newSolution("h2o2.yaml", "", "none");
     soln->thermo()->setState_TPY(1000, 2e5, "H2:1.0, O2:0.5, O:1e-8, OH:3e-8");
     duplicateReaction(2);
     EXPECT_EQ(duplicate->type(), "Arrhenius");
@@ -773,7 +834,7 @@ TEST_F(ReactionToYaml, elementary)
 
 TEST_F(ReactionToYaml, threeBody)
 {
-    soln = newSolution("h2o2.yaml", "", "None");
+    soln = newSolution("h2o2.yaml", "", "none");
     soln->thermo()->setState_TPY(1000, 2e5, "H2:1.0, O2:0.5, O:1e-8, OH:3e-8, H:2e-7");
     duplicateReaction(1);
     EXPECT_TRUE(std::dynamic_pointer_cast<ArrheniusRate>(duplicate->rate()));
@@ -782,7 +843,7 @@ TEST_F(ReactionToYaml, threeBody)
 
 TEST_F(ReactionToYaml, TroeFalloff)
 {
-    soln = newSolution("h2o2.yaml", "", "None");
+    soln = newSolution("h2o2.yaml", "", "none");
     soln->thermo()->setState_TPY(1000, 2e5, "H2:1.0, O2:0.5, H2O2:1e-8, OH:3e-8");
     duplicateReaction(21);
     auto rate = std::dynamic_pointer_cast<TroeRate>(duplicate->rate());
@@ -848,7 +909,7 @@ TEST_F(ReactionToYaml, surface)
 {
     auto gas = newSolution("diamond.yaml", "gas");
     auto solid = newSolution("diamond.yaml", "diamond");
-    soln = newSolution("diamond.yaml", "diamond_100", "None", {gas, solid});
+    soln = newSolution("diamond.yaml", "diamond_100", "none", {gas, solid});
     auto surf = std::dynamic_pointer_cast<SurfPhase>(soln->thermo());
     surf->setCoveragesByName("c6HH:0.1, c6H*:0.6, c6**:0.1");
     gas->thermo()->setMassFractionsByName("H2:0.7, CH4:0.3");
@@ -902,9 +963,9 @@ TEST_F(ReactionToYaml, unconvertible3)
 {
     Reaction R(
         {{"H2", 1}, {"OH", 1}}, {{"H2O", 1}, {"H", 1}},
-        shared_ptr<ReactionRate>(new TroeRate(
+        make_shared<TroeRate>(
             ArrheniusRate(1e5, -1.0, 12.5), ArrheniusRate(1e5, -1.0, 12.5),
-            {0.562, 91.0, 5836.0, 8552.0})));
+            vector<double>{0.562, 91.0, 5836.0, 8552.0}));
     AnyMap params = R.parameters();
     UnitSystem U{"g", "cm", "mol"};
     params.setUnits(U);
@@ -923,7 +984,7 @@ TEST_F(ReactionToYaml, BlowersMaselRate)
 TEST_F(ReactionToYaml, BlowersMaselInterface)
 {
     auto gas = newSolution("blowers-masel.yaml", "gas");
-    soln = newSolution("blowers-masel.yaml", "Pt_surf", "None", {gas});
+    soln = newSolution("blowers-masel.yaml", "Pt_surf", "none", {gas});
     gas->thermo()->setState_TPY(1100, 0.1 * OneAtm, "O:0.01, H2:0.8, O2:0.19");
     soln->thermo()->setState_TP(1100, 0.1 * OneAtm);
     auto surf = std::dynamic_pointer_cast<SurfPhase>(soln->thermo());

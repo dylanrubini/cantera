@@ -16,28 +16,53 @@ namespace Cantera
 {
 
 /**
- *  Virtual base class for ODE right-hand-side function evaluators.
+ * @defgroup odeGroup  ODE and DAE Function Utilities
+*/
+
+/**
+ *  Virtual base class for ODE/DAE right-hand-side function evaluators.
  *  Classes derived from FuncEval evaluate the right-hand-side function
- * \f$ \vec{F}(t,\vec{y})\f$ in
- * \f[
+ * @f$ \vec{F}(t,\vec{y}) @f$ in
+ * @f[
  *  \dot{\vec{y}} = \vec{F}(t,\vec{y}).
- * \f]
+ * @f]
  *  @ingroup odeGroup
  */
 class FuncEval
 {
 public:
-    FuncEval();
-    virtual ~FuncEval() {}
+    FuncEval() = default;
+    virtual ~FuncEval() = default;
 
     /**
-     * Evaluate the right-hand-side function. Called by the integrator.
+     * Evaluate the right-hand-side ODE function. Called by the integrator.
      * @param[in] t time.
      * @param[in] y solution vector, length neq()
      * @param[out] ydot rate of change of solution vector, length neq()
      * @param[in] p sensitivity parameter vector, length nparams()
      */
-    virtual void eval(double t, double* y, double* ydot, double* p)=0;
+    virtual void eval(double t, double* y, double* ydot, double* p) {
+        throw NotImplementedError("FuncEval::eval");
+    }
+
+    /**
+     * Evaluate the right-hand-side DAE function. Called by the integrator.
+     * @param[in] t time.
+     * @param[in] y solution vector, length neq()
+     * @param[out] ydot rate of change of solution vector, length neq()
+     * @param[in] p sensitivity parameter vector, length nparams()
+     * @param[out] residual the DAE residuals, length nparams()
+     */
+    virtual void evalDae(double t, double* y, double* ydot, double* p,
+                         double* residual) {
+        throw NotImplementedError("FuncEval::evalDae");
+    }
+
+    //! Given a vector of length neq(), mark which variables should be
+    //! considered algebraic constraints
+    virtual void getConstraints(double* constraints) {
+        throw NotImplementedError("FuncEval::getConstraints");
+    }
 
     //! Evaluate the right-hand side using return code to indicate status.
     /*!
@@ -48,9 +73,21 @@ public:
      *  @returns 0 for a successful evaluation; 1 after a potentially-
      *      recoverable error; -1 after an unrecoverable error.
      */
-    int eval_nothrow(double t, double* y, double* ydot);
+    int evalNoThrow(double t, double* y, double* ydot);
 
-    /*! Evaluate the setup processes for the Jacobian preconditioner.
+    //! Evaluate the right-hand side using return code to indicate status.
+    /*!
+     * Errors are indicated using the return value, rather than by throwing
+     *  exceptions. This method is used when calling from a C-based integrator
+     *  such as CVODES. Exceptions may either be stored or printed, based on the
+     *  setting of suppressErrors().
+     *  @returns 0 for a successful evaluation; 1 after a potentially-
+     *      recoverable error; -1 after an unrecoverable error.
+     */
+    int evalDaeNoThrow(double t, double* y, double* ydot, double* residual);
+
+    /**
+     * Evaluate the setup processes for the Jacobian preconditioner.
      * @param[in] t time.
      * @param[in] y solution vector, length neq()
      * @param gamma the gamma in M=I-gamma*J
@@ -61,7 +98,8 @@ public:
         throw NotImplementedError("FuncEval::preconditionerSetup");
     }
 
-    /*! Evaluate the linear system Ax=b where A is the preconditioner.
+    /**
+     * Evaluate the linear system Ax=b where A is the preconditioner.
      * @param[in] rhs right hand side vector used in linear system
      * @param[out] output output vector for solution
      * @warning This function is an experimental part of the %Cantera API and may be
@@ -76,7 +114,8 @@ public:
         throw NotImplementedError("FuncEval::updatePreconditioner");
     }
 
-    /*! Preconditioner setup that doesn't throw an error but returns a
+    /**
+     * Preconditioner setup that doesn't throw an error but returns a
      * CVODES flag. It also helps as a first level of polymorphism
      * which identifies the specific FuncEval, e.g., ReactorNet.
      * @param[in] t time.
@@ -87,7 +126,8 @@ public:
      */
     int preconditioner_setup_nothrow(double t, double* y, double gamma);
 
-    /*! Preconditioner solve that doesn't throw an error but returns a
+    /**
+     * Preconditioner solve that doesn't throw an error but returns a
      * CVODES flag. It also helps as a first level of polymorphism
      * which identifies the specific FuncEval, e.g., ReactorNet.
      * @param[in] rhs right hand side vector used in linear system
@@ -97,16 +137,23 @@ public:
      */
     int preconditioner_solve_nothrow(double* rhs, double* output);
 
-    //! Fill in the vector *y* with the current state of the system
+    //! Fill in the vector *y* with the current state of the system.
+    //! Used for getting the initial state for ODE systems.
     virtual void getState(double* y) {
         throw NotImplementedError("FuncEval::getState");
     }
 
+    //! Fill in the vectors *y* and *ydot* with the current state of the system.
+    //! Used for getting the initial state for DAE systems.
+    virtual void getStateDae(double* y, double* ydot) {
+        throw NotImplementedError("FuncEval::getStateDae");
+    }
+
     //! Number of equations.
-    virtual size_t neq()=0;
+    virtual size_t neq() const = 0;
 
     //! Number of sensitivity parameters.
-    virtual size_t nparams() {
+    virtual size_t nparams() const {
         return m_sens_params.size();
     }
 
@@ -121,7 +168,7 @@ public:
     };
 
     //! Return a string containing the text of any suppressed errors
-    std::string getErrors() const;
+    string getErrors() const;
 
     //! Clear any previously-stored suppressed errors
     void clearErrors() {
@@ -131,17 +178,17 @@ public:
     //! Values for the problem parameters for which sensitivities are computed
     //! This is the array which is perturbed and passed back as the fourth
     //! argument to eval().
-    vector_fp m_sens_params;
+    vector<double> m_sens_params;
 
     //! Scaling factors for each sensitivity parameter
-    vector_fp m_paramScales;
+    vector<double> m_paramScales;
 
 protected:
     // If true, errors are accumulated in m_errors. Otherwise, they are printed
-    bool m_suppress_errors;
+    bool m_suppress_errors = false;
 
     //! Errors occurring during function evaluations
-    std::vector<std::string> m_errors;
+    vector<string> m_errors;
 };
 
 }

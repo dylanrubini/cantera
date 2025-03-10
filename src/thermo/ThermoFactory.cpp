@@ -1,7 +1,7 @@
 /**
  *  @file ThermoFactory.cpp
  *     Definitions for the factory class that can create known ThermoPhase objects
- *     (see \ref thermoprops and class \link Cantera::ThermoFactory ThermoFactory\endlink).
+ *     (see @ref thermoprops and class @link Cantera::ThermoFactory ThermoFactory@endlink).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -18,14 +18,13 @@
 #include "cantera/thermo/PlasmaPhase.h"
 
 #include "cantera/thermo/IdealSolidSolnPhase.h"
-#include "cantera/thermo/MaskellSolidSolnPhase.h"
 #include "cantera/thermo/MargulesVPSSTP.h"
 #include "cantera/thermo/RedlichKisterVPSSTP.h"
-#include "cantera/thermo/IonsFromNeutralVPSSTP.h"
 #include "cantera/thermo/PureFluidPhase.h"
 #include "cantera/thermo/RedlichKwongMFTP.h"
 #include "cantera/thermo/PengRobinson.h"
 #include "cantera/thermo/SurfPhase.h"
+#include "cantera/thermo/CoverageDependentSurfPhase.h"
 #include "cantera/thermo/EdgePhase.h"
 #include "cantera/thermo/MetalPhase.h"
 #include "cantera/thermo/StoichSubstance.h"
@@ -39,7 +38,7 @@
 #include "cantera/thermo/BinarySolutionTabulatedThermo.h"
 #include "cantera/base/stringUtils.h"
 
-using namespace std;
+#include <boost/algorithm/string.hpp>
 
 namespace Cantera
 {
@@ -50,97 +49,109 @@ std::mutex ThermoFactory::thermo_mutex;
 ThermoFactory::ThermoFactory()
 {
     reg("none", []() { return new ThermoPhase(); });
-    addAlias("none", "ThermoPhase");
-    addAlias("none", "None");
+    addDeprecatedAlias("none", "ThermoPhase");
+    addDeprecatedAlias("none", "None");
     reg("ideal-gas", []() { return new IdealGasPhase(); });
-    addAlias("ideal-gas", "IdealGas");
+    addDeprecatedAlias("ideal-gas", "IdealGas");
     reg("plasma", []() { return new PlasmaPhase(); });
     reg("ideal-surface", []() { return new SurfPhase(); });
-    addAlias("ideal-surface", "Surface");
-    addAlias("ideal-surface", "Surf");
+    addDeprecatedAlias("ideal-surface", "Surface");
+    addDeprecatedAlias("ideal-surface", "Surf");
+    reg("coverage-dependent-surface", []() { return new CoverageDependentSurfPhase(); });
     reg("edge", []() { return new EdgePhase(); });
-    addAlias("edge", "Edge");
+    addDeprecatedAlias("edge", "Edge");
     reg("electron-cloud", []() { return new MetalPhase(); });
-    addAlias("electron-cloud", "Metal");
+    addDeprecatedAlias("electron-cloud", "Metal");
     reg("fixed-stoichiometry", []() { return new StoichSubstance(); });
-    addAlias("fixed-stoichiometry", "StoichSubstance");
+    addDeprecatedAlias("fixed-stoichiometry", "StoichSubstance");
     reg("pure-fluid", []() { return new PureFluidPhase(); });
-    addAlias("pure-fluid", "PureFluid");
+    addDeprecatedAlias("pure-fluid", "PureFluid");
     reg("compound-lattice", []() { return new LatticeSolidPhase(); });
-    addAlias("compound-lattice", "LatticeSolid");
+    addDeprecatedAlias("compound-lattice", "LatticeSolid");
     reg("lattice", []() { return new LatticePhase(); });
-    addAlias("lattice", "Lattice");
+    addDeprecatedAlias("lattice", "Lattice");
     reg("HMW-electrolyte", []() { return new HMWSoln(); });
-    addAlias("HMW-electrolyte", "HMW");
-    addAlias("HMW-electrolyte", "HMWSoln");
+    addDeprecatedAlias("HMW-electrolyte", "HMW");
+    addDeprecatedAlias("HMW-electrolyte", "HMWSoln");
     reg("ideal-condensed", []() { return new IdealSolidSolnPhase(); });
-    addAlias("ideal-condensed", "IdealSolidSolution");
-    addAlias("ideal-condensed", "IdealSolidSoln");
+    addDeprecatedAlias("ideal-condensed", "IdealSolidSolution");
+    addDeprecatedAlias("ideal-condensed", "IdealSolidSoln");
     reg("Debye-Huckel", []() { return new DebyeHuckel(); });
-    addAlias("Debye-Huckel", "DebyeHuckel");
+    addDeprecatedAlias("Debye-Huckel", "DebyeHuckel");
     reg("ideal-molal-solution", []() { return new IdealMolalSoln(); });
-    addAlias("ideal-molal-solution", "IdealMolalSolution");
-    addAlias("ideal-molal-solution", "IdealMolalSoln");
+    addDeprecatedAlias("ideal-molal-solution", "IdealMolalSolution");
+    addDeprecatedAlias("ideal-molal-solution", "IdealMolalSoln");
     reg("ideal-solution-VPSS", []() { return new IdealSolnGasVPSS(); });
     reg("ideal-gas-VPSS", []() { return new IdealSolnGasVPSS(); });
-    addAlias("ideal-solution-VPSS", "IdealSolnVPSS");
-    addAlias("ideal-solution-VPSS", "IdealSolnGas");
-    addAlias("ideal-gas-VPSS", "IdealGasVPSS");
+    addDeprecatedAlias("ideal-solution-VPSS", "IdealSolnVPSS");
+    addDeprecatedAlias("ideal-solution-VPSS", "IdealSolnGas");
+    addDeprecatedAlias("ideal-gas-VPSS", "IdealGasVPSS");
     reg("Margules", []() { return new MargulesVPSSTP(); });
-    reg("ions-from-neutral-molecule", []() { return new IonsFromNeutralVPSSTP(); });
-    addAlias("ions-from-neutral-molecule", "IonsFromNeutralMolecule");
-    addAlias("ions-from-neutral-molecule", "IonsFromNeutral");
     reg("Redlich-Kister", []() { return new RedlichKisterVPSSTP(); });
-    addAlias("Redlich-Kister", "RedlichKister");
+    addDeprecatedAlias("Redlich-Kister", "RedlichKister");
     reg("Redlich-Kwong", []() { return new RedlichKwongMFTP(); });
-    addAlias("Redlich-Kwong", "RedlichKwongMFTP");
-    addAlias("Redlich-Kwong", "RedlichKwong");
-    reg("Maskell-solid-solution", []() { return new MaskellSolidSolnPhase(); });
-    addAlias("Maskell-solid-solution", "MaskellSolidSolnPhase");
-    addAlias("Maskell-solid-solution", "MaskellSolidsoln");
+    addDeprecatedAlias("Redlich-Kwong", "RedlichKwongMFTP");
+    addDeprecatedAlias("Redlich-Kwong", "RedlichKwong");
     reg("liquid-water-IAPWS95", []() { return new WaterSSTP(); });
-    addAlias("liquid-water-IAPWS95", "PureLiquidWater");
-    addAlias("liquid-water-IAPWS95", "Water");
+    addDeprecatedAlias("liquid-water-IAPWS95", "PureLiquidWater");
+    addDeprecatedAlias("liquid-water-IAPWS95", "Water");
     reg("binary-solution-tabulated", []() { return new BinarySolutionTabulatedThermo(); });
-    addAlias("binary-solution-tabulated", "BinarySolutionTabulatedThermo");
+    addDeprecatedAlias("binary-solution-tabulated", "BinarySolutionTabulatedThermo");
     reg("Peng-Robinson", []() { return new PengRobinson(); });
 }
 
-ThermoPhase* ThermoFactory::newThermoPhase(const std::string& model)
+ThermoFactory* ThermoFactory::factory()
 {
-    return create(model);
+    std::unique_lock<std::mutex> lock(thermo_mutex);
+    if (!s_factory) {
+        s_factory = new ThermoFactory;
+    }
+    return s_factory;
 }
 
-unique_ptr<ThermoPhase> newPhase(const AnyMap& phaseNode, const AnyMap& rootNode)
+void ThermoFactory::deleteFactory()
+{
+    std::unique_lock<std::mutex> lock(thermo_mutex);
+    delete s_factory;
+    s_factory = 0;
+}
+
+shared_ptr<ThermoPhase> newThermoModel(const string& model)
+{
+    shared_ptr<ThermoPhase> tptr(ThermoFactory::factory()->create(model));
+    return tptr;
+}
+
+shared_ptr<ThermoPhase> newThermo(const AnyMap& phaseNode, const AnyMap& rootNode)
 {
     if (!phaseNode.hasKey("kinetics") && phaseNode.hasKey("reactions")) {
-        throw InputFileError("newPhase", phaseNode["reactions"],
+        throw InputFileError("newThermo", phaseNode["reactions"],
             "Phase entry includes a 'reactions' field but does not "
             "specify a kinetics model.");
     }
-    unique_ptr<ThermoPhase> t(newThermoPhase(phaseNode["thermo"].asString()));
+    string model = phaseNode["thermo"].asString();
+    shared_ptr<ThermoPhase> t = newThermoModel(model);
     setupPhase(*t, phaseNode, rootNode);
     return t;
 }
 
-ThermoPhase* newPhase(const std::string& infile, std::string id)
+shared_ptr<ThermoPhase> newThermo(const string& infile, const string& id)
 {
     size_t dot = infile.find_last_of(".");
     string extension;
-    if (dot != npos) {
-        extension = toLowerCopy(infile.substr(dot+1));
-    }
+    extension = toLowerCopy(infile.substr(dot+1));
+    string id_ = id;
     if (id == "-") {
-        id = "";
+        id_ = "";
     }
     if (extension == "cti" || extension == "xml") {
-        throw CanteraError("newPhase",
+        throw CanteraError("newThermo",
                            "The CTI and XML formats are no longer supported.");
     }
 
     AnyMap root = AnyMap::fromYamlFile(infile);
-    AnyMap& phase = root["phases"].getMapWhere("name", id);
-    return newPhase(phase, root).release();
+    AnyMap& phase = root["phases"].getMapWhere("name", id_);
+    return newThermo(phase, root);
 }
 
 void addDefaultElements(ThermoPhase& thermo, const vector<string>& element_names) {
@@ -230,8 +241,8 @@ void setupPhase(ThermoPhase& thermo, const AnyMap& phaseNode, const AnyMap& root
                 const auto& names = elemNode.begin()->second.asVector<string>();
                 const auto& slash = boost::ifind_last(source, "/");
                 if (slash) {
-                    std::string fileName(source.begin(), slash.begin());
-                    std::string node(slash.end(), source.end());
+                    string fileName(source.begin(), slash.begin());
+                    string node(slash.end(), source.end());
                     const AnyMap elements = AnyMap::fromYamlFile(fileName,
                         rootNode.getString("__file__", ""));
                     addElements(thermo, names, elements.at(node), false);
@@ -275,8 +286,8 @@ void setupPhase(ThermoPhase& thermo, const AnyMap& phaseNode, const AnyMap& root
                 const auto& slash = boost::ifind_last(source, "/");
                 if (slash) {
                     // source is a different input file
-                    std::string fileName(source.begin(), slash.begin());
-                    std::string node(slash.end(), source.end());
+                    string fileName(source.begin(), slash.begin());
+                    string node(slash.end(), source.end());
                     AnyMap species = AnyMap::fromYamlFile(fileName,
                         rootNode.getString("__file__", ""));
                     addSpecies(thermo, names, species[node]);
@@ -302,26 +313,28 @@ void setupPhase(ThermoPhase& thermo, const AnyMap& phaseNode, const AnyMap& root
     if (vpssThermo) {
         for (size_t k = 0; k < thermo.nSpecies(); k++) {
             unique_ptr<PDSS> pdss;
-            if (thermo.species(k)->input.hasKey("equation-of-state")) {
-                // Use the first node which specifies a valid PDSS model
-                auto& eos = thermo.species(k)->input["equation-of-state"];
-                bool found = false;
-                for (auto& node : eos.asVector<AnyMap>()) {
-                    string model = node["model"].asString();
-                    if (PDSSFactory::factory()->exists(model)) {
-                        pdss.reset(newPDSS(model));
-                        pdss->setParameters(node);
-                        found = true;
-                        break;
-                    }
+            if (!thermo.species(k)->input.hasKey("equation-of-state")) {
+                throw InputFileError("setupPhase", thermo.species(k)->input,
+                    "Species '{}' in use by a ThermoPhase model of type '{}'\n"
+                    "must define an 'equation-of-state' field.",
+                    thermo.speciesName(k), thermo.type());
+            }
+            // Use the first node which specifies a valid PDSS model
+            auto& eos = thermo.species(k)->input["equation-of-state"];
+            bool found = false;
+            for (auto& node : eos.asVector<AnyMap>()) {
+                string model = node["model"].asString();
+                if (PDSSFactory::factory()->exists(model)) {
+                    pdss.reset(newPDSS(model));
+                    pdss->setParameters(node);
+                    found = true;
+                    break;
                 }
-                if (!found) {
-                    throw InputFileError("setupPhase", eos,
-                        "Could not find an equation-of-state specification "
-                        "which defines a known PDSS model.");
-                }
-            } else {
-                pdss.reset(newPDSS("ideal-gas"));
+            }
+            if (!found) {
+                throw InputFileError("setupPhase", eos,
+                    "Could not find an equation-of-state specification "
+                    "which defines a known PDSS model.");
             }
             vpssThermo->installPDSS(k, std::move(pdss));
         }

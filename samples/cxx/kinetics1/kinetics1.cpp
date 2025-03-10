@@ -1,12 +1,11 @@
-/*!
- * @file kinetics1.cpp
- *
- * Zero-dimensional kinetics
+/*
+ * Autoignition in a homogeneous reactor
+ * =====================================
  *
  * This example simulates autoignition of hydrogen in a constant pressure
  * reactor and saves the time history to files that can be used for plotting.
  *
- * Keywords: combustion, reactor network, ignition delay, saving output
+ * .. tags:: C++, combustion, reactor network, ignition delay, saving output
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -27,22 +26,18 @@ int kinetics1(int np, void* p)
          " mixture \nbeginning at T = 1001 K and P = 1 atm." << endl;
 
     // create an ideal gas mixture that corresponds to OH submech from GRI-Mech 3.0
-    auto sol = newSolution("h2o2.yaml", "ohmech", "None");
+    auto sol = newSolution("h2o2.yaml", "ohmech", "none");
     auto gas = sol->thermo();
 
     // set the state
     gas->setState_TPX(1001.0, OneAtm, "H2:2.0, O2:1.0, N2:4.0");
     int nsp = gas->nSpecies();
 
-    // create a reactor
-    IdealGasConstPressureReactor r;
-
-    // 'insert' the gas into the reactor and environment.  Note
-    // that it is ok to insert the same gas object into multiple
-    // reactors or reservoirs. All this means is that this object
-    // will be used to evaluate thermodynamic or kinetic
-    // quantities needed.
-    r.insert(sol);
+    // create a reactor and 'insert' the gas into the reactor and environment.
+    // Note that it is ok to insert the same gas object into multiple reactors
+    // or reservoirs. All this means is that this object will be used to evaluate
+    // thermodynamic or kinetic quantities needed.
+    IdealGasConstPressureReactor r(sol);
 
     double dt = 1.e-5; // interval at which output is written
     int nsteps = 100; // number of intervals

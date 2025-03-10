@@ -12,7 +12,9 @@
 #include "cantera/kinetics/Arrhenius.h"
 #include "cantera/kinetics/ChebyshevRate.h"
 #include "cantera/kinetics/Custom.h"
+#include "cantera/kinetics/ElectronCollisionPlasmaRate.h"
 #include "cantera/kinetics/Falloff.h"
+#include "cantera/kinetics/LinearBurkeRate.h"
 #include "cantera/kinetics/InterfaceRate.h"
 #include "cantera/kinetics/PlogRate.h"
 #include "cantera/kinetics/TwoTempPlasmaRate.h"
@@ -36,6 +38,11 @@ ReactionRateFactory::ReactionRateFactory()
     // TwoTempPlasmaRate evaluator
     reg("two-temperature-plasma", [](const AnyMap& node, const UnitStack& rate_units) {
         return new TwoTempPlasmaRate(node, rate_units);
+    });
+
+    // ElectronCollisionPlasmaRate evaluator
+    reg("electron-collision-plasma", [](const AnyMap& node, const UnitStack& rate_units) {
+        return new ElectronCollisionPlasmaRate(node, rate_units);
     });
 
     // BlowersMaselRate evaluator
@@ -69,6 +76,11 @@ ReactionRateFactory::ReactionRateFactory()
         return new PlogRate(node, rate_units);
     });
 
+    // LinearBurkeRate evaluator
+    reg("linear-Burke", [](const AnyMap& node, const UnitStack& rate_units) {
+        return new LinearBurkeRate(node, rate_units);
+    });
+
     // ChebyshevRate evaluator
     reg("Chebyshev", [](const AnyMap& node, const UnitStack& rate_units) {
         return new ChebyshevRate(node, rate_units);
@@ -100,7 +112,21 @@ ReactionRateFactory::ReactionRateFactory()
     });
 }
 
-shared_ptr<ReactionRate> newReactionRate(const std::string& type)
+ReactionRateFactory* ReactionRateFactory::factory() {
+    std::unique_lock<std::mutex> lock(rate_mutex);
+    if (!s_factory) {
+        s_factory = new ReactionRateFactory();
+    }
+    return s_factory;
+}
+
+void ReactionRateFactory::deleteFactory() {
+    std::unique_lock<std::mutex> lock(rate_mutex);
+    delete s_factory;
+    s_factory = 0;
+}
+
+shared_ptr<ReactionRate> newReactionRate(const string& type)
 {
     return shared_ptr<ReactionRate> (
         ReactionRateFactory::factory()->create(type, AnyMap(), UnitStack({})));
@@ -109,7 +135,7 @@ shared_ptr<ReactionRate> newReactionRate(const std::string& type)
 shared_ptr<ReactionRate> newReactionRate(
     const AnyMap& rate_node, const UnitStack& rate_units)
 {
-    std::string type = ""; // default is to create Arrhenius from empty
+    string type = ""; // default is to create Arrhenius from empty
     if (rate_node.hasKey("type")) {
         type = rate_node["type"].asString();
     }
@@ -137,15 +163,7 @@ shared_ptr<ReactionRate> newReactionRate(
 
 shared_ptr<ReactionRate> newReactionRate(const AnyMap& rate_node)
 {
-    const UnitSystem& system = rate_node.units();
-    if (system.convertTo(1., "m") != 1. || system.convertTo(1., "kmol") != 1.) {
-        throw InputFileError("ReactionRateFactory::newReactionRate",
-            rate_node.at("__units__"),
-            "Alternative units for 'length' or 'quantity` are not supported "
-            "when creating\na standalone 'ReactionRate' object.");
-    }
-    AnyMap node(rate_node);
-        return newReactionRate(node, UnitStack({}));
+    return newReactionRate(AnyMap(rate_node), UnitStack({}));
 }
 
 }

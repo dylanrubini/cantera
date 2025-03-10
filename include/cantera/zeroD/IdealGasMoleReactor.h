@@ -11,42 +11,46 @@
 namespace Cantera
 {
 
-/*!
+/**
  * IdealGasMoleReactor is a class for ideal gas constant-volume reactors which use a
  * state of moles.
+ * @since New in %Cantera 3.0
+ * @ingroup reactorGroup
  */
 class IdealGasMoleReactor : public MoleReactor
 {
 public:
-    IdealGasMoleReactor() {}
+    using MoleReactor::MoleReactor; // inherit constructors
 
-    virtual std::string type() const {
+    string type() const override {
         return "IdealGasMoleReactor";
     }
 
-    virtual size_t componentIndex(const std::string& nm) const;
+    size_t componentIndex(const string& nm) const override;
 
-    virtual std::string componentName(size_t k);
+    string componentName(size_t k) override;
 
-    virtual void setThermoMgr(ThermoPhase& thermo);
+    void getState(double* y) override;
 
-    virtual void getState(double* y);
+    void initialize(double t0=0.0) override;
 
-    virtual void initialize(double t0 = 0.0);
+    void eval(double t, double* LHS, double* RHS) override;
 
-    virtual void eval(double t, double* LHS, double* RHS);
-
-    virtual void updateState(double* y);
+    void updateState(double* y) override;
 
     //! Calculate an approximate Jacobian to accelerate preconditioned solvers
 
     //! Neglects derivatives with respect to mole fractions that would generate a
     //! fully-dense Jacobian. Currently, also neglects terms related to interactions
     //! between reactors, for example via inlets and outlets.
-    virtual Eigen::SparseMatrix<double> jacobian();
+    Eigen::SparseMatrix<double> jacobian() override;
+
+    bool preconditionerSupported() const override {return true;};
 
 protected:
-    vector_fp m_uk; //!< Species molar internal energies
+    void setThermo(ThermoPhase& thermo) override;
+
+    vector<double> m_uk; //!< Species molar internal energies
 };
 
 }

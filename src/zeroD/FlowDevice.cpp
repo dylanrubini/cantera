@@ -11,9 +11,19 @@
 namespace Cantera
 {
 
-FlowDevice::FlowDevice() : m_mdot(Undef), m_pfunc(0), m_tfunc(0),
-                           m_coeff(1.0), m_nspin(0), m_nspout(0),
-                           m_in(0), m_out(0) {}
+bool FlowDevice::setDefaultName(map<string, int>& counts)
+{
+    if (m_defaultNameSet) {
+        return false;
+    }
+    m_defaultNameSet = true;
+    string typ(type());
+    if (m_name == "(none)" || m_name == "") {
+        m_name = fmt::format("{}_{}", type(), counts[type()]);
+    }
+    counts[type()]++;
+    return true;
+}
 
 bool FlowDevice::install(ReactorBase& in, ReactorBase& out)
 {
@@ -31,7 +41,7 @@ bool FlowDevice::install(ReactorBase& in, ReactorBase& out)
 
     m_nspin = mixin.nSpecies();
     m_nspout = mixout.nSpecies();
-    std::string nm;
+    string nm;
     size_t ki, ko;
     for (ki = 0; ki < m_nspin; ki++) {
         nm = mixin.speciesName(ki);
@@ -51,9 +61,26 @@ void FlowDevice::setPressureFunction(Func1* f)
     m_pfunc = f;
 }
 
+double FlowDevice::evalPressureFunction()
+{
+    double delta_P = in().pressure() - out().pressure();
+    if (m_pfunc) {
+        return m_pfunc->eval(delta_P);
+    }
+    return delta_P;
+}
+
 void FlowDevice::setTimeFunction(Func1* g)
 {
     m_tfunc = g;
+}
+
+double FlowDevice::evalTimeFunction()
+{
+    if (m_tfunc) {
+        return m_tfunc->eval(m_time);
+    }
+    return 1.;
 }
 
 double FlowDevice::outletSpeciesMassFlowRate(size_t k)

@@ -18,16 +18,6 @@ namespace Cantera
 
 class AnyMap;
 
-/**
- *  @defgroup surfaceGroup  Coverage-dependent rate parameterizations
- *
- *  This section describes the parameterizations used to describe rate
- *  parameterization that involve interfaces.
- *
- *  @ingroup chemkinetics
- */
-
-
 //! Data container holding shared data for reaction rate specification with interfaces
 /**
  * The data container InterfaceData holds precalculated data common to
@@ -38,19 +28,19 @@ class AnyMap;
  */
 struct InterfaceData : public BlowersMaselData
 {
-    InterfaceData();
+    InterfaceData() = default;
 
-    virtual bool update(const ThermoPhase& bulk, const Kinetics& kin) override;
+    bool update(const ThermoPhase& bulk, const Kinetics& kin) override;
 
-    virtual void update(double T) override;
+    void update(double T) override;
 
-    virtual void update(double T, const vector_fp& values) override;
+    void update(double T, const vector<double>& values) override;
 
     using BlowersMaselData::update;
 
     virtual void perturbTemperature(double deltaT);
 
-    virtual void resize(size_t nSpecies, size_t nReactions, size_t nPhases) override {
+    void resize(size_t nSpecies, size_t nReactions, size_t nPhases) override {
         coverages.resize(nSpecies, 0.);
         logCoverages.resize(nSpecies, 0.);
         partialMolarEnthalpies.resize(nSpecies, 0.);
@@ -60,38 +50,51 @@ struct InterfaceData : public BlowersMaselData
         ready = true;
     }
 
-    double sqrtT; //!< square root of temperature
+    double sqrtT = NAN; //!< square root of temperature
 
-    vector_fp coverages; //!< surface coverages
-    vector_fp logCoverages; //!< logarithm of surface coverages
-    vector_fp electricPotentials; //!< electric potentials of phases
-    vector_fp standardChemPotentials; //!< standard state chemical potentials
-    vector_fp standardConcentrations; //!< standard state concentrations
+    vector<double> coverages; //!< surface coverages
+    vector<double> logCoverages; //!< logarithm of surface coverages
+    vector<double> electricPotentials; //!< electric potentials of phases
+    vector<double> standardChemPotentials; //!< standard state chemical potentials
+    vector<double> standardConcentrations; //!< standard state concentrations
 };
 
 
 //! Base class for rate parameterizations that involve interfaces
 /**
  * Rate expressions defined for interfaces may include coverage dependent terms,
- * where an example is given by [Kee, R. J., Coltrin, M. E., & Glarborg, P.(2003).
- * Chemically reacting flow: theory and practice. John Wiley & Sons. Eq 11.113].
- * Using Cantera nomenclature, this expression can be rewritten as
- *  \f[
+ * where an example is given by Kee, et al. @cite kee2003, Eq 11.113.
+ * Using %Cantera nomenclature, this expression can be rewritten as
+ *  @f[
  *      k_f = A T^b \exp \left( - \frac{E_a}{RT} \right)
  *          \prod_k 10^{a_k \theta_k} \theta_k^{m_k}
  *          \exp \left( \frac{- E_k \theta_k}{RT} \right)
- *  \f]
+ *  @f]
  * It is evident that this expression combines a regular modified Arrhenius rate
- * expression \f$ A T^b \exp \left( - \frac{E_a}{RT} \right) \f$ with coverage-related
- * terms, where the parameters \f$ (a_k, E_k, m_k) \f$ describe the dependency on the
- * surface coverage of species \f$ k, \theta_k \f$. The InterfaceRateBase class implements
- * terms related to coverage only, which allows for combinations with arbitrary rate
- * parameterizations (for example Arrhenius and BlowersMaselRate).
+ * expression @f$ A T^b \exp \left( - \frac{E_a}{RT} \right) @f$ with coverage-related
+ * terms, where the parameters @f$ (a_k, E_k, m_k) @f$ describe the dependency on the
+ * surface coverage of species @f$ k, \theta_k @f$. In addition to the linear coverage
+ * dependence on the activation energy modifier @f$ E_k @f$, polynomial coverage
+ * dependence is also available. When the dependence parameter @f$ E_k @f$ is given as
+ * a scalar value, the linear dependency is applied whereas if a list of four values
+ * are given as @f$ [E^{(1)}_k, ..., E^{(4)}_k] @f$, a polynomial dependency is applied as
+ *  @f[
+ *      k_f = A T^b \exp \left( - \frac{E_a}{RT} \right)
+ *          \prod_k 10^{a_k \theta_k} \theta_k^{m_k}
+ *          \exp \left( \frac{- E^{(1)}_k \theta_k - E^{(2)}_k \theta_k^2
+ *          - E^{(3)}_k \theta_k^3 - E^{(4)}_k \theta_k^4}{RT} \right)
+ *  @f]
+ * The InterfaceRateBase class implements terms related to coverage only, which allows
+ * for combinations with arbitrary rate parameterizations (for example Arrhenius and
+ * BlowersMaselRate).
+ * @ingroup surfaceGroup
  */
 class InterfaceRateBase
 {
 public:
     InterfaceRateBase();
+
+    virtual ~InterfaceRateBase() = default;
 
     //! Perform object setup based on AnyMap node information
     //! @param node  AnyMap object containing reaction rate specification
@@ -109,14 +112,13 @@ public:
 
     //! Store parameters needed to reconstruct coverage dependencies
     //! @param dependencies  AnyMap receiving coverage information
-    //! @param asVector  Optional boolean flag to override map output
-    //! @deprecated  After Cantera 3.0, the optional asVector argument will be removed.
-    void getCoverageDependencies(AnyMap& dependencies, bool asVector=false) const;
+    void getCoverageDependencies(AnyMap& dependencies) const;
 
     //! Add a coverage dependency for species *sp*, with exponential dependence
     //! *a*, power-law exponent *m*, and activation energy dependence *e*,
     //! where *e* is in Kelvin, that is, energy divided by the molar gas constant.
-    void addCoverageDependence(const std::string& sp, double a, double m, double e);
+    virtual void addCoverageDependence(const string& sp, double a, double m,
+                                       const vector<double>& e);
 
     //! Boolean indicating whether rate uses exchange current density formulation
     bool exchangeCurrentDensityFormulation() {
@@ -130,7 +132,7 @@ public:
 
     //! Set association with an ordered list of all species associated with a given
     //! `Kinetics` object.
-    void setSpecies(const std::vector<std::string>& species);
+    void setSpecies(const vector<string>& species);
 
     //! Update reaction rate parameters
     //! @param shared_data  data shared by all reactions of a given type
@@ -142,12 +144,12 @@ public:
      *  For reactions that transfer charge across a potential difference, the
      *  activation energies are modified by the potential difference. The correction
      *  factor is based on the net electric potential energy change
-     *  \f[
+     *  @f[
      *   \Delta E_{p,j} = \sum_i E_{p,i} \nu_{i,j}
-     *  \f]
-     *  where potential energies are calculated as \f$ E_{p,i} = F \phi_i z_i \f$.
-     *  Here, \f$ F \f$ is Faraday's constant, \f$ \phi_i \f$ is the electric potential
-     *  of the species phase and \f$ z_i \f$ is the charge of the species.
+     *  @f]
+     *  where potential energies are calculated as @f$ E_{p,i} = F \phi_i z_i @f$.
+     *  Here, @f$ F @f$ is Faraday's constant, @f$ \phi_i @f$ is the electric potential
+     *  of the species phase and @f$ z_i @f$ is the charge of the species.
      *
      *  When an electrode reaction rate is specified in terms of its exchange current
      *  density, the correction factor is adjusted to the standard reaction rate
@@ -185,9 +187,9 @@ public:
     //! Boolean indicating whether rate uses electrochemistry
     /*!
      *  If this is true, the Butler-Volmer correction
-     *  \f[
+     *  @f[
      *    f_{BV} = \exp ( - \beta * Delta E_{p,j} / R T )
-     *  \f]
+     *  @f]
      *  is applied to the forward reaction rate.
      *
      *  @see voltageCorrection().
@@ -237,24 +239,32 @@ protected:
     double m_deltaPotential_RT; //!< Normalized electric potential energy change
     double m_deltaGibbs0_RT; //!< Normalized standard state Gibbs free energy change
     double m_prodStandardConcentrations; //!< Products of standard concentrations
-    std::map<size_t, size_t> m_indices; //!< Map holding indices of coverage species
-    std::vector<std::string> m_cov; //!< Vector holding names of coverage species
-    vector_fp m_ac; //!< Vector holding coverage-specific exponential dependence
-    vector_fp m_ec; //!< Vector holding coverage-specific activation energy dependence
-    vector_fp m_mc; //!< Vector holding coverage-specific power-law exponents
+
+    //! Map from coverage dependencies stored in this object to the index of the
+    //! coverage species in the Kinetics object
+    map<size_t, size_t> m_indices;
+    vector<string> m_cov; //!< Vector holding names of coverage species
+    vector<double> m_ac; //!< Vector holding coverage-specific exponential dependence
+    //! Vector holding coverage-specific activation energy dependence as a
+    //! 5-membered array of polynomial coeffcients starting from 0th-order to
+    //! 4th-order coefficients
+    vector<vector<double>> m_ec;
+    vector<bool> m_lindep; //!< Vector holding boolean for linear dependence
+    vector<double> m_mc; //!< Vector holding coverage-specific power-law exponents
 
 private:
-    //! Pairs of species index and multiplers to calculate enthalpy change
-    std::vector<std::pair<size_t, double>> m_stoichCoeffs;
+    //! Pairs of species index and multipliers to calculate enthalpy change
+    vector<pair<size_t, double>> m_stoichCoeffs;
 
     //! Pairs of phase index and net electric charges (same order as m_stoichCoeffs)
-    std::vector<std::pair<size_t, double>> m_netCharges;
+    vector<pair<size_t, double>> m_netCharges;
 };
 
 
 //! Base class for rate parameterizations that implement sticking coefficients
 /**
  * The StickingCoverage class enhances Coverage to accommodate sticking coefficients.
+ * @ingroup surfaceGroup
  */
 class StickingCoverage : public InterfaceRateBase
 {
@@ -283,7 +293,7 @@ public:
     }
 
     //! Get sticking species.
-    std::string stickingSpecies() const {
+    string stickingSpecies() const {
         return m_stickingSpecies;
     }
 
@@ -293,7 +303,7 @@ public:
      *  to be explicitly identified. Note that species have to be specified prior
      *  to adding a reaction to a Kinetics object.
      */
-    void setStickingSpecies(const std::string& stickingSpecies) {
+    void setStickingSpecies(const string& stickingSpecies) {
         m_stickingSpecies = stickingSpecies;
         m_explicitSpecies = true;
     }
@@ -342,7 +352,7 @@ public:
 protected:
     bool m_motzWise; //!< boolean indicating whether Motz & Wise correction is used
     bool m_explicitMotzWise; //!< Correction cannot be overriden by default
-    std::string m_stickingSpecies; //!< string identifying sticking species
+    string m_stickingSpecies; //!< string identifying sticking species
     bool m_explicitSpecies; //!< Boolean flag
     double m_surfaceOrder; //!< exponent applied to site density term
     double m_multiplier; //!< multiplicative factor in rate expression
@@ -351,6 +361,7 @@ protected:
 
 
 //! A class template for interface reaction rate specifications
+//! @ingroup surfaceGroup
 template <class RateType, class DataType>
 class InterfaceRate : public RateType, public InterfaceRateBase
 {
@@ -369,29 +380,26 @@ public:
     }
 
     unique_ptr<MultiRateBase> newMultiRate() const override {
-        return unique_ptr<MultiRateBase>(
-            new MultiRate<InterfaceRate<RateType, DataType>, DataType>);
+        return make_unique<MultiRate<InterfaceRate<RateType, DataType>, DataType>>();
     }
 
     //! Identifier of reaction rate type
-    virtual const std::string type() const override {
+    const string type() const override {
         return "interface-" + RateType::type();
     }
 
-    virtual void setParameters(
-        const AnyMap& node, const UnitStack& rate_units) override
-    {
+    void setParameters(const AnyMap& node, const UnitStack& rate_units) override {
         InterfaceRateBase::setParameters(node);
         RateType::setParameters(node, rate_units);
     }
 
-    virtual void getParameters(AnyMap& node) const override {
+    void getParameters(AnyMap& node) const override {
         RateType::getParameters(node);
         node["type"] = type();
         InterfaceRateBase::getParameters(node);
     }
 
-    virtual void setContext(const Reaction& rxn, const Kinetics& kin) override {
+    void setContext(const Reaction& rxn, const Kinetics& kin) override {
         RateType::setContext(rxn, kin);
         InterfaceRateBase::setContext(rxn, kin);
     }
@@ -399,7 +407,9 @@ public:
     //! Update reaction rate parameters
     //! @param shared_data  data shared by all reactions of a given type
     void updateFromStruct(const DataType& shared_data) {
-        _update(shared_data);
+        if constexpr (has_update<RateType>::value) {
+            RateType::updateFromStruct(shared_data);
+        }
         InterfaceRateBase::updateFromStruct(shared_data);
     }
 
@@ -421,37 +431,34 @@ public:
         throw NotImplementedError("InterfaceRate<>::ddTScaledFromStruct");
     }
 
-    virtual double preExponentialFactor() const override {
+    double preExponentialFactor() const override {
         return RateType::preExponentialFactor() *
             std::exp(std::log(10.0) * m_acov + m_mcov);
     }
 
-    virtual double activationEnergy() const override {
+    double activationEnergy() const override {
         return RateType::activationEnergy() + m_ecov * GasConstant;
     }
 
-protected:
-    //! Helper function to process updates for rate types that implement the
-    //! `updateFromStruct` method.
-    template <typename T=RateType,
-        typename std::enable_if<has_update<T>::value, bool>::type = true>
-    void _update(const DataType& shared_data) {
-        T::updateFromStruct(shared_data);
-    }
-
-    //! Helper function for rate types that do not implement `updateFromStruct`.
-    //! Does nothing, but exists to allow generic implementations of update().
-    template <typename T=RateType,
-        typename std::enable_if<!has_update<T>::value, bool>::type = true>
-    void _update(const DataType& shared_data) {
+    void addCoverageDependence(const string& sp, double a, double m,
+                               const vector<double>& e) override
+    {
+        InterfaceRateBase::addCoverageDependence(sp, a, m, e);
+        RateType::setCompositionDependence(true);
     }
 };
 
+//! Arrhenius-type interface reaction rate specifications
+//! @ingroup surfaceGroup
 using InterfaceArrheniusRate = InterfaceRate<ArrheniusRate, InterfaceData>;
+
+//! Blowers-Masel-type interface reaction rate specifications
+//! @ingroup surfaceGroup
 using InterfaceBlowersMaselRate = InterfaceRate<BlowersMaselRate, InterfaceData>;
 
 
 //! A class template for interface sticking rate specifications
+//! @ingroup surfaceGroup
 template <class RateType, class DataType>
 class StickingRate : public RateType, public StickingCoverage
 {
@@ -463,28 +470,29 @@ public:
 
     //! Constructor based on AnyMap content
     StickingRate(const AnyMap& node, const UnitStack& rate_units) {
-        // sticking coefficients are dimensionless
-        setParameters(node, Units(1.0));
+        setParameters(node, rate_units);
     }
     explicit StickingRate(const AnyMap& node) {
-        // sticking coefficients are dimensionless
-        setParameters(node, Units(1.0));
+        setParameters(node, {});
     }
 
     unique_ptr<MultiRateBase> newMultiRate() const override {
-        return unique_ptr<MultiRateBase>(
-            new MultiRate<StickingRate<RateType, DataType>, DataType>);
+        return make_unique<MultiRate<StickingRate<RateType, DataType>, DataType>>();
     }
 
     //! Identifier of reaction rate type
-    virtual const std::string type() const override {
+    const string type() const override {
         return "sticking-" + RateType::type();
     }
 
-    virtual void setParameters(
-        const AnyMap& node, const UnitStack& rate_units) override
-    {
+    void setRateUnits(const UnitStack& rate_units) override {
+        // Sticking coefficients are dimensionless
+        RateType::m_conversion_units = Units(1.0);
+    }
+
+    void setParameters(const AnyMap& node, const UnitStack& rate_units) override {
         InterfaceRateBase::setParameters(node);
+        setRateUnits(rate_units);
         RateType::m_negativeA_ok = node.getBool("negative-A", false);
         setStickingParameters(node);
         if (!node.hasKey("sticking-coefficient")) {
@@ -495,7 +503,7 @@ public:
             node["sticking-coefficient"], node.units(), rate_units);
     }
 
-    virtual void getParameters(AnyMap& node) const override {
+    void getParameters(AnyMap& node) const override {
         node["type"] = type();
         if (RateType::m_negativeA_ok) {
             node["negative-A"] = true;
@@ -510,13 +518,13 @@ public:
         InterfaceRateBase::getParameters(node);
     }
 
-    virtual void setContext(const Reaction& rxn, const Kinetics& kin) override {
+    void setContext(const Reaction& rxn, const Kinetics& kin) override {
         RateType::setContext(rxn, kin);
         InterfaceRateBase::setContext(rxn, kin);
         StickingCoverage::setContext(rxn, kin);
     }
 
-    virtual void validate(const std::string &equation, const Kinetics& kin) override {
+    void validate(const string &equation, const Kinetics& kin) override {
         RateType::validate(equation, kin);
         fmt::memory_buffer err_reactions;
         double T[] = {200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0};
@@ -536,7 +544,9 @@ public:
     //! Update reaction rate parameters
     //! @param shared_data  data shared by all reactions of a given type
     void updateFromStruct(const DataType& shared_data) {
-        _update(shared_data);
+        if constexpr (has_update<RateType>::value) {
+            RateType::updateFromStruct(shared_data);
+        }
         InterfaceRateBase::updateFromStruct(shared_data);
         m_factor = pow(m_siteDensity, -m_surfaceOrder);
     }
@@ -564,33 +574,22 @@ public:
         throw NotImplementedError("StickingRate<>::ddTScaledFromStruct");
     }
 
-    virtual double preExponentialFactor() const override {
+    double preExponentialFactor() const override {
         return RateType::preExponentialFactor() *
             std::exp(std::log(10.0) * m_acov + m_mcov);
     }
 
-    virtual double activationEnergy() const override {
+    double activationEnergy() const override {
         return RateType::activationEnergy() + m_ecov * GasConstant;
-    }
-
-protected:
-    //! Helper function to process updates for rate types that implement the
-    //! `updateFromStruct` method.
-    template <typename T=RateType,
-        typename std::enable_if<has_update<T>::value, bool>::type = true>
-    void _update(const DataType& shared_data) {
-        T::updateFromStruct(shared_data);
-    }
-
-    //! Helper function for rate types that do not implement `updateFromStruct`.
-    //! Does nothing, but exists to allow generic implementations of update().
-    template <typename T=RateType,
-        typename std::enable_if<!has_update<T>::value, bool>::type = true>
-    void _update(const DataType& shared_data) {
     }
 };
 
+//! Arrhenius-type interface sticking rate specifications
+//! @ingroup surfaceGroup
 using StickingArrheniusRate = StickingRate<ArrheniusRate, InterfaceData>;
+
+//! Blowers-Masel-type interface sticking rate specifications
+//! @ingroup surfaceGroup
 using StickingBlowersMaselRate = StickingRate<BlowersMaselRate, InterfaceData>;
 
 }

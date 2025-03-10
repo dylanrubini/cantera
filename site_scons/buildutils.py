@@ -2,7 +2,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import platform
 import textwrap
 import re
 import subprocess
@@ -11,7 +10,8 @@ import time
 import shutil
 import enum
 from pathlib import Path
-from pkg_resources import parse_version
+from packaging.version import parse as parse_version
+from packaging.specifiers import SpecifierSet
 import logging
 from typing import TYPE_CHECKING
 from collections.abc import Mapping as MappingABC
@@ -23,20 +23,17 @@ try:
 except ImportError:
     np = None
 
-__all__ = ("Option", "PathOption", "BoolOption", "EnumOption", "Configuration",
-           "logger", "remove_directory", "remove_file", "test_results",
-           "add_RegressionTest", "get_command_output", "listify", "which",
-           "ConfigBuilder", "multi_glob", "get_spawn", "quoted",
-           "get_pip_install_location", "compiler_flag_list", "setup_python_env")
-
 if TYPE_CHECKING:
     from typing import Iterable, TypeVar, Union, List, Dict, Tuple, Optional, \
         Iterator, Sequence
     import SCons.Environment
     import SCons.Node.FS
     import SCons.Variables
+    import SCons.SConf
 
     SCEnvironment = SCons.Environment.Environment
+    SConfigure = SCons.SConf.SConfBase
+    TextOrSequence = Union[str, List[str], Tuple[str]]
     LFSNode = List[Union[SCons.Node.FS.File, SCons.Node.FS.Dir]]
     SCVariables = SCons.Variables.Variables
     TPathLike = TypeVar("TPathLike", Path, str)
@@ -177,7 +174,7 @@ class Option:
         if len(asterisks) == 1:
             # catch unbalanced '*', for example in '*nix'
             found = f"*{asterisks[0]}"
-            replacement = f"\{found}"
+            replacement = fr"\{found}"
             description = description.replace(found, replacement)
 
         return f"{'':<{indent}}{description}\n"
@@ -208,7 +205,7 @@ class Option:
             return f"{level1}{title}: {decorate(defaults)}\n"
 
         # First line of default options
-        compilers = {"cl": "MSVC", "gcc": "GCC", "icc": "ICC", "clang": "Clang"}
+        compilers = {"cl": "MSVC", "gcc": "GCC", "clang": "Clang"}
         toolchains = {"mingw", "intel", "msvc"}
         if any(d in compilers for d in defaults):
             comment = "compiler"
@@ -246,7 +243,7 @@ class Option:
     def to_rest(self, dev: bool = False, indent: int = 3) -> str:
         """Convert description of option to restructured text (reST)"""
         # assemble output
-        tag = self.name.replace("_", "-").lower()
+        tag = "sconsopt-" + self.name.replace("_", "-").lower()
         if dev:
             tag += "-dev"
         out = f".. _{tag}:\n\n"
@@ -301,7 +298,7 @@ class Configuration:
     Class enabling selection of options based on a dictionary of `Option` objects
     that allows for a differentiation between platform/compiler dependent options.
 
-    In addition, the class facilitiates the generation of formatted help text and
+    In addition, the class facilitates the generation of formatted help text and
     reST documentation.
     """
 
@@ -719,11 +716,23 @@ def regression_test(target: "LFSNode", source: "LFSNode", env: "SCEnvironment"):
     else:
         output_name = Path("test_output.txt")
 
+    dir = Path(target[0].dir.abspath)
+
+    comparisons = env["test_comparisons"]
+    if blessed_name is not None:
+        comparisons.append((Path(blessed_name), output_name))
+
+    # Remove pre-existing output files to prevent tests passing based on outdated
+    # output files
+    for _, output in comparisons:
+        outpath = dir.joinpath(output)
+        if outpath.exists():
+            outpath.unlink()
+
     # command line options
     clopts = env["test_command_options"].split()
 
     # Run the test program
-    dir = Path(target[0].dir.abspath)
     ret = subprocess.run(
         [program.abspath] + clopts + clargs,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -734,14 +743,11 @@ def regression_test(target: "LFSNode", source: "LFSNode", env: "SCEnvironment"):
     dir.joinpath(output_name).write_text(ret.stdout)
 
     diff = 0
-    # Compare output files
-    comparisons = env["test_comparisons"]
-    if blessed_name is not None:
-        comparisons.append((Path(blessed_name), output_name))
 
+    # Compare output files
     for blessed, output in comparisons:
         if not dir.joinpath(output).is_file():
-            logger.info(f"Output file '{output}' not found", print_level=False)
+            logger.error(f"Output file '{output}' not found", print_level=False)
             logger.error("FAILED", print_level=False)
             diff |= TestResult.FAIL
             continue
@@ -753,7 +759,7 @@ def regression_test(target: "LFSNode", source: "LFSNode", env: "SCEnvironment"):
 
     for blessed, output in env["test_profiles"]:
         if not dir.joinpath(output).is_file():
-            logger.info(f"Output file '{output}' not found", print_level=False)
+            logger.error(f"Output file '{output}' not found", print_level=False)
             logger.error("FAILED", print_level=False)
             diff |= TestResult.FAIL
             continue
@@ -960,9 +966,9 @@ def compare_profiles(
         "pos. err"
     ))
     header.append(f"{10*'-'}  -----  {14*'-'}  {14*'-'}  {9*'-'}  {9*'-'}  {9*'-'}")
-    ref_ptp = reference.ptp(axis=1)
+    ref_ptp = np.ptp(reference, axis=1)
     ref_max = np.abs(reference).max(axis=1)
-    sample_ptp = sample.ptp(axis=1)
+    sample_ptp = np.ptp(sample, axis=1)
     sample_max = np.abs(sample).max(axis=1)
     scale = np.maximum(
         np.maximum(ref_ptp[1:], ref_max[1:]),
@@ -1096,23 +1102,67 @@ def add_RegressionTest(env: "SCEnvironment") -> None:
 
 def compiler_flag_list(
         flags: "Union[str, Iterable]",
-        excludes: "Optional[Iterable]" = []
+        compiler: str,
+        excludes: "Optional[Iterable]" = (),
     ) -> "List[str]":
     """
     Separate concatenated compiler flags in ``flags``.
-    Entries listed in ``excludes`` are omitted.
+
+    ``compiler`` is either ``"cl"`` for MSVC or anything else for a different
+    compiler.
+
+    Entries starting with the regular expression patterns in ``excludes`` are omitted.
     """
     if not isinstance(flags, str):
         flags = " ".join(flags)
+
+    if compiler == "cl":
+        # Options can start with "/", or "$"
+        expr = r"""(?:^|\ +)           # start of string or leading whitespace
+                   ([/\$].+?)          # capture start of option
+                   (?=\ +[-/\$]|\ *$)  # start of next option or end of string
+                """
+    else:
+        # Options can start with "-"
+        expr = r"""(?:^|\ +)           # start of string or leading whitespace
+                   (-.+?)              # capture start of option
+                   (?=\ +-|\ *$)  # start of next option or end of string
+                """
+
     # split concatenated entries
-    flags = f" {flags}".split(" -")[1:]
-    flags = [f"-{flag}" for flag in flags]
-    cc_flags = []
+    flags = re.findall(expr, flags, re.VERBOSE)
+
+    # Remove duplicates and excluded items
     excludes = tuple(excludes)
+    cc_flags = []
     for flag in flags:
-        if not flag.startswith(excludes) and flag not in cc_flags:
+        if flag in cc_flags:
+            continue
+        if not any(re.match(exclude, flag) for exclude in excludes):
             cc_flags.append(flag)
+
     return cc_flags
+
+
+def add_system_include(env, include, mode='append'):
+    # Add a file to the include path as a "system" include directory, which will
+    # suppress warnings stemming from code that isn't part of Cantera, and reduces
+    # time spent scanning these files for changes.
+    if mode == 'append':
+        add = env.Append
+    elif mode == 'prepend':
+        add = env.Prepend
+    else:
+        raise ValueError("mode must be 'append' or 'prepend'")
+
+    if env['CC'] == 'cl':
+        add(CPPPATH=include)
+    else:
+        if isinstance(include, (list, tuple)):
+            for inc in include:
+                add(CXXFLAGS=('-isystem', inc))
+        else:
+            add(CXXFLAGS=('-isystem', include))
 
 
 def quoted(s: str) -> str:
@@ -1136,15 +1186,15 @@ def multi_glob(env: "SCEnvironment", subdir: str, *args: str):
     return matches
 
 
-def which(program: str) -> bool:
+def which(program: str) -> "Optional[str]":
     """Replicates the functionality of the 'which' shell command."""
     for ext in ("", ".exe", ".bat"):
         fpath = Path(program + ext)
         for path in os.environ["PATH"].split(os.pathsep):
             exe_file = Path(path).joinpath(fpath)
             if exe_file.exists() and os.access(exe_file, os.X_OK):
-                return True
-    return False
+                return str(exe_file)
+    return None
 
 
 def listify(value: "Union[str, Iterable]") -> "List[str]":
@@ -1154,9 +1204,8 @@ def listify(value: "Union[str, Iterable]") -> "List[str]":
     """
     if isinstance(value, str):
         return value.split()
-    else:
-        # Already a sequence. Return as a list
-        return list(value)
+    # Already a sequence. Return as a list
+    return list(value)
 
 
 def remove_file(name: "TPathLike") -> None:
@@ -1173,19 +1222,6 @@ def remove_directory(name: "TPathLike") -> None:
     if path_name.exists() and path_name.is_dir():
         logger.info(f"Removing directory '{name!s}'")
         shutil.rmtree(path_name)
-
-
-def ipdb():
-    """
-    Break execution and drop into an IPython debug shell at the point
-    where this function is called.
-    """
-    from IPython.core.debugger import Pdb
-    from IPython.core import getipython
-
-    ip = getipython.get_ipython()
-    def_colors = ip.colors
-    Pdb(def_colors).set_trace(sys._getframe().f_back)
 
 
 def get_spawn(env: "SCEnvironment"):
@@ -1248,6 +1284,7 @@ def get_command_output(cmd: str, *args: str, ignore_errors=False):
     )
     return data.stdout.strip()
 
+
 _python_info = None
 def setup_python_env(env):
     """Set up an environment for compiling Python extension modules"""
@@ -1272,7 +1309,6 @@ def setup_python_env(env):
         _python_info = json.loads(get_command_output(env["python_cmd"], "-c", script))
 
     info = _python_info
-    module_ext = info["EXT_SUFFIX"]
     inc = info["INCLUDEPY"]
     pylib = info.get("LDLIBRARY")
     prefix = info["prefix"]
@@ -1281,19 +1317,14 @@ def setup_python_env(env):
     py_version_nodot = info["py_version_nodot"]
     plat = info['plat'].replace('-', '_').replace('.', '_')
     numpy_include = info["numpy_include"]
-    env.Prepend(CPPPATH=[Dir('#include'), inc, numpy_include])
-    env.Prepend(LIBS=env['cantera_libs'])
+    env.Prepend(CPPPATH=Dir('#include'))
+    if env["system_sundials"] == "n":
+        env.Prepend(CPPPATH=Dir('#include/cantera/ext'))
 
-    # Fix the module extension for Windows from the sysconfig library.
-    # See https://github.com/python/cpython/pull/22088 and
-    # https://bugs.python.org/issue39825
-    if (py_version_full < parse_version("3.8.7")
-        and env["OS"] == "Windows"
-        and module_ext == ".pyd"
-    ):
-        module_ext = f".cp{py_version_nodot}-{info['plat'].replace('-', '_')}.pyd"
+    add_system_include(env, (inc, numpy_include), 'prepend')
+    env.Prepend(LIBS=env['cantera_shared_libs'])
 
-    env["py_module_ext"] = module_ext
+    env["py_module_ext"] = info["EXT_SUFFIX"]
     env["py_version_nodot"] = py_version_nodot
     env["py_version_short"] = info["py_version_short"]
     env["py_plat"] = plat
@@ -1309,16 +1340,6 @@ def setup_python_env(env):
     env["py_libs"] = [py_lib] + [lib[2:] for lib in info.get("LIBS", "").split()
                                  if lib.startswith("-l")]
 
-    # Don't print deprecation warnings for internal Python changes.
-    # Only applies to Python 3.8. The field that is deprecated in Python 3.8
-    # and causes the warnings to appear will be removed in Python 3.9 so no
-    # further warnings should be issued.
-    if env["HAS_CLANG"] and py_version_short == parse_version("3.8"):
-        env.Append(CXXFLAGS='-Wno-deprecated-declarations')
-
-    if "icc" in env["CC"]:
-        env.Append(CPPDEFINES={"CYTHON_FALLTHROUGH": " __attribute__((fallthrough))"})
-
     if env['OS'] == 'Darwin':
         env.Append(LINKFLAGS='-undefined dynamic_lookup')
     elif env['OS'] == 'Windows':
@@ -1327,16 +1348,13 @@ def setup_python_env(env):
             env.Append(LIBS=f"python{py_version_nodot}")
             if env['OS_BITS'] == 64:
                 env.Append(CPPDEFINES='MS_WIN64')
-            # Fix for https://bugs.python.org/issue11566. Fixed in 3.7.3 and higher.
-            # See https://github.com/python/cpython/pull/11283
-            if py_version_full < parse_version("3.7.3"):
-                env.Append(CPPDEFINES={"_hypot": "hypot"})
 
-    if "numpy_1_7_API" in env:
+    if not env.get("require_numpy_1_7_API", True):
         env.Append(CPPDEFINES="NPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION")
 
 
     return env
+
 
 def get_pip_install_location(
     python_cmd: str,
@@ -1356,7 +1374,7 @@ def get_pip_install_location(
     root = quoted(root) if root is not None else None
     install_script = textwrap.dedent(f"""
         from pip import __version__ as pip_version
-        from pkg_resources import parse_version
+        from packaging.version import parse as parse_version
         import pip
         import json
         pip_version = parse_version(pip_version)
@@ -1375,3 +1393,439 @@ def get_pip_install_location(
         print(json.dumps(scheme))
     """)
     return json.loads(get_command_output(python_cmd, "-c", install_script))
+
+
+def checkout_submodule(name: str, submodule_path: str):
+    if not os.path.exists(".git"):
+        logger.error(f"{name} is missing. Extract package in {submodule_path}.")
+        sys.exit(1)
+
+    try:
+        code = subprocess.call(["git", "submodule", "update", "--init",
+                                "--recursive", submodule_path])
+    except Exception:
+        code = -1
+    if code:
+        logger.error(f"{name} submodule checkout failed.\n"
+                      "Try manually checking out the submodule by running:\n\n"
+                     f"    git submodule update --init --recursive {submodule_path}\n")
+        sys.exit(1)
+
+
+def check_for_python(
+    env: "SCEnvironment",
+    command_line_targets: List[str]
+) -> Dict[str, Union[str | bool]]:
+    """Check for compatible versions of Python and Python-specific dependencies.
+
+    Args:
+        env (SCons.Environment): The SCons construction environment.
+        command_line_targets (list[str]): The list of targets passed on the command line
+            by the user.
+
+    Returns:
+        dict[str, str | bool]: Dictionary with either one or two keys:
+            * ``"python_package"``: String with the value ``"y"`` or ``"n"`` to
+              indicate whether or not the Python package will be built. This key will
+              always be present.
+            * ``"require_numpy_1_7_API"``: Boolean indicating whether Cython will use
+              NumPy 1.7 API support. This is purely a compile-time constant and does not
+              affect which versions of NumPy Cantera supports. This key may or may not
+              be present in the return dictionary.
+
+    Raises:
+        config_error: If the user specifies that the Python package should be built but
+            no compatible versions of Python, Cython, and NumPy can be found.
+    """
+    # Pytest is required only to test the Python module
+    check_for_pytest = "test" in command_line_targets or any(
+        target.startswith(("test-python", "test-help")) for target in command_line_targets
+    )
+
+    # Check for the minimum ruamel.yaml version at install and test
+    # time. The check happens at install and test time because ruamel.yaml is
+    # only required to run the Python interface, not to build it.
+    check_for_ruamel_yaml = check_for_pytest or any(
+        target in command_line_targets
+        for target in ["install", "test"]
+    )
+
+    def check_module(name):
+        return textwrap.dedent(f"""\
+            try:
+                import {name}
+                versions["{name}"] = {name}.__version__
+            except ImportError as {name}_err:
+                err += str({name}_err) + "\\n"
+        """)
+
+    script = textwrap.dedent("""\
+        import sys
+        import json
+        versions = {}
+        versions["python"] = "{v.major}.{v.minor}".format(v=sys.version_info)
+        err = ""
+    """)
+    script += check_module("numpy")
+    script += check_module("Cython")
+
+    if check_for_ruamel_yaml:
+        script += textwrap.dedent("""\
+            try:
+                from ruamel import yaml
+                versions["ruamel.yaml"] = yaml.__version__
+            except ImportError as ru_err:
+                err += str(ru_err) + "\\n"
+        """)
+    if check_for_pytest:
+        script += check_module("pytest")
+
+    script += textwrap.dedent("""\
+        print("versions:", json.dumps(versions))
+        if err:
+            print(err)
+    """)
+
+    warn_no_python = False
+    try:
+        info = get_command_output(env["python_cmd"], "-c", script).splitlines()
+    except OSError as err:
+        logger.debug(f"Error checking for Python:\n{err}")
+        warn_no_python = True
+    except subprocess.CalledProcessError as err:
+        logger.debug(f"Error checking for Python:\n{err} {err.output}")
+        warn_no_python = True
+
+    if warn_no_python:
+        if env["python_package"] == "default":
+            logger.warning(
+                "Not building the Python package because the Python interpreter "
+                f"{env['python_cmd']!r} could not be found.")
+            return {"python_package": "n"}
+        else:
+            logger.error(
+                f"Could not execute the Python interpreter {env['python_cmd']!r}")
+            sys.exit(1)
+
+    versions = {}
+    for line in info:
+        if line.startswith("versions:"):
+            versions = {
+                k: parse_version(v)
+                for k, v in json.loads(line.split(maxsplit=1)[1]).items()
+            }
+            break
+
+    if len(info) > 1:
+        msg = ["Unexpected output while checking Python dependency versions:"]
+        msg.extend(line for line in info if not line.startswith("versions:"))
+        logger.warning("\n| ".join(msg))
+
+    if env["python_package"] == "y":
+        logger_method = logger.error
+        exit_on_error = True
+    else:
+        logger_method = logger.warning
+        exit_on_error = False
+
+    python_version = versions.get("python")
+    if not python_version or python_version < env["python_min_version"]:
+        logger_method(
+            f"Python version is incompatible. Found {python_version} but "
+            f"{env['python_min_version']} or newer is required. In order to install "
+            "Cantera without Python support, specify 'python_package=n'.")
+        if exit_on_error:
+            sys.exit(1)
+        return {"python_package": "n"}
+    elif python_version >= env["python_max_version"]:
+        logger.warning(
+            f"Python {python_version} is not supported for Cantera "
+            f"{env['cantera_version']}. Python versions {env['python_max_version']} and "
+            "newer are untested and may result in unexpected behavior. Proceed "
+            "with caution.")
+
+    numpy_version = versions.get("numpy")
+    if not numpy_version:
+        logger_method("NumPy not found. Not building the Python package.")
+        if exit_on_error:
+            sys.exit(1)
+        return {"python_package": "n"}
+    elif numpy_version not in env["numpy_version_spec"]:
+        logger_method(
+            f"NumPy is an incompatible version: Found {numpy_version} but "
+            f"{env['numpy_version_spec']} is required.")
+        if exit_on_error:
+            sys.exit(1)
+        return {"python_package": "n"}
+    else:
+        logger.info(f"Using NumPy version {numpy_version}")
+
+    cython_version = versions.get("Cython")
+    if not cython_version:
+        logger_method("Cython not found. Not building the Python package.")
+        if exit_on_error:
+            sys.exit(1)
+        return {"python_package": "n"}
+    elif cython_version not in env["cython_version_spec"]:
+        logger_method(
+            f"Cython is an incompatible version: Found {cython_version} but "
+            f"{env['cython_version_spec']} is required.")
+        if exit_on_error:
+            sys.exit(1)
+        return {"python_package": "n"}
+    elif cython_version < parse_version("3.0.0"):
+        logger.info(
+            f"Using Cython version {cython_version} (uses legacy NumPy API)"
+        )
+        require_numpy_1_7_API = True
+    else:
+        logger.info(f"Using Cython version {cython_version}")
+        require_numpy_1_7_API = False
+
+    if check_for_ruamel_yaml:
+        ruamel_yaml_version = versions.get("ruamel.yaml")
+        if not ruamel_yaml_version:
+            logger.error(
+                f"ruamel.yaml was not found. {env['ruamel_version_spec']} "
+                "is required.")
+            sys.exit(1)
+        elif ruamel_yaml_version not in env["ruamel_version_spec"]:
+            logger.error(
+                "ruamel.yaml is an incompatible version: Found "
+                f"{ruamel_yaml_version}, but {env['ruamel_version_spec']} "
+                "is required.")
+            sys.exit(1)
+        else:
+            logger.info(f"Using ruamel.yaml version {ruamel_yaml_version}")
+
+    if check_for_pytest:
+        pytest_version = versions.get("pytest")
+        if not pytest_version:
+            logger.error(
+                f"pytest was not found. {env['pytest_version_spec']} "
+                "is required.")
+            sys.exit(1)
+        elif pytest_version not in env["pytest_version_spec"]:
+            logger.error(
+                "pytest is an incompatible version: Found "
+                f"{pytest_version}, but {env['pytest_version_spec']} "
+                "is required.")
+            sys.exit(1)
+        else:
+            logger.info(f"Using pytest version {pytest_version}")
+
+    return {"python_package": "y", "require_numpy_1_7_API": require_numpy_1_7_API}
+
+
+def make_relative_path_absolute(path_to_check: Union[str, Path]) -> str:
+    """If a path is absolute, return it in POSIX format.
+    If a path is relative, assume it's relative to the source root, convert it to an
+    absolute path, and return the converted path in POSIX format.
+    """
+    pth = Path(path_to_check)
+    if not pth.is_absolute():
+        pth = Path(Dir("#" + path_to_check).abspath)
+
+    return pth.as_posix()
+
+
+def run_preprocessor(
+    conf: "SConfigure",
+    includes: "TextOrSequence",
+    text: "TextOrSequence",
+    defines: "TextOrSequence" = ()
+) -> Tuple[int, str]:
+    """Run the C preprocessor and return the last line of the processed source.
+
+    This function can be used to extract ``#define``ed values from header files to use,
+    for example, to determine whether a header is present or the version of an external
+    dependency.
+
+    A source file is constructed by concatenating the ``includes``, ``text``, and
+    ``defines``. That file is passed to the C preprocessor selected SCons for the
+    environment. If the preprocessor errors during execution, this function returns the
+    preprocessor return code and an empty string. If preprocessing is successful, the
+    return code of the preprocessor and the last line of the preprocessor output are
+    returned.
+
+    Args:
+        conf (SCons.SConf.SConfBase): An instance of the SConf configuration object.
+        includes (str | list[str] | tuple[str]): Names of headers to include in the
+            constructed source file.
+        text (str | list[str] | tuple[str]): The text of the source file to include in
+            the constructed source file.
+        defines (str | list[str] | tuple[str]): Names of variables to ``#define`` in
+            the constructed source file. Optional, defaults to an empty tuple.
+
+    Returns:
+        tuple[int, str]: The return code of the preprocessor and a string of the
+            preprocessor output. If the preprocessor encounters an error, the string
+            will be empty.
+    """
+    if not isinstance(includes, (tuple, list)):
+        includes = [includes]
+    if not isinstance(text, (tuple, list)):
+        text = [text]
+    if not isinstance(defines, (tuple, list)):
+        defines = [defines]
+    if "msvc" in conf.env["toolchain"]:
+        # Yes this needs 4 slashes on each side. The first pair are escaped by Python,
+        # the second pair are escaped by the shell to leave a single backslash to be
+        # interpreted by the Windows shell as a directory separator.
+        preprocessor_flags = ['/P', '/Fi".\\\\.sconf_temp\\\\"']
+    else:
+        preprocessor_flags = ["-E"]
+    conf.env.Prepend(CXXFLAGS=preprocessor_flags)
+    source = ["#define " + d for d in defines]
+    source.extend("#include " + ii for ii in includes)
+    source.extend(text)
+    retcode = conf.TryCompile(text="\n".join(source), extension=".cpp")
+    for flag in preprocessor_flags:
+        conf.env["CXXFLAGS"].remove(flag)
+    if retcode:
+        retval = None
+        # On MSVC, the `/P` flag produces an output file named for the input file,
+        # that is, `conftest_<hash of contents>_0.i`. However, SCons assumes that the
+        # `.obj` file will still be the target and sets that as the `conf.lastTarget`
+        # with the filename: `conftest_<hash of contents>_0_<hash of action>.obj`.
+        # Since we need the contents of the `.i` file, we need this string munging on
+        # the `.obj` filename to find the right file. If SCons ever decides to change
+        # how they name conftest files, this will probably break.
+        if "msvc" in conf.env["toolchain"]:
+            fname = conf.lastTarget.name.rsplit("_", maxsplit=1)[0]
+            content = Path(".sconf_temp", fname).with_suffix(".i").read_text().splitlines()
+        else:
+            content = conf.lastTarget.get_text_contents().splitlines()
+        # Go from bottom to top of the file, since the preprocessor is going to spit
+        # out lots of irrelevant lines.
+        for line in reversed(content):
+            # The MSVC compiler tends to produce extra output at the end of the `.i`
+            # file that we don't want.
+            if not line.strip() or line.strip().startswith("conftest"):
+                continue
+            retval = line.strip()
+            break
+        if retval is None:
+            raise ValueError("Could not find version. See config.log.")
+        return retcode, retval
+    else:
+        return retcode, ""
+
+
+def check_sundials(conf: "SConfigure", sundials_version: str) -> Dict[str, Union[str, int, bool]]:
+    """Check for the version of SUNDIALS and whether SUNDIALS was built with BLAS/LAPACK
+
+    Args:
+        conf (SCons.SConf.SConfBase): An instance of the SConf configuration object.
+        sundials_version (str): A string with the version of SUNDIALS. The expected
+            format is ``"X Y Z"`` including the quote symbols.
+
+    Returns:
+        Dict[str, str]: A dictionary with three keys:
+            * ``"system_sundials"``: String ``"y"`` or ``"n"`` indicating whether a
+              compatible version of SUNDIALS was found in the system directories.
+            * ``"sundials_version"``: String with the parsed version of SUNDIALS with
+              periods between the version components.
+            * ``"sundials_blas_lapack"``: Boolean or integer indicating whether SUNDIALS was built
+              with BLAS/LAPACK support. Always ``False`` if ``"system_sundials"`` is
+              ``"n"``.
+
+    Raises:
+        ``config_error``: If the user specified ``system_sundials==y`` but a compatible
+            version could not be found.
+    """
+    sundials_ver = parse_version(
+        ".".join(sundials_version.strip().replace('"', "").split())
+    )
+    should_exit_with_error = conf.env["system_sundials"] == "y"
+    if sundials_ver < parse_version("5.0") or sundials_ver >= parse_version("8.0"):
+        if should_exit_with_error:
+            config_error(f"Sundials version must be >=5.0,<8.0. Found {sundials_ver}.")
+        return {"system_sundials": "n", "sundials_version": "", "has_sundials_lapack": 0}
+    elif sundials_ver > parse_version("7.2.0"):
+        logger.warning(f"Sundials version {sundials_ver} has not been tested.")
+
+    cvode_checks = {
+        SpecifierSet(">=5.0,<6.0"): ("CVodeCreate(CV_BDF);", ["sundials_cvodes"]),
+        SpecifierSet(">=6.0,<7.0"): (
+            "SUNContext ctx; SUNContext_Create(0, &ctx);", ["sundials_cvodes"]
+        ),
+        SpecifierSet(">=7.0,<8.0"): (
+            "SUNContext ctx; SUNContext_Create(SUN_COMM_NULL, &ctx);", ["sundials_core"]
+        )
+    }
+    for version_spec, (cvode_call, libs) in cvode_checks.items():
+        if sundials_ver in version_spec:
+            ret = conf.CheckLibWithHeader(
+                libs,
+                header="cvodes/cvodes.h",
+                language='C++',
+                call=cvode_call,
+                autoadd=False,
+            )
+            # CheckLibWithHeader returns True to indicate success
+            if not ret:
+                if should_exit_with_error:
+                    config_error(
+                        "Could not link to the Sundials library. Did you set the "
+                        "include/library paths?"
+                    )
+                return {"system_sundials": "n", "sundials_version": "", "has_sundials_lapack": 0}
+            break
+
+    logger.info(f"Using system installation of Sundials version {sundials_ver}.")
+
+    # Determine whether or not Sundials was built with BLAS/LAPACK
+    if sundials_ver < parse_version("5.5"):
+        # In Sundials 2.6-5.4, SUNDIALS_BLAS_LAPACK is either defined or undefined
+        has_sundials_lapack = conf.CheckDeclaration('SUNDIALS_BLAS_LAPACK',
+                '#include "sundials/sundials_config.h"', 'C++')
+    elif sundials_ver <= parse_version("6.6.0"):
+        # In Sundials 5.5-6.6.0, two defines are included specific to the
+        # SUNLINSOL packages indicating whether SUNDIALS has been built with LAPACK
+        lapackband = conf.CheckDeclaration(
+            "SUNDIALS_SUNLINSOL_LAPACKBAND",
+            '#include "sundials/sundials_config.h"',
+            "C++",
+        )
+        lapackdense = conf.CheckDeclaration(
+            "SUNDIALS_SUNLINSOL_LAPACKDENSE",
+            '#include "sundials/sundials_config.h"',
+            "C++",
+        )
+        has_sundials_lapack = lapackband and lapackdense
+    else:
+        # In Sundials 6.6.1, the SUNDIALS_BLAS_LAPACK_ENABLED macro was introduced
+        has_sundials_lapack = conf.CheckDeclaration("SUNDIALS_BLAS_LAPACK_ENABLED",
+                '#include "sundials/sundials_config.h"', 'c++')
+
+    if not has_sundials_lapack and conf.env['use_lapack']:
+        logger.warning(
+            "External BLAS/LAPACK has been specified for Cantera but SUNDIALS was built "
+            "without this support. Cantera will use the slower default solver "
+            "implementations included with SUNDIALS. You can resolve this warning by "
+            "installing or building SUNDIALS with BLAS/LAPACK support."
+        )
+
+    return {
+        "system_sundials": "y",
+        "sundials_version": str(sundials_ver),
+        "has_sundials_lapack": has_sundials_lapack
+    }
+
+
+def config_error(message: str) -> None:
+    """Log an error message to the console and exit the build with code 1."""
+    if logger.getEffectiveLevel() == logging.DEBUG:
+        logger.error(message)
+        debug_message = [
+            f"\n{' Contents of config.log: ':*^80}\n",
+            Path("config.log").read_text().strip(),
+            f"\n{' End of config.log ':*^80}",
+        ]
+        logger.debug("\n".join(debug_message), print_level=False)
+    else:
+        error_message = [message]
+        error_message.append("\nSee 'config.log' for details.")
+        logger.error("\n".join(error_message))
+    sys.exit(1)

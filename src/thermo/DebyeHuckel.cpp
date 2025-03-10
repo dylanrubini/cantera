@@ -2,7 +2,7 @@
  *  @file DebyeHuckel.cpp
  *    Declarations for the DebyeHuckel ThermoPhase object, which models dilute
  *    electrolyte solutions
- *    (see \ref thermoprops and \link Cantera::DebyeHuckel DebyeHuckel \endlink).
+ *    (see @ref thermoprops and @link Cantera::DebyeHuckel DebyeHuckel @endlink).
  *
  * Class DebyeHuckel represents a dilute liquid electrolyte phase which
  * obeys the Debye Huckel formulation for nonideality.
@@ -21,8 +21,6 @@
 
 #include <cstdio>
 
-using namespace std;
-
 namespace Cantera
 {
 
@@ -32,51 +30,17 @@ double B_Debye_default = 3.28640E9; // units = sqrt(kg/gmol) / m
 double maxIionicStrength_default = 30.0;
 }
 
-DebyeHuckel::DebyeHuckel(const std::string& inputFile,
-                         const std::string& id_) :
-    m_formDH(DHFORM_DILUTE_LIMIT),
-    m_Aionic_default(NAN),
-    m_IionicMolality(0.0),
-    m_maxIionicStrength(maxIionicStrength_default),
-    m_useHelgesonFixedForm(false),
-    m_IionicMolalityStoich(0.0),
-    m_form_A_Debye(A_DEBYE_CONST),
-    m_A_Debye(A_Debye_default),
-    m_B_Debye(B_Debye_default),
-    m_waterSS(0),
-    m_densWaterSS(1000.)
+DebyeHuckel::DebyeHuckel(const string& inputFile, const string& id_)
+    : m_maxIionicStrength(maxIionicStrength_default)
+    , m_A_Debye(A_Debye_default)
+    , m_B_Debye(B_Debye_default)
 {
     initThermoFile(inputFile, id_);
 }
 
 DebyeHuckel::~DebyeHuckel()
 {
-}
-
-// -------- Molar Thermodynamic Properties of the Solution ---------------
-
-doublereal DebyeHuckel::enthalpy_mole() const
-{
-    getPartialMolarEnthalpies(m_tmpV.data());
-    return mean_X(m_tmpV);
-}
-
-doublereal DebyeHuckel::entropy_mole() const
-{
-    getPartialMolarEntropies(m_tmpV.data());
-    return mean_X(m_tmpV);
-}
-
-doublereal DebyeHuckel::gibbs_mole() const
-{
-    getChemPotentials(m_tmpV.data());
-    return mean_X(m_tmpV);
-}
-
-doublereal DebyeHuckel::cp_mole() const
-{
-    getPartialMolarCp(m_tmpV.data());
-    return mean_X(m_tmpV);
+    // Defined in .cpp to limit dependence on WaterProps.h
 }
 
 // ------- Mechanical Equation of State Properties ------------------------
@@ -88,14 +52,12 @@ void DebyeHuckel::calcDensity()
         // this for all other species if they had pressure dependent properties.
         m_densWaterSS = m_waterSS->density();
     }
-    getPartialMolarVolumes(m_tmpV.data());
-    double dd = meanMolecularWeight() / mean_X(m_tmpV);
-    Phase::assignDensity(dd);
+    VPStandardStateTP::calcDensity();
 }
 
 // ------- Activities and Activity Concentrations
 
-void DebyeHuckel::getActivityConcentrations(doublereal* c) const
+void DebyeHuckel::getActivityConcentrations(double* c) const
 {
     double c_solvent = standardConcentration();
     getActivities(c);
@@ -104,13 +66,13 @@ void DebyeHuckel::getActivityConcentrations(doublereal* c) const
     }
 }
 
-doublereal DebyeHuckel::standardConcentration(size_t k) const
+double DebyeHuckel::standardConcentration(size_t k) const
 {
     double mvSolvent = providePDSS(0)->molarVolume();
     return 1.0 / mvSolvent;
 }
 
-void DebyeHuckel::getActivities(doublereal* ac) const
+void DebyeHuckel::getActivities(double* ac) const
 {
     _updateStandardStateThermo();
 
@@ -124,7 +86,7 @@ void DebyeHuckel::getActivities(doublereal* ac) const
     ac[0] = exp(m_lnActCoeffMolal[0]) * xmolSolvent;
 }
 
-void DebyeHuckel::getMolalityActivityCoefficients(doublereal* acMolality) const
+void DebyeHuckel::getMolalityActivityCoefficients(double* acMolality) const
 {
     _updateStandardStateThermo();
     A_Debye_TP(-1.0, -1.0);
@@ -137,7 +99,7 @@ void DebyeHuckel::getMolalityActivityCoefficients(doublereal* acMolality) const
 
 // ------ Partial Molar Properties of the Solution -----------------
 
-void DebyeHuckel::getChemPotentials(doublereal* mu) const
+void DebyeHuckel::getChemPotentials(double* mu) const
 {
     double xx;
 
@@ -157,7 +119,7 @@ void DebyeHuckel::getChemPotentials(doublereal* mu) const
     mu[0] += RT() * (log(xx) + m_lnActCoeffMolal[0]);
 }
 
-void DebyeHuckel::getPartialMolarEnthalpies(doublereal* hbar) const
+void DebyeHuckel::getPartialMolarEnthalpies(double* hbar) const
 {
     // Get the nondimensional standard state enthalpies
     getEnthalpy_RT(hbar);
@@ -182,7 +144,7 @@ void DebyeHuckel::getPartialMolarEnthalpies(doublereal* hbar) const
     }
 }
 
-void DebyeHuckel::getPartialMolarEntropies(doublereal* sbar) const
+void DebyeHuckel::getPartialMolarEntropies(double* sbar) const
 {
     // Get the standard state entropies at the temperature and pressure of the
     // solution.
@@ -199,7 +161,7 @@ void DebyeHuckel::getPartialMolarEntropies(doublereal* sbar) const
 
     // First we will add in the obvious dependence on the T term out front of
     // the log activity term
-    doublereal mm;
+    double mm;
     for (size_t k = 1; k < m_kk; k++) {
         mm = std::max(SmallNumber, m_molalities[k]);
         sbar[k] -= GasConstant * (log(mm) + m_lnActCoeffMolal[k]);
@@ -220,7 +182,7 @@ void DebyeHuckel::getPartialMolarEntropies(doublereal* sbar) const
     }
 }
 
-void DebyeHuckel::getPartialMolarVolumes(doublereal* vbar) const
+void DebyeHuckel::getPartialMolarVolumes(double* vbar) const
 {
     getStandardVolumes(vbar);
 
@@ -232,7 +194,7 @@ void DebyeHuckel::getPartialMolarVolumes(doublereal* vbar) const
     }
 }
 
-void DebyeHuckel::getPartialMolarCp(doublereal* cpbar) const
+void DebyeHuckel::getPartialMolarCp(double* cpbar) const
 {
     getCp_R(cpbar);
     for (size_t k = 0; k < m_kk; k++) {
@@ -263,7 +225,7 @@ void DebyeHuckel::getPartialMolarCp(doublereal* cpbar) const
 /*!
  *  @param estString  input string that will be interpreted
  */
-static int interp_est(const std::string& estString)
+static int interp_est(const string& estString)
 {
     if (caseInsensitiveEquals(estString, "solvent")) {
         return cEST_solvent;
@@ -288,7 +250,7 @@ static int interp_est(const std::string& estString)
     }
 }
 
-void DebyeHuckel::setDebyeHuckelModel(const std::string& model) {
+void DebyeHuckel::setDebyeHuckelModel(const string& model) {
     if (model == ""
         || model == "dilute-limit"
         || caseInsensitiveEquals(model, "Dilute_limit")) {
@@ -349,8 +311,7 @@ void DebyeHuckel::setDefaultIonicRadius(double value)
     }
 }
 
-void DebyeHuckel::setBeta(const std::string& sp1, const std::string& sp2,
-                          double value)
+void DebyeHuckel::setBeta(const string& sp1, const string& sp2, double value)
 {
     size_t k1 = speciesIndex(sp1);
     if (k1 == npos) {
@@ -406,7 +367,7 @@ void DebyeHuckel::initThermo()
         // Initialize the water property calculator. It will share the internal
         // eos water calculator.
         if (m_form_A_Debye == A_DEBYE_WATER) {
-            m_waterProps.reset(new WaterProps(m_waterSS));
+            m_waterProps = make_unique<WaterProps>(m_waterSS);
         }
     } else if (dynamic_cast<PDSS_ConstVol*>(providePDSS(0)) == 0) {
         throw CanteraError("DebyeHuckel::initThermo", "Solvent standard state"
@@ -470,12 +431,12 @@ void DebyeHuckel::getParameters(AnyMap& phaseNode) const
         }
     }
     if (m_Beta_ij.nRows() && m_Beta_ij.nColumns()) {
-        std::vector<AnyMap> beta;
+        vector<AnyMap> beta;
         for (size_t i = 0; i < m_kk; i++) {
             for (size_t j = i; j < m_kk; j++) {
                 if (m_Beta_ij(i, j) != 0) {
                     AnyMap entry;
-                    entry["species"] = vector<std::string>{
+                    entry["species"] = vector<string>{
                         speciesName(i), speciesName(j)};
                     entry["beta"] = m_Beta_ij(i, j);
                     beta.push_back(std::move(entry));
@@ -487,8 +448,7 @@ void DebyeHuckel::getParameters(AnyMap& phaseNode) const
     phaseNode["activity-data"] = std::move(activityNode);
 }
 
-void DebyeHuckel::getSpeciesParameters(const std::string& name,
-                                       AnyMap& speciesNode) const
+void DebyeHuckel::getSpeciesParameters(const string& name, AnyMap& speciesNode) const
 {
     MolalityVPSSTP::getSpeciesParameters(name, speciesNode);
     size_t k = speciesIndex(name);
@@ -661,7 +621,6 @@ bool DebyeHuckel::addSpecies(shared_ptr<Species> spec)
         m_d2lnActCoeffMolaldT2.push_back(0.0);
         m_dlnActCoeffMolaldP.push_back(0.0);
         m_B_Dot.push_back(0.0);
-        m_tmpV.push_back(0.0);
 
         // NAN will be replaced with default value
         double Aionic = NAN;

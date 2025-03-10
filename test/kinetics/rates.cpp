@@ -1,8 +1,8 @@
 #include "gtest/gtest.h"
 #include "cantera/thermo.h"
 #include "cantera/kinetics.h"
+#include "cantera/thermo/ThermoFactory.h"
 #include "cantera/thermo/IdealGasPhase.h"
-#include "cantera/kinetics/GasKinetics.h"
 #include "cantera/base/Solution.h"
 #include "cantera/base/Interface.h"
 
@@ -13,19 +13,19 @@ class FracCoeffTest : public testing::Test
 {
 public:
     FracCoeffTest() :
-        therm("frac.yaml", "gas")
+        therm(newThermo("frac.yaml", "gas"))
     {
-        kin = newKinetics({&therm}, "frac.yaml", "gas");
-        therm.setState_TPX(2000, 4*OneAtm,
+        kin = newKinetics({therm}, "frac.yaml");
+        therm->setState_TPX(2000, 4*OneAtm,
                             "H2O:0.5, OH:.05, H:0.1, O2:0.15, H2:0.2");
-        kH2O = therm.speciesIndex("H2O");
-        kH = therm.speciesIndex("H");
-        kOH = therm.speciesIndex("OH");
-        kO2 = therm.speciesIndex("O2");
-        kH2 = therm.speciesIndex("H2");
+        kH2O = therm->speciesIndex("H2O");
+        kH = therm->speciesIndex("H");
+        kOH = therm->speciesIndex("OH");
+        kO2 = therm->speciesIndex("O2");
+        kH2 = therm->speciesIndex("H2");
     }
-    IdealGasPhase therm;
-    unique_ptr<Kinetics> kin;
+    shared_ptr<ThermoPhase> therm;
+    shared_ptr<Kinetics> kin;
     size_t kH2O, kH, kOH, kO2, kH2;
 };
 
@@ -44,8 +44,8 @@ TEST_F(FracCoeffTest, StoichCoeffs)
 
 TEST_F(FracCoeffTest, RateConstants)
 {
-    vector_fp kf(kin->nReactions(), 0.0);
-    vector_fp kr(kin->nReactions(), 0.0);
+    vector<double> kf(kin->nReactions(), 0.0);
+    vector<double> kr(kin->nReactions(), 0.0);
     kin->getFwdRateConstants(&kf[0]);
     kin->getRevRateConstants(&kr[0]);
 
@@ -63,10 +63,10 @@ TEST_F(FracCoeffTest, RateConstants)
 
 TEST_F(FracCoeffTest, RatesOfProgress)
 {
-    vector_fp kf(kin->nReactions(), 0.0);
-    vector_fp conc(therm.nSpecies(), 0.0);
-    vector_fp ropf(kin->nReactions(), 0.0);
-    therm.getConcentrations(&conc[0]);
+    vector<double> kf(kin->nReactions(), 0.0);
+    vector<double> conc(therm->nSpecies(), 0.0);
+    vector<double> ropf(kin->nReactions(), 0.0);
+    therm->getConcentrations(&conc[0]);
     kin->getFwdRateConstants(&kf[0]);
     kin->getFwdRatesOfProgress(&ropf[0]);
 
@@ -77,9 +77,9 @@ TEST_F(FracCoeffTest, RatesOfProgress)
 
 TEST_F(FracCoeffTest, CreationDestructionRates)
 {
-    vector_fp ropf(kin->nReactions(), 0.0);
-    vector_fp cdot(therm.nSpecies(), 0.0);
-    vector_fp ddot(therm.nSpecies(), 0.0);
+    vector<double> ropf(kin->nReactions(), 0.0);
+    vector<double> cdot(therm->nSpecies(), 0.0);
+    vector<double> ddot(therm->nSpecies(), 0.0);
     kin->getFwdRatesOfProgress(&ropf[0]);
     kin->getCreationRates(&cdot[0]);
     kin->getDestructionRates(&ddot[0]);
@@ -94,23 +94,23 @@ TEST_F(FracCoeffTest, CreationDestructionRates)
     EXPECT_DOUBLE_EQ(0.2*ropf[1]+0.5*ropf[2], ddot[kO2]);
     EXPECT_DOUBLE_EQ(ropf[1]+ropf[2], cdot[kH2O]);
 
-    EXPECT_DOUBLE_EQ(0.0, cdot[therm.speciesIndex("O")]);
-    EXPECT_DOUBLE_EQ(0.0, ddot[therm.speciesIndex("O")]);
+    EXPECT_DOUBLE_EQ(0.0, cdot[therm->speciesIndex("O")]);
+    EXPECT_DOUBLE_EQ(0.0, ddot[therm->speciesIndex("O")]);
 }
 
 TEST_F(FracCoeffTest, EquilibriumConstants)
 {
-    vector_fp Kc(kin->nReactions(), 0.0);
-    vector_fp mu0(therm.nSpecies(), 0.0);
+    vector<double> Kc(kin->nReactions(), 0.0);
+    vector<double> mu0(therm->nSpecies(), 0.0);
 
     kin->getEquilibriumConstants(&Kc[0]);
-    therm.getGibbs_ref(&mu0[0]); // at pRef
+    therm->getGibbs_ref(&mu0[0]); // at pRef
 
     double deltaG0_0 = 1.4 * mu0[kH] + 0.6 * mu0[kOH] + 0.2 * mu0[kO2] - mu0[kH2O];
     double deltaG0_1 = mu0[kH2O] - 0.7 * mu0[kH2] - 0.6 * mu0[kOH] - 0.2 * mu0[kO2];
 
-    double pRef = therm.refPressure();
-    double RT = therm.RT();
+    double pRef = therm->refPressure();
+    double RT = therm->RT();
 
     // Net stoichiometric coefficients are 1.2 and -0.5
     EXPECT_NEAR(exp(-deltaG0_0/RT) * pow(pRef/RT, 1.2), Kc[0], 1e-13 * Kc[0]);
@@ -121,7 +121,7 @@ class NegativePreexponentialFactor : public testing::Test
 {
 public:
     NegativePreexponentialFactor() {}
-    void setup(const std::string& infile) {
+    void setup(const string& infile) {
         soln = newSolution(infile);
         soln->thermo()->setState_TPX(2000, OneAtm,
             "H2O:1.0, H:0.2, O2:0.3, NH:0.05, NO:0.05, N2O:0.05");
@@ -133,7 +133,7 @@ public:
         const double wdot_ref[] = {0.44705, -0.0021443, 0, -279.36, 0.0021432, 278.92, 0.4449, -279.36, 279.36, 0, 0, 0};
         ASSERT_EQ(12, (int) nSpec);
         ASSERT_EQ(12, (int) nRxn);
-        vector_fp wdot(nSpec);
+        vector<double> wdot(nSpec);
         soln->kinetics()->getNetProductionRates(&wdot[0]);
         for (size_t i = 0; i < nSpec; i++) {
             EXPECT_NEAR(wdot_ref[i], wdot[i], std::abs(wdot_ref[i])*2e-5 + 1e-9);
@@ -142,8 +142,8 @@ public:
         const double ropf_ref[] = {479.305, -128.202, 0, -0, 0, 0, 0, 0, 0, 0.4449, 0, 0};
         const double ropr_ref[] = {97.94, -26.1964, 0, -0, 1.10334e-06, 0, 0, 0, 6.58592e-06, 0, 0, 0.00214319};
 
-        vector_fp ropf(nRxn);
-        vector_fp ropr(nRxn);
+        vector<double> ropf(nRxn);
+        vector<double> ropr(nRxn);
         soln->kinetics()->getFwdRatesOfProgress(&ropf[0]);
         soln->kinetics()->getRevRatesOfProgress(&ropr[0]);
         for (size_t i = 0; i < nRxn; i++) {
@@ -169,11 +169,83 @@ TEST(InterfaceReaction, CoverageDependency) {
     double T = 500;
     iface->thermo()->setState_TP(T, 101325);
     iface->thermo()->setCoveragesByName("PT(S):0.7, H(S):0.3");
-    vector_fp kf(iface->kinetics()->nReactions());
+    vector<double> kf(iface->kinetics()->nReactions());
     iface->kinetics()->getFwdRateConstants(&kf[0]);
     EXPECT_NEAR(kf[0], 4.4579e7 * pow(T, 0.5), 1e-14*kf[0]);
     // Energies in XML file are converted from J/mol to J/kmol
     EXPECT_NEAR(kf[1], 3.7e20 * exp(-(67.4e6-6e6*0.3)/(GasConstant*T)), 1e-14*kf[1]);
 }
+
+TEST(LinearBurkeRate, RateCombinations)
+{
+    auto sol = newSolution("linearBurke-test.yaml", "linear-Burke-complex", "none");
+    auto& thermo = *sol->thermo();
+    auto& kin = *sol->kinetics();
+    size_t nR = kin.nReactions();
+    ASSERT_EQ(nR, 4);
+    double P0 = 2.0 * OneAtm;
+    double T = 800;
+
+    auto kf = [&](size_t iRxn, double T, double P, const string& X="P1:1.0") {
+        thermo.setState_TPX(T, P, X);
+        vector<double> rates(kin.nReactions());
+        kin.getFwdRateConstants(rates.data());
+        return rates[iRxn];
+    };
+
+    double atol = kf(0, T, P0, "R2: 0.6, R3: 0.4") * 1e-9;
+
+    // For a mixture only containing species treated as M, kf should be the same as
+    // this rate coefficient evaluated at the same P
+    EXPECT_NEAR(kf(0, T, P0, "R2: 0.6, R3: 0.4"), kf(1, T, P0), atol);
+
+    // For a collider that specifies the same rate constant as M, kf should be the same
+    EXPECT_NEAR(kf(0, T, P0, "R2: 0.2, P5A: 0.8"),
+                kf(0, T, P0, "R2: 0.6, R3: 0.4"), atol);
+
+    // For a pure mixture of another collider, the rate should be the same as for that
+    // collider treated as a separate reaction (that is, Peff == P)
+    EXPECT_NEAR(kf(0, T, P0, "P3A: 1.0"), kf(2, T, P0), atol);
+    EXPECT_NEAR(kf(0, T, P0, "P3B: 1.0"), kf(3, T, P0), atol);
+
+    // A binary mixture containing one non-M collider (P3A: X = 0.2, efficiency = 3.0)
+    // and one M collider (R2: X = 0.8, efficiency = 1.0)
+    double X_P3A = 0.2;
+    double X_R2 = 1 - X_P3A;
+    double eps_mix = X_P3A * 3.0 + X_R2 * 1.0;
+    double Peff_P3A = P0 * eps_mix / 3.0;
+    double Peff_R2 = P0 * eps_mix;
+    double Pr_P3A = 3.0 / eps_mix * X_P3A; // reduced pressure
+    double Pr_R2 = 1 / eps_mix * X_R2;
+    EXPECT_NEAR(kf(0, T, P0, "P3A: 0.2, R2: 0.8"),
+                kf(2, T, Peff_P3A) * Pr_P3A + kf(1, T, Peff_R2) * Pr_R2, atol);
+
+    // A binary mixture containing two non-M colliders (P3A: X = 0.3, efficiency = 3.0)
+    // and (P3B: X = 0.7, efficiency = 5)
+    X_P3A = 0.3;
+    double X_P3B = 1 - X_P3A;
+    eps_mix = X_P3A * 3.0 + X_P3B * 5.0;
+    Peff_P3A = P0 * eps_mix / 3.0;
+    double Peff_P3B = P0 * eps_mix / 5.0;
+    Pr_P3A = 3.0 / eps_mix * X_P3A;
+    double Pr_P3B = 5.0 / eps_mix * X_P3B;
+    EXPECT_NEAR(kf(0, T, P0, "P3A: 0.3, P3B: 0.7"),
+                kf(2, T, Peff_P3A) * Pr_P3A + kf(3, T, Peff_P3B) * Pr_P3B, atol);
+
+    // A binary mixture containing two non-M colliders, where the second collider
+    // specifies only an efficiency (P3A: X = 0.4, efficiency = 3.0;
+    // R6: X = 0.6, efficiency = 7). For this collider, Peff == Peff_M, but the reduced
+    // pressure Pr is calculated using the efficiency and mole fraction of that species.
+    X_P3A = 0.4;
+    double X_R6 = 1 - X_P3A;
+    eps_mix = X_P3A * 3.0 + X_R6 * 7.0;
+    Peff_P3A = P0 * eps_mix / 3.0;
+    double Peff_M = P0 * eps_mix;
+    Pr_P3A = 3.0 / eps_mix * X_P3A;
+    double Pr_R6 = 7.0 / eps_mix * X_R6;
+    EXPECT_NEAR(kf(0, T, P0, "P3A: 0.4, R6: 0.6"),
+                kf(2, T, Peff_P3A) * Pr_P3A + kf(1, T, Peff_M) * Pr_R6, atol);
+}
+
 
 }

@@ -4,6 +4,8 @@
 // at https://cantera.org/license.txt for license and copyright information.
 
 #include "cantera/numerics/Func1.h"
+#include "cantera/base/global.h"
+#include "cantera/base/ctexceptions.h"
 #include "cantera/base/stringUtils.h"
 
 using namespace std;
@@ -11,82 +13,47 @@ using namespace std;
 namespace Cantera
 {
 
-Func1::Func1() :
-    m_c(0.0),
-    m_f1(0),
-    m_f2(0),
-    m_parent(0)
+string Func1::typeName() const
 {
-}
-
-Func1::Func1(const Func1& right) :
-    m_c(right.m_c),
-    m_f1(right.m_f1),
-    m_f2(right.m_f2),
-    m_parent(right.m_parent)
-{
-}
-
-Func1& Func1::operator=(const Func1& right)
-{
-    if (&right == this) {
-        return *this;
-    }
-    m_c = right.m_c;
-    m_f1 = right.m_f1;
-    m_f2 = right.m_f2;
-    m_parent = right.m_parent;
-    return *this;
-}
-
-Func1& Func1::duplicate() const
-{
-    Func1* nfunc = new Func1(*this);
-    return *nfunc;
-}
-
-int Func1::ID() const
-{
-    return 0;
+    return demangle(typeid(*this));
 }
 
 // Calls method eval to evaluate the function
-doublereal Func1::operator()(doublereal t) const
+double Func1::operator()(double t) const
 {
     return eval(t);
 }
 
 // Evaluate the function.
-doublereal Func1::eval(doublereal t) const
+double Func1::eval(double t) const
 {
     return 0.0;
 }
 
-Func1& Func1::derivative() const
+shared_ptr<Func1> Func1::derivative() const
 {
-    cout << "derivative error... ERR: ID = " << ID() << endl;
-    cout << write("x") << endl;
-    return *(new Func1);
+    throw CanteraError("Func1::derivative",
+        "Needs to be overloaded by Func1 specialization.");
 }
 
-bool Func1::isIdentical(Func1& other) const
+bool Func1::isIdentical(shared_ptr<Func1> other) const
 {
-    if (ID() != other.ID() || m_c != other.m_c) {
+    if (type() == "functor" || type() != other->type() || m_c != other->m_c) {
         return false;
     }
     if (m_f1) {
-        if (!other.m_f1) {
+        if (!other->m_f1) {
             return false;
         }
-        if (!m_f1->isIdentical(*other.m_f1)) {
+        if (!m_f1->isIdentical(other->m_f1)) {
             return false;
         }
     }
     if (m_f2) {
-        if (!other.m_f2) {
+        if (!other->m_f2) {
             return false;
         }
-        if (!m_f2->isIdentical(*other.m_f2)) {
+        if (!m_f2->isIdentical(other->m_f2)) {
             return false;
         }
     }
@@ -94,26 +61,9 @@ bool Func1::isIdentical(Func1& other) const
 }
 
 //! accessor function for the returned constant
-doublereal Func1::c() const
+double Func1::c() const
 {
     return m_c;
-}
-
-// Function to set the stored constant
-void Func1::setC(doublereal c)
-{
-    m_c = c;
-}
-
-//! accessor function for m_f1
-Func1& Func1::func1() const
-{
-    return *m_f1;
-}
-
-Func1& Func1::func2() const
-{
-    return *m_f2;
 }
 
 int Func1::order() const
@@ -121,27 +71,16 @@ int Func1::order() const
     return 3;
 }
 
-Func1& Func1::func1_dup() const
-{
-    return m_f1->duplicate();
-}
-
-Func1& Func1::func2_dup() const
-{
-    return m_f2->duplicate();
-}
-
-Func1* Func1::parent() const
-{
-    return m_parent;
-}
-
-void Func1::setParent(Func1* p)
-{
-    m_parent = p;
-}
-
 /*****************************************************************************/
+
+Sin1::Sin1(const vector<double>& params)
+{
+    if (params.size() != 1) {
+        throw CanteraError("Sin1::Sin1",
+            "Constructor needs exactly one parameter (frequency).");
+    }
+    m_c = params[0];
+}
 
 string Sin1::write(const string& arg) const
 {
@@ -152,22 +91,30 @@ string Sin1::write(const string& arg) const
     }
 }
 
-Func1& Sin1::derivative() const
+shared_ptr<Func1> Sin1::derivative() const
 {
-    Func1* c = new Cos1(m_c);
-    Func1* r = &newTimesConstFunction(*c, m_c);
-    return *r;
+    auto c = make_shared<Cos1>(m_c);
+    return newTimesConstFunction(c, m_c);
 }
+
 /*****************************************************************************/
 
-Func1& Cos1::derivative() const
+Cos1::Cos1(const vector<double>& params)
 {
-    Func1* s = new Sin1(m_c);
-    Func1* r = &newTimesConstFunction(*s, -m_c);
-    return *r;
+    if (params.size() != 1) {
+        throw CanteraError("Cos1::Cos1",
+            "Constructor needs exactly one parameter (frequency).");
+    }
+    m_c = params[0];
 }
 
-std::string Cos1::write(const std::string& arg) const
+shared_ptr<Func1> Cos1::derivative() const
+{
+    auto s = make_shared<Sin1>(m_c);
+    return newTimesConstFunction(s, -m_c);
+}
+
+string Cos1::write(const string& arg) const
 {
     if (m_c == 1.0) {
         return fmt::format("\\cos({})", arg);
@@ -178,17 +125,25 @@ std::string Cos1::write(const std::string& arg) const
 
 /**************************************************************************/
 
-Func1& Exp1::derivative() const
+Exp1::Exp1(const vector<double>& params)
 {
-    Func1* f = new Exp1(m_c);
-    if (m_c != 1.0) {
-        return newTimesConstFunction(*f, m_c);
-    } else {
-        return *f;
+    if (params.size() != 1) {
+        throw CanteraError("Exp1::Exp1",
+            "Constructor needs exactly one parameter (exponent factor).");
     }
+    m_c = params[0];
 }
 
-std::string Exp1::write(const std::string& arg) const
+shared_ptr<Func1> Exp1::derivative() const
+{
+    auto f = make_shared<Exp1>(m_c);
+    if (m_c != 1.0) {
+        return newTimesConstFunction(f, m_c);
+    }
+    return f;
+}
+
+string Exp1::write(const string& arg) const
 {
     if (m_c == 1.0) {
         return fmt::format("\\exp({})", arg);
@@ -197,27 +152,167 @@ std::string Exp1::write(const std::string& arg) const
     }
 }
 
-/******************************************************************************/
-
-Func1& Pow1::derivative() const
+Log1::Log1(const vector<double>& params)
 {
-    Func1* r;
-    if (m_c == 0.0) {
-        r = new Const1(0.0);
-    } else if (m_c == 1.0) {
-        r = new Const1(1.0);
-    } else {
-        Func1* f = new Pow1(m_c - 1.0);
-        r = &newTimesConstFunction(*f, m_c);
+    if (params.size() != 1) {
+        throw CanteraError("Log1::Log1",
+            "Constructor needs exactly one parameter (factor).");
     }
-    return *r;
+    m_c = params[0];
+}
+
+shared_ptr<Func1> Log1::derivative() const
+{
+    auto f = make_shared<Pow1>(-1.);
+    if (m_c != 1.0) {
+        return newTimesConstFunction(f, m_c);
+    }
+    return f;
+}
+
+string Log1::write(const string& arg) const
+{
+    if (m_c == 1.0) {
+        return fmt::format("\\log({})", arg);
+    }
+    return fmt::format("\\log({}{})", m_c, arg);
 }
 
 /******************************************************************************/
 
+Pow1::Pow1(const vector<double>& params)
+{
+    if (params.size() != 1) {
+        throw CanteraError("Pow1::Pow1",
+            "Constructor needs exactly one parameter (exponent).");
+    }
+    m_c = params[0];
+}
+
+shared_ptr<Func1> Pow1::derivative() const
+{
+    if (m_c == 0.0) {
+        return make_shared<Const1>(0.0);
+    }
+    if (m_c == 1.0) {
+        return make_shared<Const1>(1.0);
+    }
+    auto f = make_shared<Pow1>(m_c - 1.);
+    return newTimesConstFunction(f, m_c);
+}
+
+/******************************************************************************/
+
+Const1::Const1(const vector<double>& params)
+{
+    if (params.size() != 1) {
+        throw CanteraError("Const1::Const1",
+            "Constructor needs exactly one parameter (constant).");
+    }
+    m_c = params[0];
+}
+
+Poly1::Poly1(const vector<double>& params)
+{
+    if (params.size() == 0) {
+        throw CanteraError("Poly1::Poly1",
+            "Constructor needs an array that is not empty.");
+    }
+    size_t n = params.size() - 1;
+    m_cpoly.resize(n + 1);
+    copy(params.data(), params.data() + m_cpoly.size(), m_cpoly.begin());
+}
+
+string Poly1::write(const string& arg) const
+{
+    // write terms in reverse order
+    string out = "";
+    if (m_cpoly[m_cpoly.size()-1] != 0.) {
+        out = fmt::format("{}", m_cpoly[m_cpoly.size()-1]);
+    }
+    for (size_t n=1; n<m_cpoly.size(); n++) {
+        if (m_cpoly[m_cpoly.size()-1-n] == 0.) {
+            continue;
+        }
+        string term;
+        if (m_cpoly[m_cpoly.size()-1-n] == 1.) {
+            term = fmt::format("{}", arg);
+        } else if (m_cpoly[m_cpoly.size()-1-n] == -1.) {
+            term = fmt::format("-{}", arg);
+        } else {
+            term = fmt::format("{}{}", m_cpoly[m_cpoly.size()-1-n], arg);
+        }
+        if (n > 9) {
+            term = fmt::format("{}^{{{}}}", term, n);
+        } else if (n > 1) {
+            term = fmt::format("{}^{}", term, n);
+        }
+        if (!out.size()) {
+            out = term;
+        } else if (out[0] == '-') {
+            out = fmt::format("{} - {}", term, out.substr(1));
+        } else {
+            out = fmt::format("{} + {}", term, out);
+        }
+    }
+    return out;
+}
+
+Fourier1::Fourier1(const vector<double>& params)
+{
+    if (params.size() < 4) {
+        throw CanteraError("Fourier1::Fourier1",
+            "Constructor needs an array with at least 4 entries.");
+    }
+    if (params.size() % 2 != 0) {
+        throw CanteraError("Fourier1::Fourier1",
+            "Constructor needs an array with an even number of entries.");
+    }
+    size_t n = params.size() / 2 - 1;
+    m_omega = params[n + 1];
+    m_a0_2 = 0.5 * params[0];
+    m_ccos.resize(n);
+    m_csin.resize(n);
+    copy(params.data() + 1, params.data() + n + 1, m_ccos.begin());
+    copy(params.data() + n + 2, params.data() + 2 * n + 2, m_csin.begin());
+}
+
+Gaussian1::Gaussian1(const vector<double>& params)
+{
+    if (params.size() != 3) {
+        throw CanteraError("Gaussian1::Gaussian1",
+            "Constructor needs exactly 3 parameters (amplitude, center, width).");
+    }
+    m_A = params[0];
+    m_t0 = params[1];
+    m_tau = params[2] / (2. * sqrt(log(2.)));
+}
+
+Arrhenius1::Arrhenius1(const vector<double>& params)
+{
+    if (params.size() < 3) {
+        throw CanteraError("Arrhenius1::Arrhenius1",
+            "Constructor needs an array with at least 3 entries.");
+    }
+    if (params.size() % 3 != 0) {
+        throw CanteraError("Arrhenius1::Arrhenius1",
+            "Constructor needs an array with multiples of 3 entries.");
+    }
+    size_t n = params.size() / 3;
+    m_A.resize(n);
+    m_b.resize(n);
+    m_E.resize(n);
+    for (size_t i = 0; i < n; i++) {
+        size_t loc = 3 * i;
+        m_A[i] = params[loc];
+        m_b[i] = params[loc + 1];
+        m_E[i] = params[loc + 2];
+    }
+}
+
 Tabulated1::Tabulated1(size_t n, const double* tvals, const double* fvals,
-                       const std::string& method) :
-    Func1() {
+                       const string& method)
+{
     m_tvec.resize(n);
     std::copy(tvals, tvals + n, m_tvec.begin());
     for (auto it = std::begin(m_tvec) + 1; it != std::end(m_tvec); it++) {
@@ -228,14 +323,41 @@ Tabulated1::Tabulated1(size_t n, const double* tvals, const double* fvals,
     }
     m_fvec.resize(n);
     std::copy(fvals, fvals + n, m_fvec.begin());
+    setMethod(method);
+}
+
+Tabulated1::Tabulated1(const vector<double>& params) : m_isLinear(true)
+{
+    if (params.size() < 4) {
+        throw CanteraError("Tabulated1::Tabulated1",
+            "Constructor needs an array with at least 4 entries.");
+    }
+    if (params.size() % 2 != 0) {
+        throw CanteraError("Tabulated1::Tabulated1",
+            "Constructor needs an array with an even number of entries.");
+    }
+    size_t n = params.size() / 2;
+    m_tvec.resize(n);
+    copy(params.data(), params.data() + n, m_tvec.begin());
+    for (auto it = std::begin(m_tvec) + 1; it != std::end(m_tvec); it++) {
+        if (*(it - 1) > *it) {
+            throw CanteraError("Tabulated1::Tabulated1",
+                "Time values are not monotonically increasing.");
+        }
+    }
+    m_fvec.resize(n);
+    copy(params.data() + n, params.data() + 2 * n, m_fvec.begin());
+}
+
+void Tabulated1::setMethod(const string& method)
+{
     if (method == "linear") {
         m_isLinear = true;
     } else if (method == "previous") {
         m_isLinear = false;
     } else {
-        throw CanteraError("Tabulated1::Tabulated1",
-                           "interpolation method '{}' is not implemented",
-                           method);
+        throw NotImplementedError("Tabulated1::setMethod",
+            "Interpolation method '{}' is not implemented.", method);
     }
 }
 
@@ -262,9 +384,9 @@ double Tabulated1::eval(double t) const {
     }
 }
 
-Func1& Tabulated1::derivative() const {
-    vector_fp tvec;
-    vector_fp dvec;
+shared_ptr<Func1> Tabulated1::derivative() const {
+    vector<double> tvec;
+    vector<double> dvec;
     size_t siz = m_tvec.size();
     if (m_isLinear) {
         // piece-wise continuous derivative
@@ -285,17 +407,17 @@ Func1& Tabulated1::derivative() const {
         dvec.push_back(0.);
         dvec.push_back(0.);
     }
-    return *(new Tabulated1(tvec.size(), &tvec[0], &dvec[0], "previous"));
+    return make_shared<Tabulated1>(tvec.size(), &tvec[0], &dvec[0], "previous");
 }
 
 /******************************************************************************/
 
-string Func1::write(const std::string& arg) const
+string Func1::write(const string& arg) const
 {
-    return fmt::format("<unknown {}>({})", ID(), arg);
+    return fmt::format("\\mathrm{{{}}}({})", type(), arg);
 }
 
-string Pow1::write(const std::string& arg) const
+string Pow1::write(const string& arg) const
 {
     if (m_c == 0.5) {
         return "\\sqrt{" + arg + "}";
@@ -310,23 +432,30 @@ string Pow1::write(const std::string& arg) const
     }
 }
 
-string Tabulated1::write(const std::string& arg) const
+string Tabulated1::write(const string& arg) const
 {
     return fmt::format("\\mathrm{{Tabulated}}({})", arg);
 }
 
-string Const1::write(const std::string& arg) const
+string Const1::write(const string& arg) const
 {
     return fmt::format("{}", m_c);
 }
 
-string Ratio1::write(const std::string& arg) const
+string Ratio1::write(const string& arg) const
 {
-    return "\\frac{" + m_f1->write(arg) + "}{"
-           + m_f2->write(arg) + "}";
+    return "\\frac{" + m_f1->write(arg) + "}{" + m_f2->write(arg) + "}";
 }
 
-string Product1::write(const std::string& arg) const
+shared_ptr<Func1> Ratio1::derivative() const {
+    auto a1 = newProdFunction(m_f1->derivative(), m_f2);
+    auto a2 = newProdFunction(m_f1, m_f2->derivative());
+    auto s = newDiffFunction(a1, a2);
+    auto p = newProdFunction(m_f2, m_f2);
+    return newRatioFunction(s, p);
+}
+
+string Product1::write(const string& arg) const
 {
     string s = m_f1->write(arg);
     if (m_f1->order() < order()) {
@@ -339,7 +468,13 @@ string Product1::write(const std::string& arg) const
     return s + " " + s2;
 }
 
-string Sum1::write(const std::string& arg) const
+shared_ptr<Func1> Product1::derivative() const {
+    auto a1 = newProdFunction(m_f1, m_f2->derivative());
+    auto a2 = newProdFunction(m_f2, m_f1->derivative());
+    return newSumFunction(a1, a2);
+}
+
+string Sum1::write(const string& arg) const
 {
     string s1 = m_f1->write(arg);
     string s2 = m_f2->write(arg);
@@ -350,7 +485,7 @@ string Sum1::write(const std::string& arg) const
     }
 }
 
-string Diff1::write(const std::string& arg) const
+string Diff1::write(const string& arg) const
 {
     string s1 = m_f1->write(arg);
     string s2 = m_f2->write(arg);
@@ -361,13 +496,20 @@ string Diff1::write(const std::string& arg) const
     }
 }
 
-string Composite1::write(const std::string& arg) const
+string Composite1::write(const string& arg) const
 {
     string g = m_f2->write(arg);
     return m_f1->write(g);
 }
 
-string TimesConstant1::write(const std::string& arg) const
+shared_ptr<Func1> Composite1::derivative() const {
+    auto d1 = m_f1->derivative();
+    auto d2 = m_f2->derivative();
+    auto d3 = newCompositeFunction(d1, m_f2);
+    return newProdFunction(d3, d2);
+}
+
+string TimesConstant1::write(const string& arg) const
 {
     string s = m_f1->write(arg);
     if (m_f1->order() < order()) {
@@ -386,7 +528,7 @@ string TimesConstant1::write(const std::string& arg) const
     return fmt::format("{}{}", m_c, s);
 }
 
-string PlusConstant1::write(const std::string& arg) const
+string PlusConstant1::write(const string& arg) const
 {
     if (m_c == 0.0) {
         return m_f1->write(arg);
@@ -394,282 +536,245 @@ string PlusConstant1::write(const std::string& arg) const
     return fmt::format("{} + {}", m_f1->write(arg), m_c);
 }
 
-doublereal Func1::isProportional(TimesConstant1& other)
+namespace { // restrict scope of helper functions to local translation unit
+
+bool isConstant(const shared_ptr<Func1>& f)
 {
-    if (isIdentical(other.func1())) {
-        return other.c();
-    }
-    return 0.0;
-}
-doublereal Func1::isProportional(Func1& other)
-{
-    if (isIdentical(other)) {
-        return 1.0;
-    } else {
-        return 0.0;
-    }
+    return f->type() == "constant";
 }
 
-static bool isConstant(Func1& f)
+bool isZero(const shared_ptr<Func1>& f)
 {
-    if (f.ID() == ConstFuncType) {
-        return true;
-    } else {
-        return false;
-    }
+    return f->type() == "constant" && f->c() == 0.0;
 }
 
-static bool isZero(Func1& f)
+bool isOne(const shared_ptr<Func1>& f)
 {
-    if (f.ID() == ConstFuncType && f.c() == 0.0) {
-        return true;
-    } else {
-        return false;
-    }
+    return f->type() == "constant" && f->c() == 1.0;
 }
 
-static bool isOne(Func1& f)
+bool isTimesConst(const shared_ptr<Func1>& f)
 {
-    if (f.ID() == ConstFuncType && f.c() == 1.0) {
-        return true;
-    } else {
-        return false;
-    }
+    return f->type() == "times-constant";
 }
 
-static bool isTimesConst(Func1& f)
+bool isExp(const shared_ptr<Func1>& f)
 {
-    if (f.ID() == TimesConstantFuncType) {
-        return true;
-    } else {
-        return false;
-    }
+    return f->type() == "exp";
 }
 
-static bool isExp(Func1& f)
+bool isPow(const shared_ptr<Func1>& f)
 {
-    if (f.ID() == ExpFuncType) {
-        return true;
-    } else {
-        return false;
-    }
+    return f->type() == "pow";
 }
 
-static bool isPow(Func1& f)
+pair<bool, double> isProportional(
+    const shared_ptr<Func1>&f1, const shared_ptr<Func1>&f2)
 {
-    if (f.ID() == PowFuncType) {
-        return true;
-    } else {
-        return false;
+    bool tc1 = isTimesConst(f1);
+    bool tc2 = isTimesConst(f2);
+    if (!tc1 && !tc2) {
+        if (f1->isIdentical(f2)) {
+            return {true, 1.0};
+        }
+        return {false, 0.};
     }
+    if (!tc1 && tc2) {
+        if (f1->isIdentical((f2->func1_shared()))) {
+            return {true, f2->c()};
+        }
+        return {false, 0.};
+    }
+    if (tc1 && !tc2) {
+        if (f2->isIdentical((f1->func1_shared()))) {
+            return {true, 1. / f1->c()};
+        }
+        return {false, 0.};
+    }
+    if (f2->func1_shared()->isIdentical((f1->func1_shared()))) {
+        return {true, f2->c() / f1->c()};
+    }
+    return {false, 0.};
 }
 
-Func1& newSumFunction(Func1& f1, Func1& f2)
+} // end unnamed namespace
+
+shared_ptr<Func1> newSumFunction(shared_ptr<Func1> f1, shared_ptr<Func1> f2)
 {
-    if (f1.isIdentical(f2)) {
-        return newTimesConstFunction(f1, 2.0);
+    if (f1->isIdentical(f2)) {
+        return newTimesConstFunction(f1, 2.);
     }
     if (isZero(f1)) {
-        delete &f1;
         return f2;
     }
     if (isZero(f2)) {
-        delete &f2;
         return f1;
     }
-    doublereal c = f1.isProportional(f2);
-    if (c != 0) {
-        if (c == -1.0) {
-            return *(new Const1(0.0));
-        } else {
-            return newTimesConstFunction(f1, c + 1.0);
-        }
+    if (isConstant(f2)) {
+        return newPlusConstFunction(f1, f2->c());
     }
-    return *(new Sum1(f1, f2));
+    if (isConstant(f1)) {
+        return newPlusConstFunction(f2, f1->c());
+    }
+    auto [prop, c] = isProportional(f1, f2);
+    if (prop) {
+        if (c == -1.) {
+            return make_shared<Const1>(0.);
+        }
+        return newTimesConstFunction(f1, c + 1.);
+    }
+    return make_shared<Sum1>(f1, f2);
 }
 
-Func1& newDiffFunction(Func1& f1, Func1& f2)
+shared_ptr<Func1> newDiffFunction(shared_ptr<Func1> f1, shared_ptr<Func1> f2)
 {
     if (isZero(f2)) {
-        delete &f2;
         return f1;
     }
-    if (f1.isIdentical(f2)) {
-        delete &f1;
-        delete &f2;
-        return *(new Const1(0.0));
+    if (isZero(f1)) {
+        return newTimesConstFunction(f2, -1.);
     }
-    doublereal c = f1.isProportional(f2);
-    if (c != 0.0) {
+    if (f1->isIdentical(f2)) {
+        return make_shared<Const1>(0.);
+    }
+    if (isConstant(f2)) {
+        return newPlusConstFunction(f1, -f2->c());
+    }
+    auto [prop, c] = isProportional(f1, f2);
+    if (prop) {
         if (c == 1.0) {
-            return *(new Const1(0.0));
-        } else {
-            return newTimesConstFunction(f1, 1.0 - c);
+            return make_shared<Const1>(0.);
         }
+        return newTimesConstFunction(f1, 1. - c);
     }
-    return *(new Diff1(f1, f2));
+    return make_shared<Diff1>(f1, f2);
 }
 
-Func1& newProdFunction(Func1& f1, Func1& f2)
+shared_ptr<Func1> newProdFunction(shared_ptr<Func1> f1, shared_ptr<Func1> f2)
 {
     if (isOne(f1)) {
-        delete &f1;
         return f2;
     }
     if (isOne(f2)) {
-        delete &f2;
         return f1;
     }
     if (isZero(f1) || isZero(f2)) {
-        delete &f1;
-        delete &f2;
-        return *(new Const1(0.0));
+        return make_shared<Const1>(0.);
     }
     if (isConstant(f1) && isConstant(f2)) {
-        doublereal c1c2 = f1.c() * f2.c();
-        delete &f1;
-        delete &f2;
-        return *(new Const1(c1c2));
+        return make_shared<Const1>(f1->c() * f2->c());
     }
     if (isConstant(f1)) {
-        doublereal c = f1.c();
-        delete &f1;
-        return newTimesConstFunction(f2, c);
+        return newTimesConstFunction(f2, f1->c());
     }
     if (isConstant(f2)) {
-        doublereal c = f2.c();
-        delete &f2;
-        return newTimesConstFunction(f1, c);
+        return newTimesConstFunction(f1, f2->c());
     }
-
     if (isPow(f1) && isPow(f2)) {
-        Func1& p = *(new Pow1(f1.c() + f2.c()));
-        delete &f1;
-        delete &f2;
-        return p;
+        return make_shared<Pow1>(f1->c() + f2->c());
     }
-
     if (isExp(f1) && isExp(f2)) {
-        Func1& p = *(new Exp1(f1.c() + f2.c()));
-        delete &f1;
-        delete &f2;
-        return p;
+        return make_shared<Exp1>(f1->c() + f2->c());
     }
 
     bool tc1 = isTimesConst(f1);
     bool tc2 = isTimesConst(f2);
 
     if (tc1 || tc2) {
-        doublereal c1 = 1.0, c2 = 1.0;
-        Func1* ff1 = 0, *ff2 = 0;
+        double c1 = 1.0;
+        auto ff1 = f1;
         if (tc1) {
-            c1 = f1.c();
-            ff1 = &f1.func1_dup();
-            delete &f1;
-        } else {
-            ff1 = &f1;
+            c1 = f1->c();
+            ff1 = f1->func1_shared();
         }
+        double c2 = 1.0;
+        auto ff2 = f2;
         if (tc2) {
-            c2 = f2.c();
-            ff2 = &f2.func1_dup();
-            delete &f2;
-        } else {
-            ff2 = &f2;
+            c2 = f2->c();
+            ff2 = f2->func1_shared();
         }
-        Func1& p = newProdFunction(*ff1, *ff2);
+        auto p = newProdFunction(ff1, ff2);
 
-        if (c1* c2 != 1.0) {
-            return newTimesConstFunction(p, c1*c2);
-        } else {
-            return p;
+        if (c1 * c2 != 1.0) {
+            return newTimesConstFunction(p, c1 * c2);
         }
-    } else {
-        return *(new Product1(f1, f2));
+        return p;
     }
+    return make_shared<Product1>(f1, f2);
 }
 
-Func1& newRatioFunction(Func1& f1, Func1& f2)
+shared_ptr<Func1> newRatioFunction(shared_ptr<Func1> f1, shared_ptr<Func1> f2)
 {
     if (isOne(f2)) {
         return f1;
     }
     if (isZero(f1)) {
-        return *(new Const1(0.0));
+        return make_shared<Const1>(0.);
     }
-    if (f1.isIdentical(f2)) {
-        delete &f1;
-        delete &f2;
-        return *(new Const1(1.0));
+    if (isZero(f2)) {
+        throw CanteraError("newRatioFunction", "Division by zero.");
     }
-    if (f1.ID() == PowFuncType && f2.ID() == PowFuncType) {
-        return *(new Pow1(f1.c() - f2.c()));
+    if (f1->isIdentical(f2)) {
+        return make_shared<Const1>(1.);
     }
-    if (f1.ID() == ExpFuncType && f2.ID() == ExpFuncType) {
-        return *(new Exp1(f1.c() - f2.c()));
-    }
-    return *(new Ratio1(f1, f2));
-}
-
-Func1& newCompositeFunction(Func1& f1, Func1& f2)
-{
-    if (isZero(f1)) {
-        delete &f1;
-        delete &f2;
-        return *(new Const1(0.0));
-    }
-    if (isConstant(f1)) {
-        delete &f2;
-        return f1;
-    }
-    if (isPow(f1) && f1.c() == 1.0) {
-        delete &f1;
-        return f2;
-    }
-    if (isPow(f1) && f1.c() == 0.0) {
-        delete &f1;
-        delete &f2;
-        return *(new Const1(1.0));
+    if (isConstant(f2)) {
+        return newTimesConstFunction(f1, 1. / f2->c());
     }
     if (isPow(f1) && isPow(f2)) {
-        doublereal c1c2 = f1.c() * f2.c();
-        delete &f1;
-        delete &f2;
-        return *(new Pow1(c1c2));
+        return make_shared<Pow1>(f1->c() - f2->c());
     }
-    return *(new Composite1(f1, f2));
+    if (isExp(f1) && isExp(f2)) {
+        return make_shared<Exp1>(f1->c() - f2->c());
+    }
+    return make_shared<Ratio1>(f1, f2);
 }
 
-Func1& newTimesConstFunction(Func1& f, doublereal c)
+shared_ptr<Func1> newCompositeFunction(shared_ptr<Func1> f1, shared_ptr<Func1> f2)
+{
+    if (isZero(f1)) {
+        return make_shared<Const1>(0.0);
+    }
+    if (isConstant(f1)) {
+        return f1;
+    }
+    if (isPow(f1) && f1->c() == 1.0) {
+        return f2;
+    }
+    if (isPow(f1) && f1->c() == 0.0) {
+        return make_shared<Const1>(1.);
+    }
+    if (isPow(f1) && isPow(f2)) {
+        return make_shared<Pow1>(f1->c() * f2->c());
+    }
+    return make_shared<Composite1>(f1, f2);
+}
+
+shared_ptr<Func1> newTimesConstFunction(shared_ptr<Func1> f, double c)
 {
     if (c == 0.0) {
-        delete &f;
-        return *(new Const1(0.0));
+        return make_shared<Const1>(0.0);
     }
     if (c == 1.0) {
         return f;
     }
-    if (f.ID() == TimesConstantFuncType) {
-        f.setC(f.c() * c);
-        return f;
+    if (f->type() == "times-constant") {
+        return make_shared<TimesConstant1>(f->func1_shared(), f->c() * c);
     }
-    return *(new TimesConstant1(f, c));
+    return make_shared<TimesConstant1>(f, c);
 }
 
-Func1& newPlusConstFunction(Func1& f, doublereal c)
+shared_ptr<Func1> newPlusConstFunction(shared_ptr<Func1> f, double c)
 {
     if (c == 0.0) {
         return f;
     }
     if (isConstant(f)) {
-        doublereal cc = f.c() + c;
-        delete &f;
-        return *(new Const1(cc));
+        return make_shared<Const1>(f->c() + c);
     }
-    if (f.ID() == PlusConstantFuncType) {
-        f.setC(f.c() + c);
-        return f;
+    if (f->type() == "plus-constant") {
+        return make_shared<PlusConstant1>(f->func1_shared(), f->c() + c);
     }
-    return *(new PlusConstant1(f, c));
+    return make_shared<PlusConstant1>(f, c);
 }
 
 }

@@ -10,20 +10,18 @@
 #include "cantera/thermo/ThermoPhase.h"
 #include "cantera/base/utilities.h"
 
-using namespace std;
-
 namespace Cantera
 {
 
-void IdealGasConstPressureReactor::setThermoMgr(ThermoPhase& thermo)
+void IdealGasConstPressureReactor::setThermo(ThermoPhase& thermo)
 {
     //! @todo: Add a method to ThermoPhase that indicates whether a given
     //! subclass is compatible with this reactor model
-    if (thermo.type() != "IdealGas") {
-        throw CanteraError("IdealGasConstPressureReactor::setThermoMgr",
+    if (thermo.type() != "ideal-gas") {
+        throw CanteraError("IdealGasConstPressureReactor::setThermo",
                            "Incompatible phase type provided");
     }
-    Reactor::setThermoMgr(thermo);
+    Reactor::setThermo(thermo);
 }
 
 void IdealGasConstPressureReactor::getState(double* y)
@@ -48,13 +46,13 @@ void IdealGasConstPressureReactor::getState(double* y)
     getSurfaceInitialConditions(y + m_nsp + 2);
 }
 
-void IdealGasConstPressureReactor::initialize(doublereal t0)
+void IdealGasConstPressureReactor::initialize(double t0)
 {
     ConstPressureReactor::initialize(t0);
     m_hk.resize(m_nsp, 0.0);
 }
 
-void IdealGasConstPressureReactor::updateState(doublereal* y)
+void IdealGasConstPressureReactor::updateState(double* y)
 {
     // The components of y are [0] the total mass, [1] the temperature,
     // [2...K+2) are the mass fractions of each species, and [K+2...] are the
@@ -79,7 +77,7 @@ void IdealGasConstPressureReactor::eval(double time, double* LHS, double* RHS)
     evalWalls(time);
 
     m_thermo->restoreState(m_state);
-    const vector_fp& mw = m_thermo->molecularWeights();
+    const vector<double>& mw = m_thermo->molecularWeights();
     const double* Y = m_thermo->massFractions();
 
     evalSurfaces(LHS + m_nsp + 2, RHS + m_nsp + 2, m_sdot.data());
@@ -146,7 +144,7 @@ size_t IdealGasConstPressureReactor::componentIndex(const string& nm) const
     }
 }
 
-std::string IdealGasConstPressureReactor::componentName(size_t k) {
+string IdealGasConstPressureReactor::componentName(size_t k) {
     if (k == 1) {
         return "temperature";
     } else {

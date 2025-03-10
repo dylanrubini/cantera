@@ -1,13 +1,17 @@
 """
-An opposed-flow premixed strained flame
+Opposed-flow premixed strained flame
+====================================
 
 This script simulates a lean hydrogen-oxygen flame stabilized in a strained
 flowfield, with an opposed flow consisting of equilibrium products.
 
-Requires: cantera >= 2.5.0
-Keywords: combustion, 1D flow, premixed flame, strained flame
+Requires: cantera >= 3.0, matplotlib >= 2.0
+
+.. tags:: Python, combustion, 1D flow, premixed flame, strained flame
 """
 
+from pathlib import Path
+import matplotlib.pyplot as plt
 import cantera as ct
 
 # parameter values
@@ -38,11 +42,54 @@ sim.reactants.mdot = mdot_reactants
 sim.products.mdot = mdot_products
 
 sim.set_initial_guess()  # assume adiabatic equilibrium products
-sim.show_solution()
+sim.show()
 
 sim.solve(loglevel, auto=True)
 
+if "native" in ct.hdf_support():
+    output = Path() / "premixed_counterflow_flame.h5"
+else:
+    output = Path() / "premixed_counterflow_flame.yaml"
+output.unlink(missing_ok=True)
+
+sim.save(output, name="mix", description="solution with mixture-averaged transport")
+
 # write the velocity, temperature, and mole fractions to a CSV file
-sim.write_csv('premixed_counterflow.csv', quiet=False)
+sim.save("premixed_counterflow_flame.csv", basis="mole", overwrite=True)
 sim.show_stats()
-sim.show_solution()
+sim.show()
+
+# %%
+# Temperature and Heat Release Rate
+# ---------------------------------
+fig, ax1 = plt.subplots()
+
+ax1.plot(sim.grid, sim.heat_release_rate / 1e6, color='C4')
+ax1.set_ylabel('heat release rate [MW/m³]', color='C4')
+ax1.set(xlabel='flame coordinate [m]')
+
+ax2 = ax1.twinx()
+ax2.plot(sim.grid, sim.T, color='C3')
+ax2.set_ylabel('temperature [K]', color='C3')
+plt.show()
+
+# %%
+# Major Species Profiles
+# ----------------------
+fig, ax = plt.subplots()
+major = ('O2', 'H2', 'H2O')
+states = sim.to_array()
+ax.plot(states.grid, states(*major).X, label=major)
+ax.set(xlabel='flame coordinate [m]', ylabel='mole fractions')
+ax.legend()
+plt.show()
+
+# %%
+# Minor Species Profiles
+# ----------------------
+fig, ax = plt.subplots()
+minor = ('OH', 'H', 'O')
+ax.plot(states.grid, states(*minor).X, label=minor, linestyle='--')
+ax.set(xlabel='flame coordinate [m]', ylabel='mole fractions', )
+ax.legend()
+plt.show()

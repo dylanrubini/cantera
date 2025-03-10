@@ -1,14 +1,20 @@
 """
+Counterflow diffusion flame
+===========================
+
 An opposed-flow ethane/air diffusion flame
 
-Requires: cantera >= 2.5.0, matplotlib >= 2.0
-Keywords: combustion, 1D flow, diffusion flame, strained flame, plotting,
+Requires: cantera >= 3.0, matplotlib >= 2.0
+
+.. tags:: Python, combustion, 1D flow, diffusion flame, strained flame, plotting,
           saving output
 """
 
+from pathlib import Path
 import cantera as ct
 import matplotlib.pyplot as plt
 
+# %%
 # Input parameters
 p = ct.one_atm  # pressure
 tin_f = 300.0  # fuel inlet temperature
@@ -22,6 +28,9 @@ comp_f = 'C2H6:1'  # fuel composition
 width = 0.02  # Distance between inlets is 2 cm
 
 loglevel = 1  # amount of diagnostic output (0 to 5)
+
+# %%
+# Set up the simulation:
 
 # Create the gas object used to evaluate all thermodynamic, kinetic, and
 # transport properties.
@@ -49,34 +58,42 @@ f.radiation_enabled = False
 
 f.set_refine_criteria(ratio=4, slope=0.2, curve=0.3, prune=0.04)
 
+# %%
 # Solve the problem
 f.solve(loglevel, auto=True)
-f.show_solution()
-try:
-    # save to HDF container file if h5py is installed
-    f.write_hdf('diffusion_flame.h5', mode='w')
-except ImportError:
-    f.save('diffusion_flame.yaml')
 
+# %%
+f.show()
+
+if "native" in ct.hdf_support():
+    output = Path() / "diffusion_flame.h5"
+else:
+    output = Path() / "diffusion_flame.yaml"
+output.unlink(missing_ok=True)
+
+f.save(output)
+
+# %%
 # write the velocity, temperature, and mole fractions to a CSV file
-f.write_csv('diffusion_flame.csv', quiet=False)
-
+f.save('diffusion_flame.csv', basis="mole", overwrite=True)
 f.show_stats(0)
+no_rad = f.to_array()
 
-# Plot Temperature without radiation
-figTemperatureModifiedFlame = plt.figure()
-plt.plot(f.flame.grid, f.T, label='Temperature without radiation')
-plt.title('Temperature of the flame')
-plt.ylim(0,2500)
-plt.xlim(0.000, 0.020)
-
+# %%
 # Turn on radiation and solve again
 f.radiation_enabled = True
 f.solve(loglevel=1, refine_grid=False)
-f.show_solution()
 
-# Plot Temperature with radiation
-plt.plot(f.flame.grid, f.T, label='Temperature with radiation')
-plt.legend()
-plt.legend(loc=2)
-plt.savefig('./diffusion_flame.pdf')
+# %%
+f.show()
+
+# %%
+# Plot temperature with and without radiation
+fig, ax = plt.subplots()
+ax.plot(no_rad.grid, no_rad.T, label='Temperature without radiation')
+plt.plot(f.grid, f.T, label='Temperature with radiation')
+ax.set_title('Temperature of the flame')
+ax.set(ylim=(0,2500), xlim=(0.000, 0.020))
+ax.legend()
+fig.savefig('./diffusion_flame.pdf')
+plt.show()

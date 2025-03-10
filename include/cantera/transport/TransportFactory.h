@@ -1,7 +1,7 @@
 /**
  *  @file TransportFactory.h
  *  Header file defining class TransportFactory
- *     (see \link Cantera::TransportFactory TransportFactory\endlink)
+ *     (see @link Cantera::TransportFactory TransportFactory@endlink)
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -42,34 +42,22 @@ public:
      * f = TransportFactory::factory();
      * @endcode
      */
-    static TransportFactory* factory() {
-        std::unique_lock<std::mutex> transportLock(transport_mutex);
-        if (!s_factory) {
-            s_factory = new TransportFactory();
-        }
-        return s_factory;
-    }
+    static TransportFactory* factory();
 
     //! Deletes the statically allocated factory instance.
-    virtual void deleteFactory();
+    void deleteFactory() override;
 
-    //! Build a new transport manager using a transport manager
-    //! that may not be the same as in the phase description
-    //! and return a base class pointer to it
+    //! Build a new transport manager using a transport manager that may not be the same
+    //! as in the phase description and return a base class pointer to it
     /*!
      *  @param model     String name for the transport manager
      *  @param thermo    ThermoPhase object
-     *  @param log_level log level
      */
-    virtual Transport* newTransport(const std::string& model, ThermoPhase* thermo, int log_level=0);
+    Transport* newTransport(const string& model, ThermoPhase* thermo);
 
     //! Build a new transport manager using the default transport manager
     //! in the phase description and return a base class pointer to it
-    /*!
-     * @param thermo    ThermoPhase object
-     * @param log_level log level
-     */
-    virtual Transport* newTransport(ThermoPhase* thermo, int log_level=0);
+    Transport* newTransport(ThermoPhase* thermo);
 
 private:
     //! Static instance of the factor -> This is the only instance of this
@@ -89,12 +77,8 @@ private:
     TransportFactory();
 
     //! Models included in this map are initialized in CK compatibility mode
-    std::map<std::string, bool> m_CK_mode;
+    map<string, bool> m_CK_mode;
 };
-
-//! @copydoc TransportFactory::newTransport(const std::string&, ThermoPhase*, int)
-Transport* newTransportMgr(const std::string& model="", ThermoPhase* thermo=0,
-                           int log_level=0);
 
 //!  Create a new Transport instance.
 /*!
@@ -104,25 +88,8 @@ Transport* newTransportMgr(const std::string& model="", ThermoPhase* thermo=0,
  *  @returns a Transport object for the phase
  * @ingroup tranprops
  */
-inline shared_ptr<Transport> newTransport(ThermoPhase* thermo,
-                                          const std::string& model = "default") {
-    Transport* tr;
-    if (model == "default") {
-        tr = TransportFactory::factory()->newTransport(thermo, 0);
-    } else {
-        tr = TransportFactory::factory()->newTransport(model, thermo, 0);
-    }
-    return shared_ptr<Transport> (tr);
-}
-
-//!  Create a new transport manager instance.
-/*!
- *  @param thermo     ThermoPhase object associated with the phase
- *  @param loglevel   int containing the Loglevel, defaults to zero
- *  @returns a transport manager for the phase
- * @ingroup tranprops
- */
-Transport* newDefaultTransportMgr(ThermoPhase* thermo, int loglevel = 0);
+shared_ptr<Transport> newTransport(shared_ptr<ThermoPhase> thermo,
+                                   const string& model="default");
 
 } // End of namespace Cantera
 

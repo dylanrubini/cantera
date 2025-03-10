@@ -8,8 +8,6 @@
 #include "cantera/base/ctexceptions.h"
 #include "cantera/base/stringUtils.h"
 
-#include <set>
-
 namespace Cantera
 {
 
@@ -27,20 +25,8 @@ void TransportData::getParameters(AnyMap &transportNode) const
 {
 }
 
-GasTransportData::GasTransportData()
-    : diameter(0.0)
-    , well_depth(0.0)
-    , dipole(0.0)
-    , polarizability(0.0)
-    , rotational_relaxation(0.0)
-    , acentric_factor(0.0)
-    , dispersion_coefficient(0.0)
-    , quadrupole_polarizability(0.0)
-{
-}
-
 GasTransportData::GasTransportData(
-        const std::string& geometry_,
+        const string& geometry_,
         double diameter_, double well_depth_, double dipole_,
         double polarizability_, double rot_relax, double acentric,
         double dispersion, double quad_polar)
@@ -57,7 +43,7 @@ GasTransportData::GasTransportData(
 }
 
 void GasTransportData::setCustomaryUnits(
-        const std::string& geometry_,
+        const string& geometry_,
         double diameter_, double well_depth_, double dipole_,
         double polarizability_, double rot_relax, double acentric,
         double dispersion, double quad_polar)
@@ -76,9 +62,9 @@ void GasTransportData::setCustomaryUnits(
 void GasTransportData::validate(const Species& sp)
 {
     double nAtoms = 0;
-    for (const auto& elem : sp.composition) {
-        if (!caseInsensitiveEquals(elem.first, "E")) {
-            nAtoms += elem.second;
+    for (const auto& [eName, stoich] : sp.composition) {
+        if (!caseInsensitiveEquals(eName, "E")) {
+            nAtoms += stoich;
         }
     }
 
@@ -174,7 +160,7 @@ void GasTransportData::getParameters(AnyMap& transportNode) const
 
 void setupGasTransportData(GasTransportData& tr, const AnyMap& node)
 {
-    std::string geometry = node["geometry"].asString();
+    string geometry = node["geometry"].asString();
     double welldepth = node["well-depth"].asDouble();
     double diameter = node["diameter"].asDouble();
     double dipole = node.getDouble("dipole", 0.0);
@@ -193,12 +179,12 @@ void setupGasTransportData(GasTransportData& tr, const AnyMap& node)
 unique_ptr<TransportData> newTransportData(const AnyMap& node)
 {
     if (node.getString("model", "") == "gas") {
-        unique_ptr<GasTransportData> tr(new GasTransportData());
+        auto tr = make_unique<GasTransportData>();
         setupGasTransportData(*tr, node);
-        return unique_ptr<TransportData>(move(tr));
+        return tr;
     } else {
         // Transport model not handled here
-        unique_ptr<TransportData> tr(new TransportData());
+        auto tr = make_unique<TransportData>();
         tr->input = node;
         return tr;
     }

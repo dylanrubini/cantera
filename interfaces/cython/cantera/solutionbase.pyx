@@ -3,9 +3,8 @@
 
 cimport numpy as np
 import numpy as np
-from collections import defaultdict as _defaultdict
-from cython.operator cimport dereference as deref, preincrement as inc
 from pathlib import PurePath
+from os import get_terminal_size
 import warnings
 
 from .thermo cimport *
@@ -13,6 +12,7 @@ from .kinetics cimport *
 from .transport cimport *
 from .reaction cimport *
 from ._utils cimport *
+from .delegator cimport pyOverride, callback_v, CxxPythonHandle
 from .yamlwriter cimport YamlWriter
 
 ctypedef CxxSurfPhase* CxxSurfPhasePtr
@@ -30,8 +30,8 @@ cdef class _SolutionBase:
                   yaml=None, thermo=None, species=(),
                   kinetics=None, reactions=(), init=True, **kwargs):
 
-        # run instantiation only if valid sources are specified
         self._references = None
+        # run instantiation only if valid sources are specified
         if origin or infile or yaml or (thermo and species):
 
             self._cinit(infile=infile, name=name, adjacent=adjacent, origin=origin,
@@ -46,7 +46,7 @@ cdef class _SolutionBase:
 
         cdef shared_ptr[CxxSolution] cxx_soln = CxxNewSolution()
         cxx_soln.get().setSource(stringify("none"))
-        cxx_soln.get().setThermo(newThermo(stringify("none")))
+        cxx_soln.get().setThermo(newThermoModel(stringify("none")))
         cxx_soln.get().setKinetics(newKinetics(stringify("none")))
         cxx_soln.get().setTransportModel(stringify("none"))
         _assign_Solution(self, cxx_soln, True)
@@ -54,24 +54,6 @@ cdef class _SolutionBase:
 
     def _cinit(self, infile="", name="", adjacent=(), origin=None, yaml=None,
                thermo=None, species=(), kinetics=None, reactions=(), **kwargs):
-
-        if 'phaseid' in kwargs:
-            if name is not '':
-                raise AttributeError('duplicate specification of phase name')
-
-            warnings.warn("Keyword 'name' replaces 'phaseid'",
-                          FutureWarning)
-            name = kwargs['phaseid']
-
-        if 'phases' in kwargs:
-            if len(adjacent)>0:
-                raise AttributeError(
-                    'duplicate specification of adjacent phases')
-
-            warnings.warn("Keyword 'adjacent' replaces 'phases'",
-                          FutureWarning)
-            adjacent = kwargs['phases']
-
         # Shallow copy of an existing Solution (for slicing support)
         cdef _SolutionBase other
         if origin is not None:
@@ -86,17 +68,16 @@ cdef class _SolutionBase:
             infile = str(infile)
 
         # Transport model: "" is a sentinel value to use the default model
-        transport = kwargs.get("transport_model", "")
+        transport = kwargs.get("transport_model", "default")
 
-        # Parse YAML input
         if infile or yaml:
+            # Parse YAML input
             self._init_yaml(infile, name, adjacent, yaml, transport)
-            self._selected_species = np.ndarray(0, dtype=np.uint64)
-            return
+        else:
+            # Assign base and set managers
+            _assign_Solution(self, CxxNewSolution(), True)
+            self._init_parts(thermo, species, kinetics, transport, adjacent, reactions)
 
-        # Assign base and set managers
-        _assign_Solution(self, CxxNewSolution(), True)
-        self._init_parts(thermo, species, kinetics, transport, adjacent, reactions)
         self._selected_species = np.ndarray(0, dtype=np.uint64)
 
     def __init__(self, *args, **kwargs):
@@ -106,6 +87,11 @@ cdef class _SolutionBase:
         name = kwargs.get('name')
         if name is not None:
             self.name = name
+
+    def __del__(self):
+        cdef shared_ptr[CxxSolution] shared = self.weak_base.lock()
+        if shared:
+            shared.get().removeChangedCallback(<PyObject*>self)
 
     property name:
         """
@@ -160,7 +146,7 @@ cdef class _SolutionBase:
             raise TypeError("Cannot mix ThermoPhase objects and phase names")
 
         if transport is None or not isinstance(self, Transport):
-            transport = "None"
+            transport = "none"
         cdef string cxx_transport = stringify(transport)
 
         # Parse input in C++
@@ -216,7 +202,7 @@ cdef class _SolutionBase:
         the model type and a list of Species objects.
         """
         self.base.setSource(stringify("custom parts"))
-        self.base.setThermo(newThermo(stringify(thermo)))
+        self.base.setThermo(newThermoModel(stringify(thermo)))
         self.thermo = self.base.thermo().get()
 
         self.thermo.addUndefinedElements()
@@ -233,14 +219,17 @@ cdef class _SolutionBase:
         if isinstance(self, Kinetics):
             self.base.setKinetics(newKinetics(stringify(kinetics)))
             self.kinetics = self.base.kinetics().get()
-            self.kinetics.addPhase(deref(self.thermo))
+            self.kinetics.addThermo(self.base.thermo())
             for phase in adjacent:
                 # adjacent bulk phases for a surface phase
-                self.kinetics.addPhase(deref(phase.thermo))
+                self.kinetics.addThermo(phase.base.thermo())
             self.kinetics.init()
             self.kinetics.skipUndeclaredThirdBodies(True)
             for reaction in reactions:
                 self.kinetics.addReaction(reaction._reaction, False)
+                if isinstance(reaction.rate, (CustomRate, ExtensibleRate)):
+                    # prevent premature garbage collection
+                    self._custom_rates.append(reaction.rate)
             self.kinetics.resizeReactions()
 
         if isinstance(self, Transport):
@@ -254,7 +243,7 @@ cdef class _SolutionBase:
         definition.
         """
         def __get__(self):
-            return anymap_to_dict(self.base.parameters(True))
+            return anymap_to_py(self.base.parameters(True))
 
     property input_header:
         """
@@ -263,15 +252,15 @@ cdef class _SolutionBase:
         that are not required for the instantiation of Cantera objects.
         """
         def __get__(self):
-            return anymap_to_dict(self.base.header())
+            return anymap_to_py(self.base.header())
 
-    def update_user_data(self, dict data):
+    def update_user_data(self, data):
         """
         Add the contents of the provided `dict` as additional fields when generating
         YAML phase definition files with `write_yaml` or in the data returned by
         `input_data`. Existing keys with matching names are overwritten.
         """
-        self.thermo.input().update(dict_to_anymap(data), False)
+        self.thermo.input().update(py_to_anymap(data), False)
 
     def clear_user_data(self):
         """
@@ -287,7 +276,7 @@ cdef class _SolutionBase:
         when generating files with `write_yaml` or in the data returned by
         `input_header`. Existing keys with matching names are overwritten.
         """
-        self.base.header().update(dict_to_anymap(data), False)
+        self.base.header().update(py_to_anymap(data), False)
 
     def clear_user_header(self):
         """
@@ -348,7 +337,8 @@ cdef class _SolutionBase:
         Y.to_file(str(filename))
 
     def write_chemkin(self, mechanism_path=None, thermo_path=None, transport_path=None,
-                      sort_species=False, sort_elements=False, overwrite=False):
+                      sort_species=None, sort_elements=None, overwrite=False,
+                      quiet=False):
         """
         Write this `~cantera.Solution` instance to one or more Chemkin-format files.
         See the documentation for `cantera.yaml2ck.convert` for information about the
@@ -365,7 +355,8 @@ cdef class _SolutionBase:
             sort_elements=sort_elements,
             overwrite=overwrite,
         )
-        print(f"Wrote: {output_paths}")
+        if not quiet:
+            print(f"Wrote: {output_paths}")
 
     def __getitem__(self, selection):
         copy = self.__class__(origin=self)
@@ -422,12 +413,31 @@ cdef class _SolutionBase:
 # These cdef functions are declared as free functions to avoid creating layout
 # conflicts with types derived from _SolutionBase
 cdef _assign_Solution(_SolutionBase soln, shared_ptr[CxxSolution] cxx_soln,
-                      pybool reset_adjacent):
-    soln._base = cxx_soln
+                      pybool reset_adjacent, pybool weak=False):
+    if not weak:
+        # _SolutionBase owns the C++ Solution object by holding the shared_ptr instance
+        if soln._base.get() != NULL:
+            soln._base.get().removeChangedCallback(<PyObject*>(soln))
+        soln._base = cxx_soln
+    # Make a raw pointer available for most use cases, where existence of the C++
+    # Solution object is assured.
     soln.base = cxx_soln.get()
-    soln.thermo = soln.base.thermo().get()
-    soln.kinetics = soln.base.kinetics().get()
-    soln.transport = soln.base.transport().get()
+
+    # Hold a weak_ptr for use in the _SolutionBase destructor, where the C++
+    # object may have already been destroyed depending on ownership.
+    soln.weak_base = weak_ptr[CxxSolution](cxx_soln)
+
+    def assign_pointers():
+        soln.thermo = soln.base.thermo().get()
+        soln.kinetics = soln.base.kinetics().get()
+        soln.transport = soln.base.transport().get()
+    assign_pointers()
+
+    soln.base.registerChangedCallback(<PyObject*>soln,
+        pyOverride(<PyObject*>assign_pointers, callback_v))
+    # PyOverride only holds a weak reference to the function, so this also needs to be
+    # stored on the Python Solution object to have the right lifetime
+    soln._soln_changed_callback = assign_pointers
 
     cdef shared_ptr[CxxSolution] adj_soln
     if reset_adjacent:
@@ -436,6 +446,10 @@ cdef _assign_Solution(_SolutionBase soln, shared_ptr[CxxSolution] cxx_soln,
             adj_soln = soln.base.adjacent(i)
             name = pystr(adj_soln.get().name())
             soln._adjacent[name] = _wrap_Solution(adj_soln)
+
+    cdef shared_ptr[CxxExternalHandle] handle
+    handle.reset(new CxxPythonHandle(<PyObject*>soln, not weak))
+    soln.base.holdExternalHandle(stringify("python"), handle)
 
 
 cdef object _wrap_Solution(shared_ptr[CxxSolution] cxx_soln):
@@ -460,6 +474,207 @@ cdef object _wrap_Solution(shared_ptr[CxxSolution] cxx_soln):
     if isinstance(soln, Interface):
         iface = soln
         iface.surf = <CxxSurfPhase*>(soln.thermo)
-#        <InterfaceKinetics>(iface)._setup_phase_indices()
         iface._setup_phase_indices()
     return soln
+
+
+cdef class SolutionArrayBase:
+    """
+    Class `SolutionArrayBase` serves as an interface between the C++ SolutionArray core
+    class and the Python API implementation. While `SolutionArrayBase` holds shape
+    information used by the derived user-facing `SolutionArray` API, it uses a flattened
+    one-dimensional data structure internally.
+
+        .. warning::
+
+            This class is an experimental part of the Cantera API and
+            may be changed or removed without notice.
+
+    .. versionadded:: 3.0
+    """
+    _phase = None
+
+    def __cinit__(self, _SolutionBase phase, shape=(0,),
+                  states=None, extra=None, meta=None, init=True):
+        size = np.prod(shape)
+        cdef CxxAnyMap cxx_meta
+        if meta is not None:
+            cxx_meta = py_to_anymap(meta)
+        self._base = CxxNewSolutionArray(phase._base, size, cxx_meta)
+        self.base = self._base.get()
+
+    def _share(self, SolutionArrayBase dest, selected):
+        """ Share entries with new `SolutionArrayBase` object. """
+        cdef vector[int] cxx_selected
+        for loc in selected:
+            cxx_selected.push_back(loc)
+        dest._base = self.base.share(cxx_selected)
+        dest.base = dest._base.get()
+        return dest
+
+    def __repr__(self):
+        return self.info()
+
+    @property
+    def size(self):
+        """ The number of elements in the `SolutionArrayBase`. """
+        return self.base.size()
+
+    def _api_shape(self):
+        """ Retrieve shape information available in C++ core. """
+        cdef vector[long int] cxx_shape = self.base.apiShape()
+        return tuple(int(dim) for dim in cxx_shape)
+
+    def _set_api_shape(self, shape):
+        """ Pass shape used by derived `SolutionArray` to C++ core. """
+        cdef vector[long int] cxx_shape
+        for dim in shape:
+            cxx_shape.push_back(dim)
+        self.base.setApiShape(cxx_shape)
+
+    def info(self, keys=None, rows=10, width=None):
+        """
+        Print a concise summary of a `SolutionArray`.
+
+        :param keys: List of components to be displayed; if `None`, all components are
+            considered.
+        :param rows: Maximum number of rendered rows.
+        :param width: Maximum width of rendered output.
+        """
+        cdef vector[string] cxx_keys
+        if keys is not None:
+            for key in keys:
+                cxx_keys.push_back(stringify(key))
+        elif self._phase.selected_species:
+            keep = self._phase.species_names
+            self._phase.selected_species = []
+            names = set(self._phase.species_names)
+            self._phase.selected_species = keep
+            keep = set(keep)
+            for key in self.component_names:
+                if key not in names or key in keep:
+                    cxx_keys.push_back(stringify(key))
+        if width is None:
+            try:
+                width = get_terminal_size().columns
+            except:
+                width = 100
+
+        return pystr(self.base.info(cxx_keys, rows, width))
+
+    @property
+    def meta(self):
+        """
+        Dictionary holding information describing the `SolutionArrayBase`.
+        """
+        return anymap_to_py(self.base.meta())
+
+    @meta.setter
+    def meta(self, meta):
+        if isinstance(meta, dict):
+            self.base.setMeta(py_to_anymap(meta))
+        else:
+            raise TypeError("Metadata needs to be a dictionary.")
+
+    @property
+    def extra(self):
+        """ Retrieve ordered list of auxiliary `SolutionArrayBase` components """
+        cdef vector[string] cxx_name = self.base.listExtra()
+        out = []
+        for item in cxx_name:
+            out.append(pystr(item))
+        return out
+
+    @property
+    def component_names(self):
+        """
+        Retrieve ordered list of all `SolutionArrayBase` components (defining
+        thermodynamic state or auxiliary `extra` information)
+        """
+        cdef vector[string] cxx_data = self.base.componentNames()
+        out = []
+        for item in cxx_data:
+            out.append(pystr(item))
+        return out
+
+    def resize(self, size):
+        """ Resize `SolutionArrayBase` to given size """
+        self.base.resize(size)
+
+    def _has_component(self, name):
+        """ Check whether `SolutionArrayBase` has component """
+        return self.base.hasComponent(stringify(name))
+
+    def _get_component(self, name):
+        """ Retrieve `SolutionArrayBase` component by name """
+        out = anyvalue_to_python(stringify(""), self.base.getComponent(stringify(name)))
+        if out is None:
+            return np.empty((0,))
+        return np.array(out)
+
+    def _set_component(self, name, data):
+        """ Set `SolutionArrayBase` component by name """
+        self.base.setComponent(stringify(name), python_to_anyvalue(data))
+
+    def _set_loc(self, loc):
+        """
+        Set associated `Solution` object to state referenced by location within
+        `SolutionArrayBase`.
+        """
+        return self.base.setLoc(loc)
+
+    def _update_state(self, loc):
+        """
+        Set state at location within `SolutionArrayBase` to state of associated
+        `Solution` object.
+        """
+        return self.base.updateState(loc)
+
+    def _get_state(self, loc):
+        """ Retrieve the state vector for a given `SolutionArrayBase` location """
+        cdef vector[double] cxx_data = self.base.getState(loc)
+        return np.fromiter(cxx_data, np.double)
+
+    def _set_state(self, loc, data):
+        """ Set the state vector for a given `SolutionArrayBase` location """
+        cdef vector[double] cxx_data
+        for item in data:
+            cxx_data.push_back(item)
+        self.base.setState(loc, cxx_data)
+
+    def _has_extra(self, name):
+        """ Check whether `SolutionArrayBase` has extra component """
+        return self.base.hasExtra(stringify(name))
+
+    def _add_extra(self, name, back=True):
+        """ Add component to `SolutionArrayBase` and initialize to default value """
+        self.base.addExtra(stringify(name), back)
+
+    def get_auxiliary(self, loc):
+        """ Retrieve auxiliary data for a `SolutionArrayBase` location """
+        return anymap_to_py(self.base.getAuxiliary(loc))
+
+    def set_auxiliary(self, loc, data):
+        """ Set auxiliary data for a `SolutionArrayBase` location """
+        self.base.setAuxiliary(loc, py_to_anymap(data))
+
+    def _append(self, state, extra):
+        """ Append at end of `SolutionArrayBase` """
+        cdef vector[double] cxx_state
+        for item in state:
+            cxx_state.push_back(item)
+        self.base.append(cxx_state, py_to_anymap(extra))
+
+    def _cxx_save(self, filename, name, sub, description,
+                  overwrite, compression, basis):
+        """ Interface `SolutionArray.save` with C++ core """
+        self.base.save(
+            stringify(str(filename)), stringify(name), stringify(sub),
+            stringify(description), overwrite, compression, stringify(basis))
+
+    def _cxx_restore(self, filename, name, sub):
+        """ Interface `SolutionArray.restore` with C++ core """
+        cdef CxxAnyMap header
+        header = self.base.restore(
+            stringify(str(filename)), stringify(name), stringify(sub))
+        return anymap_to_py(header)

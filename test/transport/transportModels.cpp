@@ -10,8 +10,8 @@ class WaterTransportTest : public testing::Test
 {
 public:
     WaterTransportTest() {
-        phase = newPhase("thermo-models.yaml", "liquid-water");
-        tran = newDefaultTransportMgr(phase);
+        phase = newThermo("thermo-models.yaml", "liquid-water");
+        tran = newTransport(phase, "default");
     }
 
     void check_viscosity(double T, double P, double mu_expected) {
@@ -24,8 +24,8 @@ public:
         EXPECT_NEAR(tran->thermalConductivity(), lambda_expected, 3e-4);
     }
 
-    ThermoPhase* phase;
-    Transport* tran;
+    shared_ptr<ThermoPhase> phase;
+    shared_ptr<Transport> tran;
 };
 
 // Reference values taken from tables in the Sengers and Watson paper
@@ -58,7 +58,7 @@ public:
     NoTransportTest() {}
 
     static void SetUpTestCase() {
-        soln_ = newSolution("h2o2.yaml", "", "None");
+        soln_ = newSolution("h2o2.yaml", "", "none");
     }
 
     static void TearDownTestCase() {
@@ -74,7 +74,7 @@ shared_ptr<Solution> NoTransportTest::soln_;
 TEST_F(NoTransportTest, check_type)
 {
     auto tr = soln_->transport();
-    ASSERT_EQ(tr->transportModel(), "None");
+    ASSERT_EQ(tr->transportModel(), "none");
 }
 
 TEST_F(NoTransportTest, check_exceptions_scalar)
@@ -83,10 +83,8 @@ TEST_F(NoTransportTest, check_exceptions_scalar)
     auto tr = soln_->transport();
     ASSERT_THROW(tr->viscosity(), CanteraError);
     ASSERT_THROW(tr->bulkViscosity(), CanteraError);
-    ASSERT_THROW(tr->ionConductivity(), CanteraError);
     ASSERT_THROW(tr->thermalConductivity(), CanteraError);
     ASSERT_THROW(tr->electricalConductivity(), CanteraError);
-    ASSERT_THROW(tr->getElectricConduct(), CanteraError);
     ASSERT_THROW(tr->CKMode(), CanteraError);
 }
 
@@ -94,12 +92,9 @@ TEST_F(NoTransportTest, check_exceptions_vector)
 {
     // vector quantities
     auto tr = soln_->transport();
-    vector_fp out(soln_->thermo()->nSpecies());
+    vector<double> out(soln_->thermo()->nSpecies());
     ASSERT_THROW(tr->getSpeciesViscosities(out.data()), CanteraError);
-    ASSERT_THROW(tr->getSpeciesIonConductivity(out.data()), CanteraError);
-    ASSERT_THROW(tr->mobilityRatio(out.data()), CanteraError);
     ASSERT_THROW(tr->getMobilities(out.data()), CanteraError);
-    ASSERT_THROW(tr->getFluidMobilities(out.data()), CanteraError);
     ASSERT_THROW(tr->getThermalDiffCoeffs(out.data()), CanteraError);
     ASSERT_THROW(tr->getMixDiffCoeffs(out.data()), CanteraError);
     ASSERT_THROW(tr->getMixDiffCoeffsMole(out.data()), CanteraError);
@@ -128,7 +123,7 @@ shared_ptr<Solution> DefaultTransportTest::soln_;
 TEST_F(DefaultTransportTest, check_type)
 {
     auto tr = soln_->transport();
-    ASSERT_EQ(tr->transportModel(), "Mix");
+    ASSERT_EQ(tr->transportModel(), "mixture-averaged");
 }
 
 TEST_F(DefaultTransportTest, check_scalar)

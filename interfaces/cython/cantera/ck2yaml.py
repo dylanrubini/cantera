@@ -4,88 +4,51 @@
 # This file is part of Cantera. See License.txt in the top-level directory or
 # at https://cantera.org/license.txt for license and copyright information.
 
-"""
-ck2yaml.py: Convert Chemkin-format mechanisms to Cantera YAML input files
+"""Convert Chemkin-format mechanism files to YAML.
 
-Usage:
-    ck2yaml [--input=<filename>]
-            [--thermo=<filename>]
-            [--transport=<filename>]
-            [--surface=<filename>]
-            [--name=<name>]
-            [--extra=<filename>]
-            [--output=<filename>]
-            [--single-intermediate-temperature]
-            [--permissive]
-            [--quiet]
-            [--no-validate]
-            [-d | --debug]
-
-Example:
-    ck2yaml --input=chem.inp --thermo=therm.dat --transport=tran.dat
-
-If the output file name is not given, an output file with the same name as the
-input file, with the extension changed to '.yaml'.
-
-An input file containing only species definitions (which can be referenced from
-phase definitions in other input files) can be created by specifying only a
-thermo file.
-
-For the case of a surface mechanism, the gas phase input file should be
-specified as 'input' and the surface phase input file should be specified as
-'surface'.
-
-The '--single-intermediate-temperature' option should be used with thermo data where
-only a single break temperature is used and the last value in the first line of each
-species thermo entry is the molecular weight instead.
-
-The '--permissive' option allows certain recoverable parsing errors (such as
-duplicate transport data) to be ignored. The '--name=<name>' option
-is used to override default phase names (that is, 'gas').
-
-The '--extra=<filename>' option takes a YAML file as input. This option can be
-used to add to the file description, or to define custom fields that are
-included in the YAML output.
+There are two main entry points to this script, `main` and `convert`. The former is
+used from the command line interface and parses the arguments passed. The latter uses
+arguments that correspond to options of the command line interface.
 """
 
 import logging
 import os.path
 import sys
+from typing import Callable
 import numpy as np
 import re
-import getopt
+import warnings
+import argparse
 import textwrap
 from email.utils import formatdate
-
-try:
-    from ruamel import yaml
-except ImportError:
-    import ruamel_yaml as yaml
+from pathlib import Path
+from ruamel import yaml
 
 # yaml.version_info is a tuple with the three parts of the version
 yaml_version = yaml.version_info
-# We choose ruamel.yaml 0.15.34 as the minimum version
-# since it is the highest version available in the Ubuntu
-# 18.04 repositories and seems to work. Older versions such as
-# 0.13.14 on CentOS7 and 0.10.23 on Ubuntu 16.04 raise an exception
-# that they are missing the RoundTripRepresenter
-yaml_min_version = (0, 15, 34)
+# We choose ruamel.yaml 0.17.16 as the minimum version since it is the highest version
+# available in the Ubuntu 22.04 repositories.
+yaml_min_version = (0, 17, 16)
 if yaml_version < yaml_min_version:
     raise RuntimeError(
-        "The minimum supported version of ruamel.yaml is 0.15.34. If you "
+        "The minimum supported version of ruamel.yaml is 0.17.16. If you "
         "installed ruamel.yaml from your operating system's package manager, "
         "please install an updated version using pip or conda."
     )
 
 BlockMap = yaml.comments.CommentedMap
 
+class ErrorFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord):
+        message = super().format(record)
+        if record.levelno >= logging.ERROR:
+            return '*' * 79 + '\n' + message
+        elif '\n' in message and not message.endswith('\n'):
+            return message + '\n'
+        else:
+            return message
+
 logger = logging.getLogger(__name__)
-loghandler = logging.StreamHandler(sys.stdout)
-logformatter = logging.Formatter('%(message)s')
-loghandler.setFormatter(logformatter)
-logger.handlers.clear()
-logger.addHandler(loghandler)
-logger.setLevel(logging.INFO)
 
 def FlowMap(*args, **kwargs):
     m = yaml.comments.CommentedMap(*args, **kwargs)
@@ -97,29 +60,19 @@ def FlowList(*args, **kwargs):
     lst.fa.set_flow_style()
     return lst
 
-# Improved float formatting requires Numpy >= 1.14
-if hasattr(np, 'format_float_positional'):
-    def float2string(data):
-        if data == 0:
-            return '0.0'
-        elif 0.01 <= abs(data) < 10000:
-            return np.format_float_positional(data, trim='0')
-        else:
-            return np.format_float_scientific(data, trim='0')
-else:
-    def float2string(data):
-        return repr(data)
-
 def represent_float(self, data):
-    # type: (Any) -> Any
     if data != data:
         value = '.nan'
     elif data == self.inf_value:
         value = '.inf'
     elif data == -self.inf_value:
         value = '-.inf'
+    elif data == 0:
+        value = '0.0'
+    elif 0.01 <= abs(data) < 10000:
+        value = np.format_float_positional(data, trim='0')
     else:
-        value = float2string(data)
+        value = np.format_float_scientific(data, trim='0')
 
     return self.represent_scalar(u'tag:yaml.org,2002:float', value)
 
@@ -168,14 +121,22 @@ class InputError(Exception):
     mechanism files. Pass a string describing the circumstances that caused
     the exceptional behavior.
     """
-    def __init__(self, message, *args, **kwargs):
-        message += ("\nPlease check https://cantera.org/tutorials/"
+    def __init__(self, message):
+        message += ("\nPlease check https://cantera.org/stable/userguide/"
                    "ck2yaml-tutorial.html#debugging-common-errors-in-ck-files"
                    "\nfor the correct Chemkin syntax.")
-        if args or kwargs:
-            super().__init__(message.format(*args, **kwargs))
-        else:
-            super().__init__(message)
+        super().__init__(message)
+
+
+class ParserLogger(logging.Handler):
+    def __init__(self, parser):
+        self.parser = parser
+        self.errors = []
+        super().__init__()
+
+    def emit(self, record: logging.LogRecord):
+        self.parser.max_loglevel = max(self.parser.max_loglevel, record.levelno)
+        self.errors.append(self.format(record))
 
 
 class Species:
@@ -208,8 +169,7 @@ class Species:
 class Nasa7:
     """
     Thermodynamic data parameterized as two seven-coefficient NASA
-    polynomials.
-    See https://cantera.org/science/science-species.html#the-nasa-7-coefficient-polynomial-parameterization
+    polynomials. See :ref:`sec-thermo-nasa7`.
     """
     def __init__(self, *, Tmin, Tmax, Tmid, low_coeffs, high_coeffs, note=''):
         self.Tmin = Tmin
@@ -239,8 +199,7 @@ class Nasa7:
 class Nasa9:
     """
     Thermodynamic data parameterized as any number of nine-coefficient NASA
-    polynomials.
-    See https://cantera.org/science/science-species.html#the-nasa-9-coefficient-polynomial-parameterization
+    polynomials. See :ref:`sec-thermo-nasa9`.
 
     :param data:
         List of polynomials, where each polynomial is written as
@@ -248,13 +207,14 @@ class Nasa9:
         [(T_low, T_high), [a_0, a_1, ..., a_8]]
         ```
     """
-    def __init__(self, *, data, note=''):
+    def __init__(self, *, parser, data, note=''):
         self.note = note
         self.data = list(sorted(data))
         self.Tranges = [self.data[0][0][0]]
         for i in range(1, len(data)):
             if abs(self.data[i-1][0][1] - self.data[i][0][0]) > 0.01:
-                raise ValueError('NASA9 polynomials contain non-adjacent temperature ranges')
+                logger.error(parser.entry('thermo entry') +
+                    'NASA9 polynomials contain non-adjacent temperature ranges')
             self.Tranges.append(self.data[i][0][0])
         self.Tranges.append(self.data[-1][0][1])
 
@@ -290,10 +250,9 @@ class Reaction:
         pressure-dependent reaction types (usually "M")
     """
 
-    def __init__(self, parser, index=-1, reactants=None, products=None,
+    def __init__(self, index=-1, reactants=None, products=None,
                  kinetics=None, reversible=True, duplicate=False,
                  forward_orders=None, third_body=None):
-        self.parser = parser
         self.index = index
         self.reactants = reactants  # list of (stoichiometry, species) tuples
         self.products = products  # list of (stoichiometry, species) tuples
@@ -334,15 +293,14 @@ class Reaction:
             out['orders'] = FlowMap(node.forward_orders)
             if any((float(x) < 0 for x in node.forward_orders.values())):
                 out['negative-orders'] = True
-                node.parser.warn('Negative reaction order for reaction {} ({}).'.format(
-                    node.index, str(node)))
+                logger.info("Negative reaction order for reaction "
+                            f"{node.index} ({node!s}).")
             reactant_names = {r[1].label for r in node.reactants}
             if any((species not in reactant_names for species in node.forward_orders)):
                 out['nonreactant-orders'] = True
-                node.parser.warn('Non-reactant order for reaction {} ({}).'.format(
-                    node.index, str(node)))
+                logger.info(f"Non-reactant order for reaction {node.index} ({node!s}).")
         if node.comment:
-            comment = textwrap.dedent(node.comment.rstrip())
+            comment = textwrap.dedent(node.comment)
             if '\n' in comment:
                 comment = yaml.scalarstring.PreservedScalarString(comment)
             out['note'] = comment
@@ -412,7 +370,7 @@ class Arrhenius:
 class ElementaryRate(KineticsModel):
     """
     A reaction rate described by a single Arrhenius expression.
-    See https://cantera.org/science/kinetics.html#reactions-with-a-pressure-independent-rate
+    See :ref:`sec-arrhenius-rate`.
 
     :param rate:
         The Arrhenius expression describing this reaction rate.
@@ -431,7 +389,7 @@ class ElementaryRate(KineticsModel):
 class SurfaceRate(KineticsModel):
     """
     An Arrhenius-like reaction occurring on a surface
-    See https://cantera.org/science/kinetics.html#surface-reactions
+    See :ref:`sec-surface-rate`.
 
     :param rate:
         The Arrhenius expression describing this reaction rate.
@@ -478,8 +436,7 @@ class SurfaceRate(KineticsModel):
 class PDepArrhenius(KineticsModel):
     """
     A rate calculated by interpolating between Arrhenius expressions at
-    various pressures.
-    See https://cantera.org/science/kinetics.html#pressure-dependent-arrhenius-rate-expressions-p-log
+    various pressures. See :ref:`sec-plog-rate`.
 
     :param pressures:
         A list of pressures at which Arrhenius expressions are given.
@@ -508,7 +465,7 @@ class PDepArrhenius(KineticsModel):
 class Chebyshev(KineticsModel):
     """
     A rate calculated in terms of a bivariate Chebyshev polynomial.
-    See https://cantera.org/science/kinetics.html#chebyshev-reaction-rate-expressions
+    See :ref:`sec-chebyshev-rate`.
 
     :param coeffs:
         Matrix of Chebyshev coefficients, dimension N_T by N_P
@@ -550,7 +507,7 @@ class Chebyshev(KineticsModel):
 class ThreeBody(KineticsModel):
     """
     A rate calculated for a reaction which includes a third-body collider.
-    See https://cantera.org/science/kinetics.html#three-body-reactions
+    See :ref:`sec-three-body-reaction`.
 
     :param high_rate:
         The Arrhenius kinetics (high-pressure limit)
@@ -579,7 +536,7 @@ class ThreeBody(KineticsModel):
 class Falloff(ThreeBody):
     """
     A rate for a pressure-dependent falloff reaction.
-    See https://cantera.org/science/kinetics.html#falloff-reactions
+    See :ref:`sec-falloff-rate`.
 
     :param low_rate:
         The Arrhenius kinetics at the low-pressure limit
@@ -613,7 +570,7 @@ class Falloff(ThreeBody):
 class ChemicallyActivated(ThreeBody):
     """
     A rate for a chemically-activated reaction.
-    See https://cantera.org/science/kinetics.html#chemically-activated-reactions
+    See :ref:`sec-chemically-activated-rate`.
 
     :param low_rate:
         The Arrhenius kinetics at the low-pressure limit
@@ -647,7 +604,7 @@ class ChemicallyActivated(ThreeBody):
 class Troe:
     """
     The Troe falloff function, described with either 3 or 4 parameters.
-    See https://cantera.org/science/kinetics.html#the-troe-falloff-function
+    See :ref:`sec-troe-falloff`.
     """
     def __init__(self, A=0.0, T3=0.0, T1=0.0, T2=None):
         self.A = A
@@ -665,7 +622,7 @@ class Troe:
 class Sri:
     """
     The SRI falloff function, described with either 3 or 5 parameters.
-    See https://cantera.org/science/kinetics.html#the-sri-falloff-function
+    See :ref:`sec-sri-falloff`.
     """
     def __init__(self, *, A, B, C, D=None, E=None):
         self.A = A
@@ -687,17 +644,37 @@ class Sri:
 class TransportData:
     geometry_flags = ['atom', 'linear', 'nonlinear']
 
-    def __init__(self, label, geometry, well_depth, collision_diameter,
+    def __init__(self, parser, label, geometry, well_depth, collision_diameter,
                  dipole_moment, polarizability, z_rot, note=''):
 
         try:
             geometry = int(geometry)
         except ValueError:
-            raise InputError(
-                "Bad geometry flag '{}' for species '{}', is the flag a float "
-                "or character? It should be an integer.", geometry, label)
+            try:
+                geometry = float(geometry)
+            except ValueError:
+                logger.error(parser.entry("transport data") +
+                    f"Invalid geometry flag '{geometry}' for species '{label}'. "
+                    "Flag must be an integer.")
+                return
+            if geometry == int(geometry):
+                # This is a minor issue, so even at the default level it's just a
+                # warning, and in permissive mode we won't even mention it.
+                if not parser.permissive:
+                    logger.info(f"Incorrect geometry flag syntax '{geometry}' for "
+                        f"species '{label}'. The flag was automatically converted to "
+                        "an integer.")
+                geometry = int(geometry)
+            else:
+                logger.error(parser.entry("transport data") +
+                    f"Invalid float geometry flag '{geometry}' for species '{label}'. "
+                    "Flag must be an integer.")
+                return
         if geometry not in (0, 1, 2):
-            raise InputError("Bad geometry flag '{}' for species '{}'.", geometry, label)
+            logger.error(parser.entry("transport data") +
+                f"Invalid geometry flag value '{geometry}' for species '{label}'. "
+                "Flag value must be 0, 1, or 2.")
+            return
 
         self.geometry = self.geometry_flags[int(geometry)]
         self.well_depth = float(well_depth)
@@ -764,6 +741,9 @@ class Surface:
 
 class Parser:
     def __init__(self):
+        self.max_loglevel = logging.NOTSET
+        self.handler = ParserLogger(self)
+        logger.addHandler(self.handler)
         self.processed_units = False
         self.energy_units = 'cal/mol'  # for the current REACTIONS section
         self.output_energy_units = 'cal/mol'  # for the output file
@@ -771,7 +751,10 @@ class Parser:
         self.output_quantity_units = 'mol'  # for the output file
         self.motz_wise = None
         self.single_intermediate_temperature = False
-        self.warning_as_error = True
+        self.skip_undeclared_species = True
+        self.exit_on_error = False
+        self.permissive = False
+        self.verbose = False
 
         self.elements = []
         self.element_weights = {}  # for custom elements only
@@ -782,12 +765,17 @@ class Parser:
         self.header_lines = []
         self.extra = {}  # for extra entries
         self.files = []  # input file names
+        self.raw_lines = []  # lines in current input file; used for error messages
+        self.current_range = [0, 0]  # range of current entry; used in error messages
 
-    def warn(self, message):
-        if self.warning_as_error:
-            raise InputError(message)
-        else:
-            logger.warning(message)
+    def __del__(self):
+        logger.removeHandler(self.handler)
+
+    def entry(self, where="entry", kind="Error"):
+        lines = self.raw_lines[self.current_range[0]:self.current_range[1]+1]
+        error_entry = '\n'.join(lines).rstrip()
+        return (f'{kind} while reading {where} in {self.files[-1]} starting on '
+                f'line {self.current_range[0]+1}:\n"""\n{error_entry}\n"""\n')
 
     @staticmethod
     def parse_composition(elements, nElements, width):
@@ -832,16 +820,6 @@ class Parser:
             units = '1' + units
         return units
 
-    def add_element(self, element_string):
-        if '/' in element_string:
-            name, weight, _ = element_string.split('/')
-            weight = fortFloat(weight)
-            name = name.capitalize()
-            self.elements.append(name)
-            self.element_weights[name] = weight
-        else:
-            self.elements.append(element_string.capitalize())
-
     def read_NASA7_entry(self, lines, TintDefault, comments):
         """
         Read a thermodynamics entry for one species in a Chemkin-format file
@@ -849,8 +827,7 @@ class Parser:
         the species, the thermodynamics model as a :class:`Nasa7` object, and
         the elemental composition of the species.
 
-        For more details on this format, see `Debugging common errors in CK files
-        <https://cantera.org/tutorials/ck2yaml-tutorial.html#debugging-common-errors-in-ck-files>`__.
+        For more details on this format, see :ref:`sec-debugging-chemkin`.
         """
         identifier = lines[0][0:24].split(maxsplit=1)
         species = identifier[0].strip()
@@ -860,7 +837,7 @@ class Parser:
         else:
             note = ''
 
-        comments = '\n'.join(c.rstrip() for c in comments if c.strip())
+        comments = '\n'.join(c for c in comments if c.strip())
         if comments and note:
             note = '\n'.join((note, comments))
         elif comments:
@@ -872,15 +849,15 @@ class Parser:
         # Chemkin-style extended elemental composition: additional lines
         # indicated by '&' continuation character on preceding lines. Element
         # names and abundances are separated by whitespace (not fixed width)
-        if lines[0].rstrip().endswith('&'):
+        if lines[0].endswith('&'):
             complines = []
             for i in range(len(lines)-1):
-                if lines[i].rstrip().endswith('&'):
+                if lines[i].endswith('&'):
                     complines.append(lines[i+1])
                 else:
                     break
             lines = [lines[0]] + lines[i+1:]
-            comp = ' '.join(line.rstrip('&\n') for line in complines).split()
+            comp = ' '.join(line.rstrip('&') for line in complines).split()
             composition = {}
             for i in range(0, len(comp), 2):
                 composition[comp[i].capitalize()] = int(comp[i+1])
@@ -893,8 +870,9 @@ class Parser:
             composition.update(composition2)
 
         if not composition:
-            raise InputError("Error parsing elemental composition for "
-                             "species '{}'.", species)
+            logger.error(self.entry('thermo entry') + "Error parsing elemental "
+                         f"composition for species '{species}'.")
+            return species, None, {}
 
         for symbol in composition.keys():
             # Some CHEMKIN input files may have quantities of elements with
@@ -902,10 +880,10 @@ class Parser:
             # standard, so the entry cannot be read and we need to raise a
             # more useful error message.
             if any(map(str.isdigit, symbol)) and symbol not in self.elements:
-                raise InputError("Error parsing elemental composition for "
-                                 "species thermo entry:\n{}\nElement amounts "
-                                 "can have no more than 3 digits.",
-                                 "".join(lines))
+                logger.error(self.entry('thermo entry') +
+                             "Error parsing elemental composition for species thermo "
+                             "entry. Element amounts\ncan have no more than 3 digits.")
+                return species, None, {}
 
         # Extract the NASA polynomial coefficients
         # Remember that the high-T polynomial comes first!
@@ -926,8 +904,8 @@ class Parser:
                        for i,j,k in [(1,0,15), (1,15,30), (1,30,45), (1,45,60),
                                      (1,60,75), (2,0,15), (2,15,30)]]
         low_coeffs = [fortFloat(lines[i][j:k])
-                       for i,j,k in [(2,30,45), (2,45,60), (2,60,75), (3,0,15),
-                                     (3,15,30), (3,30,45), (3,45,60)]]
+                      for i,j,k in [(2,30,45), (2,45,60), (2,60,75), (3,0,15),
+                                    (3,15,30), (3,30,45), (3,45,60)]]
 
         # Cases where only one temperature range is needed
         if Tint == Tmin or Tint == Tmax or high_coeffs == low_coeffs:
@@ -945,10 +923,11 @@ class Parser:
                 # If the coefficients are duplicated, that's fine too
                 coeffs = low_coeffs
             else:
-                raise InputError(
-                    "Only one temperature range defined but two distinct sets of "
-                    "coefficients given for species thermo entry:\n{}\n",
-                    "".join(lines))
+                logger.error(self.entry("thermo entry") +
+                    "Only one temperature range defined but two distinct "
+                    "sets of coefficients given\nin species thermo entry.")
+                return species, None, {}
+
             thermo = Nasa7(Tmin=Tmin, Tmax=Tmax, Tmid=None, low_coeffs=coeffs,
                            high_coeffs=None, note=note)
         else:
@@ -956,6 +935,123 @@ class Parser:
                            high_coeffs=high_coeffs, note=note)
 
         return species, thermo, composition
+
+    def parse_nasa7_section(self, lines):
+        """
+        Parse a THERMO section containing species defined using the 7-coefficient
+        NASA polynomial format.
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        """
+        TintDefault = float(lines[1, 2].split()[1])
+        lines = lines[2:]
+
+        marker = '1'
+        comments = []
+        redundant_count = 0
+        for i, (input_lineno, _, line, comment) in enumerate(lines):
+            comments.append(comment)
+            self.current_range[1] = input_lineno
+            if len(line) >= 80 and line[79] == marker == '1':
+                self.current_range[0] = input_lineno
+                entry = [line]
+                entry_lines = [i]
+                if line.endswith('&'):
+                    marker = None
+                else:
+                    marker = '2'
+            elif marker is None:
+                entry.append(line)
+                entry_lines.append(i)
+                if not line.endswith('&'):
+                    marker = '2'
+            elif len(line) >= 80 and line[79] == marker and marker in ('2', '3'):
+                    entry.append(line)
+                    entry_lines.append(i)
+                    marker = chr(ord(marker) + 1)
+            elif len(line) >= 80 and line[79] == marker == '4':
+                entry.append(line)
+                entry_lines.append(i)
+                lines[entry_lines, 1] = 'USED'
+                try:
+                    name, thermo, comp = self.read_NASA7_entry(
+                        entry, TintDefault, comments)
+                except ValueError as err:
+                    logger.error(self.entry("thermo entry") + str(err))
+                    comments = []
+                    marker = '1'
+                    continue
+
+                if name not in self.species_dict:
+                    if self.skip_undeclared_species:
+                        logger.debug(f"Skipping unexpected species '{name}' while "
+                            "reading thermodynamics entry.")
+                        marker = '1'
+                        comments = []
+                        continue
+                    else:
+                        # Add a new species entry
+                        species = Species(label=name)
+                        self.species_dict[name] = species
+                        self.species_list.append(species)
+                else:
+                    species = self.species_dict[name]
+
+                # use the first set of thermo data found
+                if species.thermo is not None:
+                    redundant_count += 1
+                    if redundant_count <= 5 or self.verbose:
+                        if self.permissive:
+                            logger.warning("Ignoring redundant thermo data for species "
+                                f"'{name}' starting on line {input_lineno+1} of "
+                                f"{self.files[-1]}.")
+                        else:
+                            logger.error(self.entry("thermo entry") +
+                                f"Found additional thermo entry for species '{name}'. "
+                                "Run ck2yaml again with the\n'--permissive' option to "
+                                "ignore this redundant entry.")
+                else:
+                    species.thermo = thermo
+                    species.composition = comp
+                comments = []
+                marker = '1'
+            elif line.strip():
+                marker = '1'
+                comments = []
+
+        if redundant_count > 5 and not self.verbose:
+            kind = "warnings" if self.permissive else "errors"
+            logger.warning(f"Suppressed {redundant_count - 5} additional {kind} "
+                "about redundant thermo data.\nRun ck2yaml again with the "
+                f"'--verbose' option to see all {kind}.")
+
+        # Check for blocks of consecutive lines that couldn't be parsed as a valid
+        # thermo entry
+        unexpected = lines[lines[:,1] != "USED"]
+        if not any(unexpected[:,2]):
+            return
+
+        blocks = []
+        start = 0
+        i = -1
+        for i in range(len(unexpected) - 1):
+            if unexpected[i+1][0] - unexpected[i][0] > 1:
+                blocks.append((start, i+1))
+                start = i+1
+        blocks.append((start, i+2))
+        for block in blocks:
+            entry = unexpected[block[0]:block[1]]
+            if any(entry[:,2]):
+                self.current_range = [entry[0,0], entry[-1,0]]
+                if self.permissive:
+                    logger.warning(self.entry("thermo data", "Unparsable lines") +
+                                   "Lines could not be parsed as a NASA7 entry.")
+                else:
+                    logger.error(self.entry("thermo data", "Unparsable lines") +
+                        "Lines could not be parsed as a NASA7 entry. Run ck2yaml again "
+                        "with the\n'--permissive' option to continue without parsing "
+                        "these lines.")
 
     def read_NASA9_entry(self, entry, comments):
         """
@@ -975,7 +1071,7 @@ class Parser:
         elif note2:
             note = note2
 
-        comments = '\n'.join(c.rstrip() for c in comments if c.strip())
+        comments = '\n'.join(c for c in comments if c.strip())
         if comments and note:
             note = '\n'.join((note, comments))
         elif comments:
@@ -995,28 +1091,11 @@ class Parser:
                           fortFloat(C[64:80])]
                 polys.append((Trange, coeffs))
         except (IndexError, ValueError) as err:
-            raise InputError('Error while reading thermo entry for species {}:\n{}.',
-                             species, err)
+            logger.error(self.entry("thermo entry") + str(err))
 
-        thermo = Nasa9(data=polys, note=note)
+        thermo = Nasa9(data=polys, note=note, parser=self)
 
         return species, thermo, composition
-
-    def setup_kinetics(self):
-        # We look for species including the next permissible character. '\n' is
-        # appended to the reaction string to identify the last species in the
-        # reaction string. Checking this character is necessary to correctly
-        # identify species with names ending in '+' or '='.
-        self.species_tokens = set()
-        for next_char in ('<', '=', '(', '+', '\n'):
-            self.species_tokens.update(k + next_char for k in self.species_dict)
-        self.other_tokens = {'M': 'third-body', 'm': 'third-body',
-                             '(+M)': 'falloff3b', '(+m)': 'falloff3b',
-                             '<=>': 'equal', '=>': 'equal', '=': 'equal',
-                             'HV': 'photon', 'hv': 'photon'}
-        self.other_tokens.update(('(+{})'.format(k), 'falloff3b: {}'.format(k))
-                                 for k in self.species_dict)
-        self.Slen = max(map(len, self.other_tokens))
 
     def read_kinetics_entry(self, entry, surface):
         """
@@ -1085,8 +1164,12 @@ class Parser:
                 try:
                     locs[j] = float(token), 'coeff'
                 except ValueError:
-                    raise InputError('Unexpected token "{}" in reaction expression "{}".',
-                                     token, original_reaction)
+                    probable_species = re.sub(r'\+?(.+?)(\+\d*)?', r'\1', token)
+                    logger.error(self.entry("reaction") +
+                        f"Unexpected token '{token}' in reaction expression "
+                        f"'{original_reaction.strip()}'.\nMay be due to undeclared "
+                        f"species '{probable_species}'.")
+                    return Reaction(), None
 
         reactants = []
         products = []
@@ -1106,11 +1189,12 @@ class Parser:
                 stoichiometry = 1
 
         if lhs:
-            raise InputError("Failed to find reactant/product delimiter in reaction string.")
+            logger.error(self.entry("reaction") +
+                "Failed to find reactant/product delimiter in reaction expression "
+                f"'{original_reaction.strip()}'.")
 
         # Create a new Reaction object for this reaction
-        reaction = Reaction(reactants=[], products=[], reversible=reversible,
-                            parser=self)
+        reaction = Reaction(reactants=[], products=[], reversible=reversible)
 
         def parse_expression(expression, dest):
             third_body_name = None
@@ -1135,17 +1219,23 @@ class Parser:
         third_body_name_p, third_body, photon_p = parse_expression(products, reaction.products)
 
         if third_body_name_r != third_body_name_p:
-            raise InputError('Third bodies do not match: "{}" and "{}" in'
-                ' reaction entry:\n\n{}', third_body_name_r, third_body_name_p, entry)
+            logger.error(self.entry("reaction") +
+                f"Third bodies do not match: '{third_body_name_r}' and "
+                f"'{third_body_name_p}'.")
 
         if photon_r:
-            raise InputError('Reactant photon not supported. '
-                             'Found in reaction:\n{}', entry.strip())
+            logger.error(self.entry("reaction") + "Reactant photon not supported.")
         if photon_p and reversible:
-            self.warn('Found reversible reaction containing a product photon:'
-                '\n{0}\nIf the "--permissive" option was specified, this will '
-                'be converted to an irreversible reaction with the photon '
-                'removed.'.format(entry.strip()))
+            if self.permissive:
+                logger.warning(self.entry("reaction", "Issue") +
+                    "Found a reversible reaction containing a product photon. "
+                    "Converting to an\nirreversible reaction with the photon removed.")
+            else:
+                logger.error(self.entry("reaction") +
+                    "Found a reversible reaction containing a product photon. "
+                    "To automatically\nconvert this reaction to an irreversible "
+                    "reaction with the photon removed,\nrun ck2yaml again with the "
+                    "'--permissive' option.")
             reaction.reversible = False
 
         reaction.third_body = third_body_name_r
@@ -1154,7 +1244,8 @@ class Parser:
         # This assumes elementary kinetics for all reactions
         rStoich = sum(r[0] for r in reaction.reactants) + (1 if third_body else 0)
         if rStoich < 1:
-            raise InputError('No reactant species for reaction {}.', reaction)
+            logger.error(self.entry("reaction") +
+                         "No reactant species found in reaction equation.")
 
         length_dim = 3 * (rStoich - 1)
         quantity_dim = rStoich - 1
@@ -1243,8 +1334,7 @@ class Parser:
                     revReaction = Reaction(reactants=reaction.products,
                                            products=reaction.reactants,
                                            third_body=reaction.third_body,
-                                           reversible=False,
-                                           parser=self)
+                                           reversible=False)
 
                     rev_rate = Arrhenius(
                         A=(float(tokens[0].strip()), klow_units),
@@ -1338,25 +1428,32 @@ class Parser:
                     efficiencies[collider.strip()] = float(efficiency.strip())
 
             if not parsed:
-                raise InputError('Unparsable line:\n"""\n{}\n"""', line)
+                logger.error(self.entry("reaction") + f"Unparsable line: '{line}'.")
 
         # Decide which kinetics to keep and store them on the reaction object.
         # At most one of the special cases should be true
         tests = [cheb_coeffs, pdep_arrhenius, low_rate, high_rate, third_body,
                  surface]
         if sum(bool(t) for t in tests) > 1:
-            raise InputError('Reaction {} contains parameters for more than '
-                             'one reaction type.', original_reaction)
+            logger.error(self.entry("reaction") +
+                "Reaction contains parameters for more than one reaction type.")
+            return reaction, revReaction
 
         if cheb_coeffs:
             if Tmin is None or Tmax is None:
-                raise InputError('Missing TCHEB line for reaction {}', reaction)
+                logger.error(self.entry("reaction") +
+                             "Missing TCHEB entry for Chebyshev reaction")
+                return reaction, revReaction
             if Pmin is None or Pmax is None:
-                raise InputError('Missing PCHEB line for reaction {}', reaction)
+                logger.error(self.entry("reaction") +
+                             "Missing PCHEB entry for Chebyshev reaction")
+                return reaction, revReaction
             if len(cheb_coeffs) != degreeT * degreeP:
-                raise InputError('Incorrect number of Chebyshev coefficients. '
-                    'Expected {}*{} = {} but got {}', degreeT, degreeP,
-                    degreeT * degreeP, len(cheb_coeffs))
+                logger.error(self.entry("reaction") +
+                    "Incorrect number of Chebyshev coefficients. Expected "
+                    f"{degreeT}*{degreeP} = {degreeP*degreeT} but got "
+                    f"{len(cheb_coeffs)}.")
+                return reaction, revReaction
             if quantity_units == self.quantity_units:
                 quantity_units = None
             reaction.kinetics = Chebyshev(
@@ -1383,9 +1480,9 @@ class Parser:
             reaction.kinetics = ThreeBody(high_rate=arrhenius,
                                           efficiencies=efficiencies)
         elif reaction.third_body:
-            raise InputError('Reaction equation implies pressure '
-                'dependence but no alternate rate parameters (such as HIGH or '
-                'LOW) were given for reaction {}.', reaction)
+            logger.error(self.entry("reaction") +
+                "Reaction equation implies pressure dependence but no alternate rate\n"
+                "parameters (such as HIGH or LOW) were given.")
         elif surface:
             reaction.kinetics = SurfaceRate(rate=arrhenius,
                                             coverages=coverages,
@@ -1419,9 +1516,10 @@ class Parser:
                     'units', 'phases', 'species', 'reactions'}
         reserved &= set(yml.keys())
         if reserved:
-            raise InputError("The YAML file '{}' provided as '--extra' input "
-                "must not redefine reserved field name: "
-                "'{}'".format(path, reserved))
+            logger.error(f"The YAML file '{Path(path).name}' provided as '--extra' "
+                         "input\nmust not redefine reserved field name(s): "
+                         + ", ".join(f'{item!r}' for item in reserved))
+            return
 
         # replace header lines
         if 'description' in yml:
@@ -1430,472 +1528,476 @@ class Parser:
                     self.header_lines += ['']
                 self.header_lines += yml.pop('description').split('\n')
             else:
-                raise InputError("The alternate description provided in "
-                    "'{}' needs to be a string".format(path))
+                logger.error("The alternate description provided in "
+                             f"'{Path(path).name}'\nneeds to be a string.")
 
         # remainder
         self.extra = yml
 
-    def load_chemkin_file(self, path, skip_undeclared_species=True, surface=False):
+    def load_data_file(self, path: str, load_method: Callable, kind: str, **kwargs):
+        if not path:
+            return
+
+        self.files.append(Path(path).name)
+        path = os.path.expanduser(path)
+        if not os.path.exists(path):
+            if self.exit_on_error:
+                logger.error(f"Missing input file: {path!r}")
+                sys.exit(1)
+            else:
+                raise IOError(f"Missing input file: {path!r}")
+        try:
+            load_method(path, **kwargs)
+        except Exception as err:
+            logger.warning(f"\nERROR: Unable to parse '{path}' near line "
+                           f"{self.current_range[0]+1}:\n{err}\n")
+            raise
+
+    def load_chemkin_file(self, path, surface=False):
         """
         Load a Chemkin-format input file from ``path`` on disk.
         """
-        transportLines = []
-        self.line_number = 0
-
-        with open(path, 'r', errors='ignore') as ck_file:
-
-            def readline():
-                self.line_number += 1
-                line = strip_nonascii(ck_file.readline())
-                if '!' in line:
-                    return line.split('!', 1)
-                elif line:
-                    return line, ''
-                else:
-                    return None, None
-
-            # @todo: This loop is a bit of a mess, and could probably be cleaned
-            # up by refactoring it into a set of methods for processing each
-            # input file section.
-            line, comment = readline()
-            advance = True
-            inHeader = True
-            header = []
-            indent = 80
-            while line is not None:
-                tokens = line.split() or ['']
-                if inHeader and not line.strip():
-                    header.append(comment.rstrip())
-                    if comment.strip() != '': # skip indent calculation if empty
-                        indent = min(indent, re.search('[^ ]', comment).start())
-
-                if tokens[0].upper().startswith('ELEM'):
-                    inHeader = False
-                    tokens = tokens[1:]
-                    while line is not None and get_index(line, 'END') is None:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('SPEC', 'SPECIES'):
-                            self.warn('"ELEMENTS" section implicitly ended by start of '
-                                      'next section on line {0}.'.format(self.line_number))
-                            advance = False
-                            tokens.pop()
-                            break
-
-                        line, comment = readline()
-                        # Normalize custom atomic weights
-                        line = re.sub(r'\s*/\s*([0-9\.EeDd+-]+)\s*/', r'/\1/ ', line)
-                        tokens.extend(line.split())
-
-                    for token in tokens:
-                        if token.upper() == 'END':
-                            break
-                        self.add_element(token)
-
-                elif tokens[0].upper().startswith('SPEC'):
-                    # List of species identifiers
-                    species = tokens[1:]
-                    inHeader = False
-                    comments = {}
-                    while line is not None and get_index(line, 'END') is None:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('REAC', 'REACTIONS', 'TRAN',
-                                                  'TRANSPORT', 'THER', 'THERMO'):
-                            self.warn('"SPECIES" section implicitly ended by start of '
-                                      'next section on line {0}.'.format(self.line_number))
-                            advance = False
-                            species.pop()
-                            # Fix the case where there THERMO ALL or REAC UNITS
-                            # ends the species section
-                            if (species[-1].upper().startswith('THER') or
-                                    species[-1].upper().startswith('REAC')):
-                                species.pop()
-                            break
-
-                        line, comment = readline()
-                        comment = comment.strip()
-                        line_species = line.split()
-                        if len(line_species) == 1 and comment:
-                            comments[line_species[0]] = comment
-                        species.extend(line_species)
-
-                    for token in species:
-                        if token.upper() == 'END':
-                            break
-                        if token in self.species_dict:
-                            species = self.species_dict[token]
-                            self.warn('Found additional declaration of species {}'.format(species))
-                        else:
-                            species = Species(label=token)
-                            if token in comments:
-                                species.note = comments[token]
-                            self.species_dict[token] = species
-                            self.species_list.append(species)
-
-                elif tokens[0].upper().startswith('SITE'):
-                    # List of species identifiers for surface species
-                    if '/' in tokens[0]:
-                        surf_name = tokens[0].split('/')[1]
-                    else:
-                        surf_name = 'surface{}'.format(len(self.surfaces)+1)
-                    tokens = tokens[1:]
-                    site_density = None
-                    for token in tokens[:]:
-                        if token.upper().startswith('SDEN/'):
-                            site_density = fortFloat(token.split('/')[1])
-                            tokens.remove(token)
-
-                    if site_density is None:
-                        raise InputError('SITE section defined with no site density')
-                    self.surfaces.append(Surface(name=surf_name,
-                                                 site_density=site_density))
-                    surf = self.surfaces[-1]
-
-                    inHeader = False
-                    while line is not None and get_index(line, 'END') is None:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('REAC', 'REACTIONS', 'THER',
-                                                  'THERMO'):
-                            self.warn('"SITE" section implicitly ended by start of '
-                                      'next section on line {}.'.format(self.line_number))
-                            advance = False
-                            tokens.pop()
-                            # Fix the case where there THERMO ALL or REAC UNITS
-                            # ends the species section
-                            if (tokens[-1].upper().startswith('THER') or
-                                    tokens[-1].upper().startswith('REAC')):
-                                tokens.pop()
-                            break
-
-                        line, comment = readline()
-                        tokens.extend(line.split())
-
-                    for token in tokens:
-                        if token.upper() == 'END':
-                            break
-                        if token.count('/') == 2:
-                            # species occupies a specific number of sites
-                            token, sites, _ = token.split('/')
-                            sites = float(sites)
-                        else:
-                            sites = None
-                        if token in self.species_dict:
-                            species = self.species_dict[token]
-                            self.warn('Found additional declaration of species {0}'.format(species))
-                        else:
-                            species = Species(label=token, sites=sites)
-                            self.species_dict[token] = species
-                            surf.species_list.append(species)
-
-                elif tokens[0].upper().startswith('THER') and contains(line, 'NASA9'):
-                    inHeader = False
-                    entryLength = None
-                    entry = []
-                    # Gather comments on lines preceding and within this entry
-                    comments = []
-                    while line is not None and get_index(line, 'END') != 0:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('REAC', 'REACTIONS', 'TRAN', 'TRANSPORT'):
-                            self.warn('"THERMO" section implicitly ended by start of '
-                                      'next section on line {0}.'.format(self.line_number))
-                            advance = False
-                            tokens.pop()
-                            break
-
-                        line, comment = readline()
-                        comments.append(comment)
-                        if not line:
-                            continue
-
-                        if entryLength is None:
-                            entryLength = 0
-                            # special case if (redundant) temperature ranges are
-                            # given as the first line
-                            try:
-                                s = line.split()
-                                float(s[0]), float(s[1]), float(s[2])
-                                continue
-                            except (IndexError, ValueError):
-                                pass
-
-                        entry.append(line)
-                        if len(entry) == 2:
-                            entryLength = 2 + 3 * int(line.split()[0])
-
-                        if len(entry) == entryLength:
-                            label, thermo, comp = self.read_NASA9_entry(entry, comments)
-                            comments = []
-                            entry = []
-                            if label not in self.species_dict:
-                                if skip_undeclared_species:
-                                    logger.info('Skipping unexpected species "{0}" while reading thermodynamics entry.'.format(label))
-                                    continue
-                                else:
-                                    # Add a new species entry
-                                    species = Species(label=label)
-                                    self.species_dict[label] = species
-                                    self.species_list.append(species)
-                            else:
-                                species = self.species_dict[label]
-
-                            # use the first set of thermo data found
-                            if species.thermo is not None:
-                                self.warn('Found additional thermo entry for species {0}. '
-                                          'If --permissive was given, the first entry is used.'.format(label))
-                            else:
-                                species.thermo = thermo
-                                species.composition = comp
-
-                elif tokens[0].upper().startswith('THER'):
-                    # List of thermodynamics (hopefully one per species!)
-                    inHeader = False
-                    line, comment = readline()
-                    if line is not None and get_index(line, 'END') is None:
-                        TintDefault = float(line.split()[1])
-                    thermo = []
-                    current = []
-                    # Gather comments on lines preceding and within this entry
-                    comments = [comment]
-                    while line is not None and get_index(line, 'END') != 0:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('REAC', 'REACTIONS', 'TRAN', 'TRANSPORT'):
-                            self.warn('"THERMO" section implicitly ended by start of '
-                                      'next section on line {0}.'.format(self.line_number))
-                            advance = False
-                            tokens.pop()
-                            break
-
-                        if comment:
-                            current.append('!'.join((line, comment)))
-                        else:
-                            current.append(line)
-                        if len(line) >= 80 and line[79] in ['1', '2', '3', '4']:
-                            thermo.append(line)
-                            if line[79] == '4':
-                                try:
-                                    label, thermo, comp = self.read_NASA7_entry(thermo, TintDefault, comments)
-                                except Exception as e:
-                                    error_line_number = self.line_number - len(current) + 1
-                                    error_entry = ''.join(current).rstrip()
-                                    logger.info(
-                                        'Error while reading thermo entry starting on line {0}:\n'
-                                        '"""\n{1}\n"""'.format(error_line_number, error_entry)
-                                    )
-                                    raise
-
-                                if label not in self.species_dict:
-                                    if skip_undeclared_species:
-                                        logger.info(
-                                            'Skipping unexpected species "{0}" while'
-                                            ' reading thermodynamics entry.'.format(label))
-                                        thermo = []
-                                        line, comment = readline()
-                                        current = []
-                                        comments = [comment]
-                                        continue
-                                    else:
-                                        # Add a new species entry
-                                        species = Species(label=label)
-                                        self.species_dict[label] = species
-                                        self.species_list.append(species)
-                                else:
-                                    species = self.species_dict[label]
-
-                                # use the first set of thermo data found
-                                if species.thermo is not None:
-                                    self.warn('Found additional thermo entry for species {0}. '
-                                              'If --permissive was given, the first entry is used.'.format(label))
-                                else:
-                                    species.thermo = thermo
-                                    species.composition = comp
-
-                                thermo = []
-                                current = []
-                                comments = []
-                        elif thermo and thermo[-1].rstrip().endswith('&'):
-                            # Include Chemkin-style extended elemental composition
-                            thermo.append(line)
-                        line, comment = readline()
-                        comments.append(comment)
-
-                elif tokens[0].upper().startswith('REAC'):
-                    # Reactions section
-                    inHeader = False
-                    for token in tokens[1:]:
-                        token = token.upper()
-                        if token in ENERGY_UNITS:
-                            self.energy_units = ENERGY_UNITS[token]
-                            if not self.processed_units:
-                                self.output_energy_units = ENERGY_UNITS[token]
-                        elif token in QUANTITY_UNITS:
-                            self.quantity_units = QUANTITY_UNITS[token]
-                            if not self.processed_units:
-                                self.output_quantity_units = QUANTITY_UNITS[token]
-                        elif token == 'MWON':
-                            self.motz_wise = True
-                        elif token == 'MWOFF':
-                            self.motz_wise = False
-                        else:
-                            raise InputError("Unrecognized token on REACTIONS line, {0!r}", token)
-
-                    self.processed_units = True
-
-                    kineticsList = []
-                    commentsList = []
-                    startLines = []
-                    kinetics = ''
-                    comments = ''
-
-                    line, comment = readline()
-                    if surface:
-                        reactions = self.surfaces[-1].reactions
-                    else:
-                        reactions = self.reactions
-                    while line is not None and get_index(line, 'END') is None:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('TRAN', 'TRANSPORT'):
-                            self.warn('"REACTIONS" section implicitly ended by start of '
-                                      'next section on line {0}.'.format(self.line_number))
-                            advance = False
-                            break
-
-                        lineStartsWithComment = not line and comment
-                        line = line.rstrip()
-                        comment = comment.rstrip()
-
-                        if '=' in line and not lineStartsWithComment:
-                            # Finish previous record
-                            if comment:
-                                # End of line comment belongs with this reaction
-                                comments += comment + '\n'
-                                comment = ''
-                            kineticsList.append(kinetics)
-                            commentsList.append(comments)
-                            startLines.append(self.line_number)
-                            kinetics = ''
-                            comments = ''
-
-                        if line.strip():
-                            kinetics += line + '\n'
-                        if comment:
-                            comments += comment + '\n'
-
-                        line, comment = readline()
-
-                    # Don't forget the last reaction!
-                    if kinetics.strip() != '':
-                        kineticsList.append(kinetics)
-                        commentsList.append(comments)
-
-                    # We don't actually know whether comments belong to the
-                    # previous or next reaction, but to keep them positioned
-                    # correctly, we associate them with the next reaction. A
-                    # comment after the last reaction is associated with that
-                    # reaction
-                    if kineticsList and kineticsList[0] == '':
-                        kineticsList.pop(0)
-                        final_comment = commentsList.pop()
-                        if final_comment and commentsList[-1]:
-                            commentsList[-1] = commentsList[-1].rstrip() + '\n' + final_comment
-                        elif final_comment:
-                            commentsList[-1] = final_comment
-
-                    self.setup_kinetics()
-                    for kinetics, comment, line_number in zip(kineticsList, commentsList, startLines):
-                        try:
-                            reaction, revReaction = self.read_kinetics_entry(kinetics, surface)
-                        except Exception as e:
-                            self.line_number = line_number
-                            logger.info('Error reading reaction starting on '
-                                'line {0}:\n"""\n{1}\n"""'.format(
-                                    line_number, kinetics.rstrip()))
-                            raise
-                        reaction.line_number = line_number
-                        reaction.comment = comment
-                        reactions.append(reaction)
-                        if revReaction is not None:
-                            revReaction.line_number = line_number
-                            reactions.append(revReaction)
-
-                    for index, reaction in enumerate(reactions):
-                        reaction.index = index + 1
-
-                elif tokens[0].upper().startswith('TRAN'):
-                    inHeader = False
-                    line, comment = readline()
-                    transport_start_line = self.line_number
-                    while line is not None and get_index(line, 'END') is None:
-                        # Grudging support for implicit end of section
-                        start = line.strip().upper().split()
-                        if start and start[0] in ('REAC', 'REACTIONS'):
-                            self.warn('"TRANSPORT" section implicitly ended by start of '
-                                      'next section on line {0}.'.format(self.line_number))
-                            advance = False
-                            tokens.pop()
-                            break
-
-                        if comment:
-                            transportLines.append('!'.join((line, comment)))
-                        else:
-                            transportLines.append(line)
-                        line, comment = readline()
-
-                elif line.strip():
-                    raise InputError('Section starts with unrecognized keyword'
-                        '\n"""\n{}\n"""', line.rstrip())
-
-                if advance:
-                    line, comment = readline()
-                else:
-                    advance = True
-
-        for h in header:
-            self.header_lines.append(h[indent:])
-
-        if transportLines:
-            self.parse_transport_data(transportLines, path, transport_start_line)
-
-    def parse_transport_data(self, lines, filename, line_offset):
-        """
-        Parse the Chemkin-format transport data in ``lines`` (a list of strings)
-        and add that transport data to the previously-loaded species.
-        """
-
-        for i,line in enumerate(lines):
-            original_line = line
-            line = line.strip()
-            if not line or line.startswith('!'):
-                continue
-            if get_index(line, 'END') == 0:
-                break
-
+        lines = []
+        self.raw_lines = Path(path).read_text(errors='ignore').splitlines()
+        for i, line in enumerate(self.raw_lines):
             if '!' in line:
                 line, comment = line.split('!', 1)
             else:
                 comment = ''
 
-            data = line.split()
+            lines.append((i, None, line, comment))
+
+        lines = np.array(lines, dtype=object)
+
+        # Identify file sections
+        current_section = None
+        sections = {
+            "ELEMENTS": re.compile(r"\s*ELEM(?:ENTS)?\b(.*)", re.I),
+            "SPECIES": re.compile(r"\s*SPEC(?:IES)?\b(.*)", re.I),
+            "SITE": re.compile(r"\s*SITE\b(.*)", re.I),
+            "THERMO NASA9": re.compile(r"\s*THER(?:M|MO)\s+NASA9(.*)", re.I),
+            "THERMO": re.compile(r"\s*THER(?:M|MO)\b(.*)", re.I),
+            "REACTIONS": re.compile(r"\s*REAC(?:TION|TIONS)?\b(.*)", re.I),
+            "TRANSPORT": re.compile(r"\s*TRAN(?:SPORT)?\b(.*)", re.I),
+        }
+        found_sections = set()
+        in_header = True
+        for i, row in enumerate(lines):
+            line = row[2]
+            for section, pattern in sections.items():
+                if m := pattern.match(line):
+                    if current_section and not self.permissive:
+                        logger.warning(f"{current_section} section implicitly ended "
+                            f"by start of {section} section on line {row[0]+1} of "
+                            f"{self.files[-1]}.")
+                    current_section = section
+                    in_header = False
+                    found_sections.add(section)
+                    lines[i:, 1] = section
+                    line = lines[i, 2] = m.group(1)
+                    del sections[section]
+                    break
+            if current_section in ("SPECIES", "ELEMENTS", "SITE"):
+                if m := re.match(r"(.*)\s?END\b", line, re.I):
+                    current_section = None
+                    lines[i+1:, 1] = None
+                    lines[i, 2] = m.group(1)
+            elif m := re.match(r"\s*END\b", line, re.I):
+                current_section = None
+                lines[i+1:, 1] = None
+                lines[i, 2] = ""
+            elif in_header:
+                lines[i:, 1] = "HEADER"
+                if row[3].strip():
+                    found_sections.add("HEADER")
+            elif current_section is None and line.strip():
+                self.current_range = [row[0]] * 2
+                logger.error(self.entry() +
+                    f"Section starts with unrecognized keyword '{line}'")
+                break
+
+        if "ELEMENTS" in found_sections:
+            self.parse_elements_section(lines[lines[:,1] == "ELEMENTS"])
+        if "SPECIES" in found_sections:
+            self.parse_species_section(lines[lines[:,1] == "SPECIES"])
+        if "SITE" in found_sections:
+            if not surface:
+                logger.error(self.entry("section") +
+                    "Surface phase input file must be specified using the "
+                    "'--surface' option\nwith the bulk (gas) phase input "
+                    "specified using the '--input' option.")
+                return
+            self.parse_site_section(lines[lines[:,1] == "SITE"])
+        if "THERMO NASA9" in found_sections:
+            self.parse_nasa9_section(lines[lines[:,1] == "THERMO NASA9"])
+        if "THERMO" in found_sections:
+            self.parse_nasa7_section(lines[lines[:,1] == "THERMO"])
+        if "REACTIONS" in found_sections:
+            self.parse_reactions_section(lines[lines[:,1] == "REACTIONS"], surface)
+        if "TRANSPORT" in found_sections:
+            self.parse_transport_section(lines[lines[:,1] == "TRANSPORT"])
+
+        if "HEADER" in found_sections:
+            indent = 80
+            header = lines[lines[:,1] == "HEADER", 3]
+            for row in header:
+                if row.strip():
+                    indent = min(indent, re.search('[^ ]', row).start())
+            for row in header:
+                self.header_lines.append(row[indent:])
+
+    def parse_elements_section(self, lines):
+        """
+        Parse the ELEMENTS section of a Chemkin-format input file
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        """
+        tokens = []
+        for lineno, _, line, comment in lines:
+            # Normalize custom atomic weights
+            line = re.sub(r'\s*/\s*([0-9\.EeDd+-]+)\s*/', r'/\1/ ', line)
+            tokens.extend(line.split())
+
+        for element_string in tokens:
+            if '/' in element_string:
+                name, weight, _ = element_string.split('/')
+                weight = fortFloat(weight)
+                name = name.capitalize()
+                self.elements.append(name)
+                self.element_weights[name] = weight
+            else:
+                self.elements.append(element_string.capitalize())
+
+    def parse_species_section(self, lines):
+        """
+        Parse the SPECIES section of a Chemkin-format input file
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        """
+        comments = {}
+        species = []
+        for line, comment in lines[:, 2:]:
+            line_species = line.split()
+            if len(line_species) == 1 and comment:
+                comments[line_species[0]] = comment
+            species.extend(line_species)
+
+        redundant_count = 0
+        for token in species:
+            if token in self.species_dict:
+                redundant_count += 1
+                species = self.species_dict[token]
+                if redundant_count > 5:
+                    continue
+                if self.permissive:
+                    logger.warning("Ignoring redundant declaration for "
+                                   f"species '{species}'")
+                else:
+                    logger.error(f"Found multiple declarations for species "
+                        f"'{species}'. Run ck2yaml again with the\n'--permissive' "
+                        "option to ignore the extra declarations.")
+            else:
+                species = Species(label=token)
+                if token in comments:
+                    species.note = comments[token]
+                self.species_dict[token] = species
+                self.species_list.append(species)
+
+        if redundant_count > 5 and not self.verbose:
+            kind = "warnings" if self.permissive else "errors"
+            logger.warning(f"Suppressed {redundant_count - 5} additional {kind} about "
+                "redundant species declarations.\nRun ck2yaml again with the "
+                f"'--verbose' option to see all {kind}.")
+
+    def parse_site_section(self, lines):
+        """
+        Parse the SITE (surface species) section of a Chemkin-format input file
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        """
+        # First line contains optional parameters, followed by species declarations
+        tokens = lines[0,2].split() or ['']
+        self.current_range = [lines[0,0]] * 2
+        if '/' in tokens[0]:
+            surf_name = tokens[0].split('/')[1]
+        else:
+            surf_name = 'surface{}'.format(len(self.surfaces)+1)
+        tokens = tokens[1:]
+        site_density = None
+        for token in tokens[:]:
+            if token.upper().startswith('SDEN/'):
+                site_density = fortFloat(token.split('/')[1])
+                tokens.remove(token)
+
+        if site_density is None:
+            logger.error(self.entry("SITE section") +
+                         "SITE section defined with no site density")
+        self.surfaces.append(Surface(name=surf_name, site_density=site_density))
+        surf = self.surfaces[-1]
+
+        # Get the rest of the species declarations
+        for line in lines[1:]:
+            tokens.extend(line[2].split())
+
+        # List of species identifiers for surface species
+        for token in tokens:
+            if token.count('/') == 2:
+                # species occupies a specific number of sites
+                token, sites, _ = token.split('/')
+                sites = float(sites)
+            else:
+                sites = None
+            if token in self.species_dict:
+                species = self.species_dict[token]
+                if self.permissive:
+                    logger.warning("Ignoring redundant declaration for "
+                                   f"species '{species}'")
+                else:
+                    logger.error(f"Found multiple declarations for species "
+                        f"'{species}'. Run ck2yaml again with the\n'--permissive' "
+                        "option to ignore the extra declarations.")
+            else:
+                species = Species(label=token, sites=sites)
+                self.species_dict[token] = species
+                surf.species_list.append(species)
+
+    def parse_nasa9_section(self, lines):
+        """
+        Parse a THERMO section containing species defined using the 9-coefficient
+        NASA polynomial format.
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        """
+        # special case if (redundant) temperature ranges are given as the first line
+        try:
+            s = lines[1, 2].split()
+            float(s[0]), float(s[1]), float(s[2])
+            lines[1, 2] = ''
+        except (IndexError, ValueError):
+            pass
+
+        entryLength = 0
+        redundant_count = 0
+        entry = []
+        # Gather comments on lines preceding and within this entry
+        comments = []
+
+        for lineno, _, line, comment in lines:
+            comments.append(comment)
+            if not line:
+                continue
+            self.current_range[-1] = lineno
+            entry.append(line)
+            if len(entry) == 1:
+                self.current_range[0] = lineno
+            elif len(entry) == 2:
+                entryLength = 2 + 3 * int(line.split()[0])
+
+            if len(entry) == entryLength:
+                label, thermo, comp = self.read_NASA9_entry(entry, comments)
+                comments = []
+                entry = []
+                if label not in self.species_dict:
+                    if self.skip_undeclared_species:
+                        logger.debug(f'Skipping unexpected species "{label}" while '
+                                     'reading thermodynamics entry.')
+                        continue
+                    else:
+                        # Add a new species entry
+                        species = Species(label=label)
+                        self.species_dict[label] = species
+                        self.species_list.append(species)
+                else:
+                    species = self.species_dict[label]
+
+                # use the first set of thermo data found
+                if species.thermo is not None:
+                    redundant_count += 1
+                    if redundant_count > 5:
+                        continue
+                    if self.permissive:
+                        logger.warning("Ignoring redundant thermo data for species "
+                            f"'{label}' starting on line {self.current_range[0]+1} of "
+                            f"{self.files[-1]}.")
+                    else:
+                        logger.error(self.entry("thermo entry") +
+                            f"Found additional thermo entry for species '{label}'. Run "
+                            "ck2yaml again with the\n'--permissive' option to ignore "
+                            "this redundant entry.")
+                else:
+                    species.thermo = thermo
+                    species.composition = comp
+
+        if redundant_count > 5 and not self.verbose:
+            kind = "warnings" if self.permissive else "errors"
+            logger.warning(f"Suppressed {redundant_count - 5} additional {kind} about "
+                "redundant thermo data.\nRun ck2yaml again with the '--verbose' option "
+                f"to see all {kind}.")
+
+    def parse_reactions_section(self, lines, surface):
+        """
+        Parse the REACTIONS section of a Chemkin-formatted input file.
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        :param surface:
+            Boolean indicating whether this is a surface reaction mechanism
+        """
+        self.current_range = [lines[0,0]] * 2
+        # Reactions section
+        for token in lines[0,2].upper().split():
+            if token in ENERGY_UNITS:
+                self.energy_units = ENERGY_UNITS[token]
+                if not self.processed_units:
+                    self.output_energy_units = ENERGY_UNITS[token]
+            elif token in QUANTITY_UNITS:
+                self.quantity_units = QUANTITY_UNITS[token]
+                if not self.processed_units:
+                    self.output_quantity_units = QUANTITY_UNITS[token]
+            elif token == 'MWON':
+                self.motz_wise = True
+            elif token == 'MWOFF':
+                self.motz_wise = False
+            else:
+                logger.error(self.entry("section") +
+                    f"Unrecognized token {token!r} on REACTIONS line")
+
+        lines = lines[1:]
+        self.processed_units = True
+        kineticsList = []
+        commentsList = []
+        startLines = []
+        kinetics = ''
+        comments = ''
+        reactions = self.surfaces[-1].reactions if surface else self.reactions
+
+        for lineno, _, line, comment in lines:
+            if '=' in line:
+                # Finish previous record
+                if comment:
+                    # End of line comment belongs with this reaction
+                    comments += comment + '\n'
+                    comment = ''
+                kineticsList.append(kinetics)
+                commentsList.append(comments)
+                startLines.append(lineno)
+                kinetics = ''
+                comments = ''
+
+            if line.strip():
+                kinetics += line + '\n'
+            if comment:
+                comments += comment + '\n'
+
+        # Don't forget the last reaction!
+        if kinetics.strip() != '':
+            kineticsList.append(kinetics)
+            commentsList.append(comments)
+
+        # We don't actually know whether comments belong to the previous or next
+        # reaction, but to keep them positioned correctly, we associate them with the
+        # next reaction. A comment after the last reaction is associated with that
+        # reaction
+        if kineticsList and kineticsList[0] == '':
+            kineticsList.pop(0)
+            final_comment = commentsList.pop()
+            if final_comment and commentsList[-1]:
+                commentsList[-1] = commentsList[-1] + '\n' + final_comment
+            elif final_comment:
+                commentsList[-1] = final_comment
+
+        # We look for species including the next permissible character. '\n' is appended
+        # to the reaction string to identify the last species in the reaction string.
+        # Checking this character is necessary to correctly identify species with names
+        # ending in '+' or '='.
+        self.species_tokens = set()
+        for next_char in ('<', '=', '(', '+', '\n'):
+            self.species_tokens.update(k + next_char for k in self.species_dict)
+        self.other_tokens = {'M': 'third-body', 'm': 'third-body', '(+M)': 'falloff3b',
+                             '(+m)': 'falloff3b', '<=>': 'equal', '=>': 'equal',
+                             '=': 'equal', 'HV': 'photon', 'hv': 'photon'}
+        self.other_tokens.update(('(+{})'.format(k), 'falloff3b: {}'.format(k))
+                                 for k in self.species_dict)
+        self.Slen = max(map(len, self.other_tokens))
+
+        for kinetics, comment, line_number in zip(kineticsList, commentsList, startLines):
+            self.current_range = [line_number, line_number + kinetics.count('\n') - 1]
+            try:
+                reaction, revReaction = self.read_kinetics_entry(kinetics, surface)
+            except Exception as e:
+                logger.error(self.entry("reaction") + str(e))
+                reaction, revReaction = Reaction(), None
+            reaction.line_number = line_number
+            reaction.comment = comment
+            reactions.append(reaction)
+            if revReaction is not None:
+                revReaction.line_number = line_number
+                reactions.append(revReaction)
+
+        for index, reaction in enumerate(reactions):
+            reaction.index = index + 1
+
+    def load_transport_file(self, path):
+        self.raw_lines = Path(path).read_text(errors='ignore').splitlines()
+        lines = []
+        for i, line in enumerate(self.raw_lines):
+            if '!' in line:
+                line, comment = line.split('!', 1)
+            else:
+                comment = ''
+
+            lines.append((i, None, line.rstrip(), comment.rstrip()))
+        lines = np.array(lines, dtype=object)
+        self.parse_transport_section(lines)
+
+    def parse_transport_section(self, lines):
+        """
+        Parse Chemkin-format transport data in ``lines`` and add that transport data
+        to the previously-loaded species.
+
+        :param lines:
+            A list of ``(line number, section name, line content, comment)`` tuples
+        """
+
+        redundant_count = 0
+        for lineno, _, line, comment in lines:
+            self.current_range = [lineno] * 2
+            data = line.strip().split()
+            if not data:
+                continue
 
             speciesName = data[0]
             if speciesName in self.species_dict:
                 if len(data) != 7:
-                    raise InputError('Unable to parse line {} of {}:\n"""\n{}"""\n'
-                        '6 transport parameters expected, but found {}.',
-                            line_offset + i, filename, original_line, len(data)-1)
+                    logger.error(self.entry("transport data") + "6 transport "
+                        f"parameters were expected, but found {len(data)-1}.")
+                    self.species_dict[speciesName].transport = False
+                    continue
 
                 if self.species_dict[speciesName].transport is None:
-                    self.species_dict[speciesName].transport = TransportData(*data, note=comment)
+                    self.species_dict[speciesName].transport = TransportData(self, *data, note=comment)
                 else:
-                    self.warn('Ignoring duplicate transport data'
-                         ' for species "{}" on line {} of "{}".'.format(
-                            speciesName, line_offset + i, filename))
+                    redundant_count += 1
+                    if redundant_count > 5 and not self.verbose:
+                        continue
+                    if self.permissive:
+                        logger.warning('Ignoring duplicate transport data for species '
+                            f'"{speciesName}" on line {lineno+1} of "{self.files[-1]}".')
+                    else:
+                        logger.error(self.entry("transport data") +
+                            f"Duplicate transport data for species '{speciesName}'. "
+                            "Run ck2yaml again with the\n'--permissive' option to "
+                            "ignore this redundant entry.")
 
+        if redundant_count > 5 and not self.verbose:
+            kind = "warnings" if self.permissive else "errors"
+            logger.warning(f"Suppressed {redundant_count - 5} additional {kind} "
+                "about duplicate transport data.\nRun ck2yaml again with the "
+                f"'--verbose' option to see all {kind}.")
 
     def write_yaml(self, name='gas', out_name='mech.yaml'):
         emitter = yaml.YAML()
@@ -1923,18 +2025,17 @@ class Parser:
                     n_reacting_phases += 1
 
             # Write header lines
-            desc = '\n'.join(line.rstrip() for line in self.header_lines)
+            desc = '\n'.join(self.header_lines)
             desc = desc.strip('\n')
             desc = textwrap.dedent(desc)
             if desc.strip():
                 emitter.dump({'description': yaml.scalarstring.PreservedScalarString(desc)}, dest)
 
             # Additional information regarding conversion
-            files = [os.path.basename(f) for f in self.files]
             metadata = BlockMap([
                 ("generator", "ck2yaml"),
-                ("input-files", FlowList(files)),
-                ("cantera-version", "3.0.0a3"),
+                ("input-files", FlowList(self.files)),
+                ("cantera-version", "3.2.0a1"),
                 ("date", formatdate(localtime=True)),
             ])
             if desc.strip():
@@ -2014,15 +2115,7 @@ class Parser:
                 emitter.dump(elementsMap, dest)
 
             # Write the individual species data
-            all_species = list(self.species_list)
-            for species in all_species:
-                if species.composition is None:
-                    raise InputError('No thermo data found for '
-                                     'species {!r}'.format(species.label))
-
-            for surf in self.surfaces:
-                all_species.extend(surf.species_list)
-            speciesMap = BlockMap([('species', all_species)])
+            speciesMap = BlockMap([('species', self.all_species)])
             speciesMap.yaml_set_comment_before_after_key('species', before='\n')
             emitter.dump(speciesMap, dest)
 
@@ -2040,111 +2133,104 @@ class Parser:
     def convert_mech(input_file, thermo_file=None, transport_file=None,
                      surface_file=None, phase_name='gas', extra_file=None,
                      out_name=None, single_intermediate_temperature=False, quiet=False,
-                     permissive=None):
+                     permissive=None, verbose=False, exit_on_error=False):
+
+        # Direct log messages to the console
+        loghandler = logging.StreamHandler(sys.stdout)
+        loghandler.setFormatter(ErrorFormatter())
+        logger.handlers.clear()
+        logger.addHandler(loghandler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
 
         parser = Parser()
+        parser.verbose = verbose
+        parser.exit_on_error = exit_on_error
         parser.single_intermediate_temperature = single_intermediate_temperature
         if quiet:
-            logger.setLevel(level=logging.ERROR)
+            logger.setLevel(level=logging.ERROR if permissive else logging.WARNING)
+        elif verbose:
+            logger.setLevel(level=logging.DEBUG)
         else:
             logger.setLevel(level=logging.INFO)
 
         if permissive is not None:
-            parser.warning_as_error = not permissive
+            parser.permissive = permissive
 
-        if input_file:
-            parser.files.append(input_file)
-            input_file = os.path.expanduser(input_file)
-            if not os.path.exists(input_file):
-                raise IOError('Missing input file: {0!r}'.format(input_file))
-            try:
-                # Read input mechanism files
-                parser.load_chemkin_file(input_file)
-            except Exception as err:
-                logger.warning("\nERROR: Unable to parse '{0}' near line {1}:\n{2}\n".format(
-                                input_file, parser.line_number, err))
-                raise
-        else:
-            phase_name = None
+        parser.load_data_file(input_file, parser.load_chemkin_file, "input")
+        if surface_file and not input_file:
+            msg = "Cannot specify a surface mechanism without a gas phase"
+            if exit_on_error:
+                logger.warning(f"\nERROR: {msg}\n")
+                sys.exit(1)
+            else:
+                raise InputError(msg)
 
-        if thermo_file:
-            parser.files.append(thermo_file)
-            thermo_file = os.path.expanduser(thermo_file)
-            if not os.path.exists(thermo_file):
-                raise IOError('Missing thermo file: {0!r}'.format(thermo_file))
-            try:
-                parser.load_chemkin_file(thermo_file,
-                                       skip_undeclared_species=bool(input_file))
-            except Exception:
-                logger.warning("\nERROR: Unable to parse '{0}' near line {1}:\n".format(
-                               thermo_file, parser.line_number))
-                raise
+        parser.load_data_file(surface_file, parser.load_chemkin_file,
+                              "surface input", surface=True)
 
+        parser.skip_undeclared_species = bool(input_file)
+        parser.load_data_file(thermo_file, parser.load_chemkin_file, "thermo")
+
+        parser.all_species = list(parser.species_list)
+        for surf in parser.surfaces:
+            parser.all_species.extend(surf.species_list)
+
+        for species in parser.all_species:
+            if species.composition is None:
+                logger.error(f'No thermo data found for species {species.label!r}')
+
+        parser.load_data_file(transport_file, parser.load_transport_file, "transport")
         if transport_file:
-            parser.files.append(transport_file)
-            transport_file = os.path.expanduser(transport_file)
-            if not os.path.exists(transport_file):
-                raise IOError('Missing transport file: {0!r}'.format(transport_file))
-            with open(transport_file, 'r', errors='ignore') as f:
-                lines = [strip_nonascii(line) for line in f]
-            parser.parse_transport_data(lines, transport_file, 1)
-
             # Transport validation: make sure all species have transport data
             for s in parser.species_list:
                 if s.transport is None:
-                    raise InputError("No transport data for species '{}'.", s)
+                    logger.error(f"No transport data for species '{s}'.")
 
-        if surface_file:
-            parser.files.append(surface_file)
-            surface_file = os.path.expanduser(surface_file)
-            if not os.path.exists(surface_file):
-                raise IOError('Missing input file: {0!r}'.format(surface_file))
-            try:
-                # Read input mechanism files
-                parser.load_chemkin_file(surface_file, surface=True)
-            except Exception as err:
-                logger.warning("\nERROR: Unable to parse '{0}' near line {1}:\n{2}\n".format(
-                               surface_file, parser.line_number, err))
-                raise
+        parser.load_data_file(extra_file, parser.load_extra_file, "input")
 
-        if extra_file:
-            parser.files.append(extra_file)
-            extra_file = os.path.expanduser(extra_file)
-            if not os.path.exists(extra_file):
-                raise IOError('Missing input file: {0!r}'.format(extra_file))
-            try:
-                # Read input mechanism files
-                parser.load_extra_file(extra_file)
-            except Exception as err:
-                logger.warning("\nERROR: Unable to parse '{0}':\n{1}\n".format(
-                               extra_file, err))
-                raise
+        if parser.max_loglevel >= logging.ERROR:
+            if exit_on_error:
+                logger.error("Unable to convert mechanism due to errors. Please check\n"
+                    "https://cantera.org/stable/userguide/"
+                    "ck2yaml-tutorial.html#debugging-common-errors-in-ck-files"
+                    "\nfor the correct Chemkin syntax.")
+                sys.exit(1)
+            else:
+                raise InputError('\n'.join(parser.handler.errors))
 
+        # Write output file
         if out_name:
             out_name = os.path.expanduser(out_name)
         else:
             out_name = os.path.splitext(input_file)[0] + '.yaml'
 
-        # Write output file
+        if not input_file:
+            phase_name = None
+
         surface_names = parser.write_yaml(name=phase_name, out_name=out_name)
         if not quiet:
-            nReactions = len(parser.reactions) + sum(len(surf.reactions) for surf in parser.surfaces)
-            logger.info('Wrote YAML mechanism file to {0!r}.'.format(out_name))
-            logger.info('Mechanism contains {0} species and {1} reactions.'.format(
-                        len(parser.species_list), nReactions))
+            nSpecies = len(parser.species_list)
+            nReactions = len(parser.reactions)
+            for surf in parser.surfaces:
+                nSpecies += len(surf.species_list)
+                nReactions += len(surf.reactions)
+            logger.info(f'Wrote YAML mechanism file to {out_name!r}.')
+            logger.info(f'Mechanism contains {nSpecies} species and {nReactions} '
+                        'reactions.')
         return parser, surface_names
 
     def show_duplicate_reactions(self, error_message):
         # Find the reaction numbers of the duplicate reactions by looking at
         # the YAML file lines shown in the error message generated by
         # Kinetics::checkDuplicates.
-        reactions = []
+        duplicates = []
         for line in error_message.split('\n'):
             match = re.match('>.*# Reaction ([0-9]+)', line)
             if match:
-                reactions.append(int(match.group(1))-1)
+                duplicates.append(int(match.group(1))-1)
 
-        if len(reactions) != 2:
+        if not duplicates or len(duplicates) % 2:
             # Something went wrong while parsing the error message, so just
             # display it as-is instead of trying to be clever.
             logger.warning(error_message)
@@ -2152,103 +2238,79 @@ class Parser:
 
         # Give an error message that references the line numbers in the
         # original input file.
-        equation = str(self.reactions[reactions[0]])
-        lines = [self.reactions[i].line_number for i in reactions]
-        logger.warning('Undeclared duplicate reaction {}\nfound on lines {} and {} of '
-              'the kinetics input file.'.format(equation, lines[0], lines[1]))
+        msg = ["Undeclared duplicate reactions found in the kinetics input file:"]
+        for i in range(0, len(duplicates), 2):
+            r1 = self.reactions[duplicates[i]]
+            r2 = self.reactions[duplicates[i+1]]
+
+            msg.append(f"Line {r1.line_number + 1:d}: {r1}")
+            msg.append(f"Line {r2.line_number + 1:d}: {r2}\n")
+
+        logger.warning("\n".join(msg))
+        logger.debug(error_message)
 
 
-def convert_mech(input_file, thermo_file=None, transport_file=None,
-                 surface_file=None, phase_name='gas', extra_file=None,
-                 out_name=None, single_intermediate_temperature=False, quiet=False,
-                 permissive=None):
+def convert(input_file, thermo_file=None, transport_file=None,
+            surface_file=None, phase_name='gas', extra_file=None,
+            out_name=None, single_intermediate_temperature=False, quiet=False,
+            permissive=None, verbose=False):
     _, surface_names = Parser.convert_mech(
-        input_file, thermo_file, transport_file, surface_file, phase_name,
-        extra_file, out_name, single_intermediate_temperature, quiet, permissive)
+        input_file, thermo_file, transport_file, surface_file, phase_name, extra_file,
+        out_name, single_intermediate_temperature, quiet, permissive, verbose)
     return surface_names
 
 
-def main(argv):
-
-    longOptions = ['input=', 'thermo=', 'transport=', 'surface=', 'name=',
-                   'extra=', 'output=', 'permissive', 'help', 'debug',
-                   'single-intermediate-temperature', 'quiet', 'no-validate', 'id=']
-
-    try:
-        optlist, args = getopt.getopt(argv, 'dh', longOptions)
-        options = dict()
-        for o,a in optlist:
-            options[o] = a
-
-        if args:
-            raise getopt.GetoptError('Unexpected command line option: ' +
-                                     repr(' '.join(args)))
-
-    except getopt.GetoptError as e:
-        logger.error('ck2yaml.py: Error parsing arguments:')
-        logger.error(e)
-        logger.error('Run "ck2yaml.py --help" to see usage help.')
+def main(argv=None):
+    """Parse command line arguments and pass them to `Parser.convert_mech`."""
+    parser = create_argparser()
+    if argv is None and len(sys.argv) < 2:
+        parser.print_help(sys.stderr)
         sys.exit(1)
+    args = parser.parse_args(argv)
 
-    if not options or '-h' in options or '--help' in options:
-        logger.info(__doc__)
-        sys.exit(0)
-
-    input_file = options.get('--input')
-    thermo_file = options.get('--thermo')
-    single_intermediate_temperature = '--single-intermediate-temperature' in options
-    permissive = '--permissive' in options
-    quiet = '--quiet' in options
-    transport_file = options.get('--transport')
-    surface_file = options.get('--surface')
-
-    if '--id' in options:
-        phase_name = options.get('--id', 'gas')
-        logger.warning("\nFutureWarning: "
-                       "Option '--id=...' will be replaced by '--name=...'")
-    else:
-        phase_name = options.get('--name', 'gas')
+    input_file = args.input
+    thermo_file = args.thermo
+    out_name = args.output
 
     if not input_file and not thermo_file:
-        logger.error('At least one of the arguments "--input=..." or "--thermo=..."'
-                     ' must be provided.\nRun "ck2yaml.py --help" to see usage help.')
+        logger.error('At least one of the arguments "--input" or "--thermo" '
+                     'must be provided.\nRun with option "--help" to see usage help.')
         sys.exit(1)
 
-    extra_file = options.get('--extra')
-
-    if '--output' in options:
-        out_name = options['--output']
-        if not out_name.endswith('.yaml') and not out_name.endswith('.yml'):
-            out_name += '.yaml'
+    if out_name.endswith('.yaml') or out_name.endswith('.yml'):
+        pass
+    elif out_name:
+        out_name += '.yaml'
     elif input_file:
         out_name = os.path.splitext(input_file)[0] + '.yaml'
     else:
         out_name = os.path.splitext(thermo_file)[0] + '.yaml'
 
     parser, surfaces = Parser.convert_mech(input_file, thermo_file,
-            transport_file, surface_file, phase_name, extra_file, out_name,
-            single_intermediate_temperature, quiet, permissive)
+            args.transport, args.surface, args.name, args.extra, out_name,
+            args.single_intermediate_temperature, args.quiet, args.permissive,
+            args.verbose, True)
 
-    # Do full validation by importing the resulting mechanism
     if not input_file:
         # Can't validate input files that don't define a phase
         return
 
-    if '--no-validate' in options:
+    if args.no_validate:
         return
 
+    # do full validation by importing the resulting mechanism
     try:
-        import cantera as ct
+        from cantera import Solution, Interface
     except ImportError:
         logger.warning('WARNING: Unable to import Cantera Python module. '
-                        'Output mechanism has not been validated')
+                       'Output mechanism has not been validated')
         sys.exit(0)
 
     try:
         logger.info('Validating mechanism...')
-        gas = ct.Solution(out_name)
+        gas = Solution(out_name)
         for surf_name in surfaces:
-            phase = ct.Interface(out_name, surf_name, [gas])
+            phase = Interface(out_name, surf_name, [gas])
         logger.info('PASSED')
     except RuntimeError as e:
         logger.info('FAILED')
@@ -2260,8 +2322,85 @@ def main(argv):
         sys.exit(1)
 
 
-def script_entry_point():
-    main(sys.argv[1:])
+def create_argparser():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Convert Chemkin-format mechanisms to Cantera YAML input files"),
+        epilog=textwrap.dedent(
+            """
+            Example::
+
+                ck2yaml --input=chem.inp --thermo=therm.dat --transport=tran.dat
+
+            If the **ck2yaml** script is not on your path but the Cantera Python module is,
+            **ck2yaml** can also be invoked by running::
+
+                python -m cantera.ck2yaml --input=chem.inp --thermo=therm.dat --transport=tran.dat
+
+            In both cases, the equal signs in the options are optional.
+            """),
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-p", "--permissive", action="store_true", default=False,
+        help=("This option allows certain recoverable parsing errors (for example, "
+              "duplicate thermo or transport data) to be ignored."))
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", default=False,
+        help="Suppresses warning messages, such as those about duplicate thermo data.")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", default=False,
+        help="Show additional logging output, such as messages about unused species")
+    parser.add_argument(
+        "--input", default="",
+        help=("Chemkin-format chemistry input file, containing a list of all the "
+              "element names that are used, a list of all the species names, and a "
+              "list of all the reactions to be considered between the species. This "
+              "file can also optionally contain species THERMO and TRANSPORT data."))
+    parser.add_argument(
+        "--thermo", default="",
+        help=("If the INPUT file does not contain THERMO data, a separate file "
+              "containing thermodynamic information must be specified. If no INPUT "
+              "file is provided, THERMO data are converted to a YAML file containing "
+              "only species definitions (which can be referenced from phase "
+              "definitions in other input files)."))
+    parser.add_argument(
+        "--transport", default="",
+        help=("If the INPUT file does not contain TRANSPORT data, a separate file "
+              "containing transport information may be specified. Transport data are "
+              "required for Cantera capabilities that use transport properties such "
+              "as one-dimensional flame calculations; they are usually not required "
+              "for zero-dimensional reactor simulations."))
+    parser.add_argument(
+        "--surface", default="",
+        help=("For surface mechanisms, the SURFACE file defines surface species "
+              "and reactions occurring on the surface. Gas phase species and reactions "
+              "should be defined in the INPUT file."))
+    parser.add_argument(
+        "--extra", default="",
+        help=("This option specifies a YAML file which can be used to add to the "
+              "**description** field or to define custom fields that are included in "
+              "the YAML output."))
+    parser.add_argument(
+        "--name", default="gas",
+        help=("This specifies the name of the phase in the resulting YAML file. The "
+              "default is **gas**."))
+    parser.add_argument(
+        "--single-intermediate-temperature", action="store_true", default=False,
+        help=("This option should be used with thermo data where only a single break "
+              "temperature is used and the last value in the first line of each "
+              "species thermo entry is the molecular weight instead."))
+    parser.add_argument(
+        "--no-validate", action="store_true", default=False,
+        help=("Disables the validation step, where the YAML mechanism is imported in "
+              "Cantera to check for errors such as unlabeled duplicate reactions and "
+              "discontinuous thermodynamic data."))
+    parser.add_argument(
+        "--output", default="",
+        help=("Specifies the OUTPUT file name. By default, the output file name is the "
+              "input file name with the extension changed to **.yaml**."))
+
+    return parser
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main()

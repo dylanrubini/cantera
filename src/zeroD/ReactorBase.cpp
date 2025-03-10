@@ -7,24 +7,65 @@
 #include "cantera/zeroD/FlowDevice.h"
 #include "cantera/zeroD/ReactorNet.h"
 #include "cantera/zeroD/ReactorSurface.h"
+#include "cantera/base/Solution.h"
 #include "cantera/thermo/ThermoPhase.h"
 
-using namespace std;
 namespace Cantera
 {
 
-ReactorBase::ReactorBase(const string& name) : m_nsp(0),
-    m_thermo(0),
-    m_vol(1.0),
-    m_enthalpy(0.0),
-    m_intEnergy(0.0),
-    m_pressure(0.0),
-    m_net(0)
+ReactorBase::ReactorBase(const string& name) : m_name(name)
 {
-    m_name = name;
 }
 
-void ReactorBase::setThermoMgr(ThermoPhase& thermo)
+ReactorBase::ReactorBase(shared_ptr<Solution> sol, const string& name)
+    : ReactorBase(name)
+{
+    if (!sol || !(sol->thermo())) {
+        throw CanteraError("ReactorBase::ReactorBase",
+                           "Missing or incomplete Solution object.");
+    }
+    setSolution(sol);
+}
+
+ReactorBase::~ReactorBase()
+{
+    if (m_solution) {
+        m_solution->thermo()->removeSpeciesLock();
+    }
+}
+
+bool ReactorBase::setDefaultName(map<string, int>& counts)
+{
+    if (m_defaultNameSet) {
+        return false;
+    }
+    m_defaultNameSet = true;
+    if (m_name == "(none)" || m_name == "") {
+        m_name = fmt::format("{}_{}", type(), counts[type()]);
+    }
+    counts[type()]++;
+    return true;
+}
+
+void ReactorBase::setSolution(shared_ptr<Solution> sol) {
+    if (!sol || !(sol->thermo())) {
+        throw CanteraError("ReactorBase::setSolution",
+            "Missing or incomplete Solution object.");
+    }
+    if (m_solution) {
+        m_solution->thermo()->removeSpeciesLock();
+    }
+    m_solution = sol;
+    setThermo(*sol->thermo());
+    try {
+        setKinetics(*sol->kinetics());
+    } catch (NotImplementedError&) {
+        // kinetics not used (example: Reservoir)
+    }
+    m_solution->thermo()->addSpeciesLock();
+}
+
+void ReactorBase::setThermo(ThermoPhase& thermo)
 {
     m_thermo = &thermo;
     m_nsp = m_thermo->nSpecies();
@@ -105,9 +146,9 @@ void ReactorBase::setNetwork(ReactorNet* net)
     m_net = net;
 }
 
-doublereal ReactorBase::residenceTime()
+double ReactorBase::residenceTime()
 {
-    doublereal mout = 0.0;
+    double mout = 0.0;
     for (size_t i = 0; i < m_outlet.size(); i++) {
         mout += m_outlet[i]->massFlowRate();
     }

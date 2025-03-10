@@ -25,32 +25,20 @@ namespace Cantera
  *     J(i,j) = data_start + index
  *         i = row
  *         j = column
+ *
+ * @ingroup matrices
  */
 class Array2D
 {
 public:
-    //! Type definition for the iterator class that is can be used by Array2D
-    //! types.
-    /*!
-     * This is just equal to vector_fp::iterator.
-     */
-    typedef vector_fp::iterator iterator;
-
-    //! Type definition for the const_iterator class that is can be used by
-    //! Array2D types.
-    /*!
-     * This is just equal to vector_fp::const_iterator.
-     */
-    typedef vector_fp::const_iterator const_iterator;
-
     /**
      * Default constructor. Create an empty array.
      */
-    Array2D();
+    Array2D() = default;
 
     //! Constructor.
     /*!
-     * Create an \c m by \c n array, and initialize all elements to \c v.
+     * Create an @c m by @c n array, and initialize all elements to @c v.
      *
      * @param m   Number of rows
      * @param n   Number of columns
@@ -60,8 +48,8 @@ public:
 
     //! Constructor.
     /*!
-     * Create an \c m by \c n array, initialized with the contents of the array
-     * \c values.
+     * Create an @c m by @c n array, initialized with the contents of the array
+     * @c values.
      *
      * @param m   Number of rows
      * @param n   Number of columns
@@ -72,7 +60,7 @@ public:
 
     Array2D(const Array2D& y);
 
-    virtual ~Array2D() {}
+    virtual ~Array2D() = default;
 
     Array2D& operator=(const Array2D& y);
 
@@ -82,7 +70,7 @@ public:
      * @param m  This is the number of columns in the new matrix
      * @param v  Default fill value -> defaults to zero.
      */
-    void resize(size_t n, size_t m, double v=0.0);
+    virtual void resize(size_t n, size_t m, double v=0.0);
 
     //! Append a column to the existing matrix using a std vector
     /*!
@@ -91,7 +79,7 @@ public:
      * @param c  This vector is the entries in the column to be added. It must
      *           have a length equal to m_nrows or greater.
      */
-    void appendColumn(const vector_fp& c);
+    void appendColumn(const vector<double>& c);
 
     //! Append a column to the existing matrix
     /*!
@@ -146,7 +134,7 @@ public:
      *  @param  j            column index.
      *  @returns a reference to A(i,j) which may be assigned.
      */
-    doublereal& operator()(size_t i, size_t j) {
+    double& operator()(size_t i, size_t j) {
         return value(i,j);
     }
 
@@ -156,7 +144,7 @@ public:
      * @param j   Index for the column to be retrieved.
      * @returns the value of the matrix entry
      */
-    doublereal operator()(size_t i, size_t j) const {
+    double operator()(size_t i, size_t j) const {
         return value(i,j);
     }
 
@@ -169,7 +157,7 @@ public:
      * @param j   The column index
      * @returns a changeable reference to the matrix entry
      */
-    doublereal& value(size_t i, size_t j) {
+    double& value(size_t i, size_t j) {
         return m_data[m_nrows*j + i];
     }
 
@@ -180,7 +168,7 @@ public:
      * @param i   The row index
      * @param j   The column index
      */
-    doublereal value(size_t i, size_t j) const {
+    double value(size_t i, size_t j) const {
         return m_data[m_nrows*j + i];
     }
 
@@ -194,35 +182,17 @@ public:
         return m_ncols;
     }
 
-    //! Return an iterator pointing to the first element
-    iterator begin() {
-        return m_data.begin();
-    }
-
-    //! Return an iterator pointing past the last element
-    iterator end() {
-        return m_data.end();
-    }
-
-    //! Return a const iterator pointing to the first element
-    const_iterator begin() const {
-        return m_data.begin();
-    }
-
-    //! Return a const iterator pointing to past the last element
-    const_iterator end() const {
-        return m_data.end();
-    }
-
     //! Return a reference to the data vector
-    vector_fp& data() {
+    vector<double>& data() {
         return m_data;
     }
 
     //! Return a const reference to the data vector
-    const vector_fp& data() const {
+    const vector<double>& data() const {
         return m_data;
     }
+
+    void operator*=(double a);
 
     //! Return a pointer to the top of column j, columns are contiguous
     //! in memory
@@ -230,7 +200,7 @@ public:
      * @param j   Value of the column
      * @returns a pointer to the top of the column
      */
-    doublereal* ptrColumn(size_t j) {
+    double* ptrColumn(size_t j) {
         return &m_data[m_nrows*j];
     }
 
@@ -240,19 +210,19 @@ public:
      * @param j   Value of the column
      * @returns a const pointer to the top of the column
      */
-    const doublereal* ptrColumn(size_t j) const {
+    const double* ptrColumn(size_t j) const {
         return &m_data[m_nrows*j];
     }
 
 protected:
     //! Data stored in a single array
-    vector_fp m_data;
+    vector<double> m_data;
 
     //! Number of rows
-    size_t m_nrows;
+    size_t m_nrows = 0;
 
     //! Number of columns
-    size_t m_ncols;
+    size_t m_ncols = 0;
 };
 
 //! Output the current contents of the Array2D object

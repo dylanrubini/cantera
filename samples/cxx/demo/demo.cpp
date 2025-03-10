@@ -1,13 +1,12 @@
-/*!
- * @file demo.cpp
- *
- * Property Calculation Demo
+/*
+ * Property calculation demo
+ * =========================
  *
  * This demonstration program builds an object representing a reacting gas
  * mixture, and uses it to compute thermodynamic properties, chemical
  * equilibrium, and transport properties.
  *
- * Keywords: tutorial, thermodynamics, equilibrium, transport
+ * .. tags:: C++, tutorial, thermodynamics, equilibrium, transport
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -19,6 +18,7 @@
 // to include core headers directly, use the format "cantera/module/*.h".
 
 #include "cantera/core.h"
+#include "cantera/kinetics/Reaction.h"
 #include "cantera/base/global.h" // provides Cantera::writelog
 #include <iostream>
 
@@ -74,9 +74,9 @@ void demoprog()
 
     auto kin = sol->kinetics();
     int irxns = kin->nReactions();
-    vector_fp qf(irxns);
-    vector_fp qr(irxns);
-    vector_fp q(irxns);
+    vector<double> qf(irxns);
+    vector<double> qr(irxns);
+    vector<double> q(irxns);
 
     // since the gas has been set to an equilibrium state, the forward
     // and reverse rates of progress should be equal for all
@@ -87,8 +87,9 @@ void demoprog()
 
     writelog("\n\n");
     for (int i = 0; i < irxns; i++) {
+        const auto& rxn = kin->reaction(i);
         writelog("{:30s} {:14.5g} {:14.5g} {:14.5g}  kmol/m3/s\n",
-               kin->reactionString(i), qf[i], qr[i], q[i]);
+               rxn->equation(), qf[i], qr[i], q[i]);
     }
 
 
@@ -105,7 +106,7 @@ void demoprog()
     writelog("Thermal conductivity: {:14.5g} W/m/K\n", tr->thermalConductivity());
 
     int nsp = gas->nSpecies();
-    vector_fp diff(nsp);
+    vector<double> diff(nsp);
     tr->getMixDiffCoeffs(&diff[0]);
     int k;
     writelog("\n\n{:20s}  {:21s}\n", "Species", "Diffusion Coefficient");
@@ -120,7 +121,9 @@ int main()
 {
     try {
         demoprog();
+        return 0;
     } catch (CanteraError& err) {
         std::cout << err.what() << std::endl;
+        return -1;
     }
 }

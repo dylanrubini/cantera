@@ -8,13 +8,8 @@ from .solutionbase cimport *
 from .thermo cimport *
 from ._utils cimport *
 
-# Need a pure-python class to store weakrefs to
-class _WeakrefProxy:
-    pass
-
 cdef class Mixture:
     """
-
     Class Mixture represents mixtures of one or more phases of matter.  To
     construct a mixture, supply a list of phases to the constructor, each
     paired with the number of moles for that phase::
@@ -34,6 +29,17 @@ cdef class Mixture:
     this phase. Mixture objects, on the other hand, represent the full
     extensive state.
 
+    .. caution::
+       The Mixture class exists mainly for the purpose of providing input for multiphase
+       equilibrium calculations. Its functionality for modifying the state of the
+       mixture and computing properties is quite limited. Mixture objects cannot be used
+       in conjunction with reactor networks.
+
+       Furthermore, the multiphase equilibrium solvers currently have a number of
+       problems that lead to solver failures or incorrect results for some inputs. See
+       the `list of issues on GitHub <https://github.com/Cantera/cantera/issues?q=is%3Aopen+is%3Aissue+label%3AEquilibrium>`_
+       for more information.
+
     Mixture objects are 'lightweight' in the sense that they do not store
     parameters needed to compute thermodynamic or kinetic properties of the
     phases. These are contained in the ('heavyweight') phase objects. Multiple
@@ -44,7 +50,6 @@ cdef class Mixture:
     def __cinit__(self, phases):
         self.mix = new CxxMultiPhase()
         self._phases = []
-        self._weakref_proxy = _WeakrefProxy()
 
         cdef _SolutionBase phase
         if isinstance(phases[0], _SolutionBase):
@@ -52,7 +57,7 @@ cdef class Mixture:
             phases = [(p, 1 if i == 0 else 0) for i,p in enumerate(phases)]
 
         for phase,moles in phases:
-            phase._references[self._weakref_proxy] = True
+            # Block species from being added to the phase as long as this object exists
             self.mix.addPhase(phase.thermo, moles)
             self._phases.append(phase)
 

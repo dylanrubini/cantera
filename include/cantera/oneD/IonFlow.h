@@ -6,7 +6,7 @@
 #ifndef CT_IONFLOW_H
 #define CT_IONFLOW_H
 
-#include "cantera/oneD/StFlow.h"
+#include "cantera/oneD/Flow1D.h"
 
 namespace Cantera
 {
@@ -21,102 +21,147 @@ namespace Cantera
  * The second stage evaluates drift flux from electric field calculated from
  * Poisson's equation, which is solved together with other equations. Poisson's
  * equation is coupled because the total charge densities depends on the species'
- * concentration.
- * Reference:
- * Pederson, Timothy, and R. C. Brown.
- * "Simulation of electric field effects in premixed methane flames."
- * Combustion and Flames 94.4(1993): 433-448.
- * @ingroup onedim
+ * concentration. See Pedersen and Brown @cite pedersen1993 for details.
+ *
+ * @ingroup flowGroup
  */
-class IonFlow : public StFlow
+class IonFlow : public Flow1D
 {
 public:
+    //! Create a new IonFlow domain.
+    //! @param ph  Object representing the gas phase. This object will be used
+    //!     to evaluate all thermodynamic, kinetic, and transport properties.
+    //! @param nsp  Number of species.
+    //! @param points  Initial number of grid points
     IonFlow(ThermoPhase* ph = 0, size_t nsp = 1, size_t points = 1);
 
-    IonFlow(shared_ptr<Solution> sol, size_t nsp = 1, size_t points = 1);
+    //! Create a new IonFlow domain.
+    //! @param sol  Solution object used to evaluate all thermodynamic, kinetic, and
+    //!     transport properties
+    //! @param id  name of flow domain
+    //! @param points  initial number of grid points
+    IonFlow(shared_ptr<Solution> sol, const string& id="", size_t points = 1);
 
-    //! set the solving stage
-    virtual void setSolvingStage(const size_t phase);
+    string domainType() const override;
 
-    virtual void resize(size_t components, size_t points);
-    virtual bool componentActive(size_t n) const;
+    size_t getSolvingStage() const override {
+        return m_stage;
+    }
+    void setSolvingStage(const size_t stage) override;
 
-    virtual void _finalize(const double* x);
-    //! set to solve electric field on a point
-    void solveElectricField(size_t j=npos);
-    //! set to fix voltage on a point
-    void fixElectricField(size_t j=npos);
-    bool doElectricField(size_t j) {
+    void resize(size_t components, size_t points) override;
+    bool componentActive(size_t n) const override;
+
+    void _finalize(const double* x) override;
+
+    void solveElectricField(size_t j=npos) override;
+    void fixElectricField(size_t j=npos) override;
+    bool doElectricField(size_t j) const override {
         return m_do_electric_field[j];
     }
 
     /**
      * Sometimes it is desired to carry out the simulation using a specified
      * electron transport profile, rather than assuming it as a constant (0.4).
-     * Reference:
-     * Bisetti, Fabrizio, and Mbark El Morsli.
-     * "Calculation and analysis of the mobility and diffusion coefficient
-     * of thermal electrons in methane/air premixed flames."
-     * Combustion and flame 159.12 (2012): 3518-3521.
-     * If in the future the class GasTranport is improved, this method may
-     * be discard. This method specifies this profile.
-    */
-    void setElectronTransport(vector_fp& tfix,
-                              vector_fp& diff_e,
-                              vector_fp& mobi_e);
+     * See Bisetti and El Morsli @cite bisetti2012.
+     * If in the future the class GasTransport is improved, this method may
+     * be discarded. This method specifies this profile.
+     */
+    void setElectronTransport(vector<double>& tfix,
+                              vector<double>& diff_e,
+                              vector<double>& mobi_e);
 
 protected:
-    /*!
-     * This function overloads the original function. The residual function
-     * of electric field is added.
+
+    /**
+     * Evaluate the electric field equation residual by Gauss's law.
+     *
+     * The function calculates the electric field equation as:
+     * @f[
+     *    \frac{dE}{dz} = \frac{e}{\varepsilon_0} \sum (q_k \cdot n_k)
+     * @f]
+     *
+     * and
+     *
+     * @f[
+     *    E = -\frac{dV}{dz}
+     * @f]
+     *
+     * The electric field equation is based on Gauss's law,
+     * accounting for charge density and permittivity of free space
+     * (@f$ \varepsilon_0 @f$).
+     * The zero electric field is first evaluated and if the solution state is 2,
+     * then the alternative form the electric field equation is evaluated.
+     *
+     * For argument explanation, see evalContinuity() base class.
      */
-    virtual void evalResidual(double* x, double* rsd, int* diag,
-                              double rdt, size_t jmin, size_t jmax);
-    virtual void updateTransport(double* x, size_t j0, size_t j1);
-    virtual void updateDiffFluxes(const double* x, size_t j0, size_t j1);
+    void evalElectricField(double* x, double* rsd, int* diag,
+                           double rdt, size_t jmin, size_t jmax) override;
+
+    /**
+     * Evaluate the species equations' residual. This function overloads the
+     * original species function.
+     *
+     * A Neumann boundary for the charged species at the
+     * left boundary is added, and the default boundary condition from the overloaded
+     * method is left the same for the right boundary.
+     *
+     * For argument explanation, see evalContinuity() base class.
+     */
+    void evalSpecies(double* x, double* rsd, int* diag,
+                     double rdt, size_t jmin, size_t jmax) override;
+    void updateTransport(double* x, size_t j0, size_t j1) override;
+    void updateDiffFluxes(const double* x, size_t j0, size_t j1) override;
     //! Solving phase one: the fluxes of charged species are turned off
-    virtual void frozenIonMethod(const double* x, size_t j0, size_t j1);
+    void frozenIonMethod(const double* x, size_t j0, size_t j1);
     //! Solving phase two: the electric field equation is added coupled
     //! by the electrical drift
-    virtual void electricFieldMethod(const double* x, size_t j0, size_t j1);
+    void electricFieldMethod(const double* x, size_t j0, size_t j1);
     //! flag for solving electric field or not
-    std::vector<bool> m_do_electric_field;
+    vector<bool> m_do_electric_field;
 
     //! flag for importing transport of electron
-    bool m_import_electron_transport;
+    bool m_import_electron_transport = false;
 
     //! electrical properties
-    vector_fp m_speciesCharge;
+    vector<double> m_speciesCharge;
 
     //! index of species with charges
-    std::vector<size_t> m_kCharge;
+    vector<size_t> m_kCharge;
 
     //! index of neutral species
-    std::vector<size_t> m_kNeutral;
+    vector<size_t> m_kNeutral;
 
-    //! coefficients of polynomial fitting of fixed electron transport profile
-    vector_fp m_mobi_e_fix;
-    vector_fp m_diff_e_fix;
+    //! Coefficients of polynomial fit for electron mobility as a function of
+    //! temperature.
+    //! @see setElectronTransport
+    vector<double> m_mobi_e_fix;
+
+    //! Coefficients of polynomial fit for electron diffusivity as a function of
+    //! temperature.
+    //! @see setElectronTransport
+    vector<double> m_diff_e_fix;
 
     //! mobility
-    vector_fp m_mobility;
+    vector<double> m_mobility;
 
     //! solving stage
-    size_t m_stage;
+    size_t m_stage = 1;
 
     //! index of electron
-    size_t m_kElectron;
+    size_t m_kElectron = npos;
 
-    //! electric field
+    //! electric field [V/m]
     double E(const double* x, size_t j) const {
         return x[index(c_offset_E, j)];
     }
 
+    //! Axial gradient of the electric field [V/m²]
     double dEdz(const double* x, size_t j) const {
         return (E(x,j)-E(x,j-1))/(z(j)-z(j-1));
     }
 
-    //! number density
+    //! number density [molecules/m³]
     double ND(const double* x, size_t k, size_t j) const {
         return Avogadro * m_rho[j] * Y(x,k,j) / m_wt[k];
     }

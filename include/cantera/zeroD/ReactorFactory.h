@@ -17,32 +17,14 @@ namespace Cantera
 //! This class is mainly used via the newReactor() function, for example:
 //!
 //! ```cpp
-//!     unique_ptr<ReactorBase> r1(newReactor("IdealGasReactor"));
+//!     shared_ptr<ReactorBase> r1 = newReactor("IdealGasReactor");
 //! ```
-//!
-//! @ingroup ZeroD
-class ReactorFactory : public Factory<ReactorBase>
+class ReactorFactory : public Factory<ReactorBase, shared_ptr<Solution>, const string&>
 {
 public:
-    static ReactorFactory* factory() {
-        std::unique_lock<std::mutex> lock(reactor_mutex);
-        if (!s_factory) {
-            s_factory = new ReactorFactory;
-        }
-        return s_factory;
-    }
+    static ReactorFactory* factory();
 
-    virtual void deleteFactory() {
-        std::unique_lock<std::mutex> lock(reactor_mutex);
-        delete s_factory;
-        s_factory = 0;
-    }
-
-    //! Create a new reactor by type name.
-    /*!
-     * @param reactorType the type to be created.
-     */
-    virtual ReactorBase* newReactor(const std::string& reactorType);
+    void deleteFactory() override;
 
 private:
     static ReactorFactory* s_factory;
@@ -50,12 +32,24 @@ private:
     ReactorFactory();
 };
 
-//! Create a Reactor object of the specified type
-//! @ingroup ZeroD
-inline ReactorBase* newReactor(const std::string& model)
-{
-    return ReactorFactory::factory()->newReactor(model);
-}
+//! @defgroup reactorGroup Reactors
+//! Zero-dimensional objects representing stirred reactors.
+//! Reactors simulate time-dependent behavior considering gas-phase chemistry.
+//! Reactor objects should be instantiated via the newReactor() function, for example:
+//!
+//! ```cpp
+//!     shared_ptr<ReactorBase> r1 = newReactor("IdealGasReactor");
+//! ```
+//! @ingroup zerodGroup
+//! @{
+
+//! Create a Reactor object of the specified type and contents
+//! @since Starting in %Cantera 3.1, this method requires a valid Solution object and
+//!     returns a `shared_ptr<ReactorBase>` instead of a `ReactorBase*`.
+shared_ptr<ReactorBase> newReactor(
+    const string& model, shared_ptr<Solution> contents, const string& name="(none)");
+
+//! @}
 
 }
 

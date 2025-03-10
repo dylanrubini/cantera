@@ -23,43 +23,53 @@ classifiers =
     Programming Language :: Cython
     Programming Language :: Fortran
     Programming Language :: Python :: 3 :: Only
-    Programming Language :: Python :: 3.7
-    Programming Language :: Python :: 3.8
-    Programming Language :: Python :: 3.9
     Programming Language :: Python :: 3.10
+    Programming Language :: Python :: 3.11
+    Programming Language :: Python :: 3.12
+    Programming Language :: Python :: 3.13
     Programming Language :: Python :: Implementation :: CPython
     Topic :: Scientific/Engineering :: Chemistry
     Topic :: Scientific/Engineering :: Physics
 project_urls =
-    Documentation = https://cantera.org/documentation
+    Documentation = https://cantera.org/stable/reference
     Funding = https://numfocus.org/donate-to-cantera
     Source = https://github.com/Cantera/cantera
     Tracker = https://github.com/Cantera/cantera/issues
 
 [options]
 zip_safe = False
-include_package_data = True
 install_requires =
-    numpy >= 1.12.0
-    ruamel.yaml >= 0.15.34
-    typing_extensions >=4.2.0,<4.3.0;python_version<'3.8'
-python_requires = >=@py_min_ver_str@
+    numpy @numpy_version_spec_str@
+    ruamel.yaml @ruamel_version_spec_str@
+python_requires = @py_requires_ver_str@
 packages =
     cantera
+    cantera.data
+    cantera.data.example_data
+    cantera.test
+    cantera.examples
+    cantera.with_units
 
 [options.package_data]
 # The module extension needs to be here since we don't want setuptools to compile
 # the extension, so there are no ``source`` files in the setup.py ``extension`` and
 # we have to treat the module as package data.
-cantera = *.pxd, *@py_module_ext@, test/*.txt, examples/*.txt, data/*.*
+cantera = *.pxd, *.dll, *@py_module_ext@
+cantera.data = *.*
+cantera.data.example_data = *.*
+cantera.test = *.txt
+cantera.examples = *.txt
 
 [options.extras_require]
-hdf5 = h5py
 pandas = pandas
+units =
+    pint
+graphviz = graphviz
 
 [options.entry_points]
 console_scripts =
-    ck2yaml = cantera.ck2yaml:script_entry_point
+    ck2yaml = cantera.ck2yaml:main
     cti2yaml = cantera.cti2yaml:main
     ctml2yaml = cantera.ctml2yaml:main
-	yaml2ck = cantera.yaml2ck:main
+    yaml2ck = cantera.yaml2ck:main
+    lxcat2yaml = cantera.lxcat2yaml:main

@@ -17,20 +17,10 @@ class PDSSFactory : public Factory<PDSS>
 {
 public:
     //! Static function that creates a static instance of the factory.
-    static PDSSFactory* factory() {
-        std::unique_lock<std::mutex> lock(thermo_mutex);
-        if (!s_factory) {
-            s_factory = new PDSSFactory;
-        }
-        return s_factory;
-    }
+    static PDSSFactory* factory();
 
     //! delete the static instance of this factory
-    virtual void deleteFactory() {
-        std::unique_lock<std::mutex> lock(thermo_mutex);
-        delete s_factory;
-        s_factory = 0;
-    }
+    void deleteFactory() override;
 
     //! Create a new thermodynamic property manager.
     /*!
@@ -39,7 +29,7 @@ public:
      *   Returns NULL if something went wrong. Throws an exception if the string
      *   wasn't matched.
      */
-    virtual PDSS* newPDSS(const std::string& model);
+    PDSS* newPDSS(const string& model);
 
 private:
     //! static member of a single instance
@@ -52,7 +42,7 @@ private:
     static std::mutex thermo_mutex;
 };
 
-PDSS* newPDSS(const std::string& model);
+PDSS* newPDSS(const string& model);
 
 }
 

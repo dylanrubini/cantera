@@ -5,13 +5,12 @@
 // at https://cantera.org/license.txt for license and copyright information.
 
 #include "cantera/zeroD/Wall.h"
+#include "cantera/zeroD/ReactorSurface.h"
 #include "cantera/zeroD/FlowDevice.h"
 #include "cantera/zeroD/ConstPressureMoleReactor.h"
 #include "cantera/base/utilities.h"
 #include "cantera/thermo/SurfPhase.h"
 #include "cantera/kinetics/Kinetics.h"
-
-using namespace std;
 
 namespace Cantera
 {
@@ -64,7 +63,7 @@ void ConstPressureMoleReactor::eval(double time, double* LHS, double* RHS)
 
     m_thermo->restoreState(m_state);
 
-    const vector_fp& imw = m_thermo->inverseMolecularWeights();
+    const vector<double>& imw = m_thermo->inverseMolecularWeights();
 
     if (m_chem) {
         m_kin->getNetProductionRates(&m_wdot[0]); // "omega dot"
@@ -120,7 +119,7 @@ size_t ConstPressureMoleReactor::componentIndex(const string& nm) const
     }
 }
 
-std::string ConstPressureMoleReactor::componentName(size_t k) {
+string ConstPressureMoleReactor::componentName(size_t k) {
     if (k == 0) {
         return "enthalpy";
     } else if (k >= m_sidx && k < neq()) {

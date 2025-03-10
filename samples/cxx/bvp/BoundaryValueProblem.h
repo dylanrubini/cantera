@@ -1,7 +1,11 @@
-/**
- *  @file BoundaryValueProblem.h
- *  Simplified interface to the capabilities provided by Cantera to
- *  solve boundary value problems.
+/*
+ * Class `BoundaryValueProblem`
+ * ============================
+ *
+ * Simplified interface to the capabilities provided by Cantera to solve boundary value
+ * problems. See :doc:`blasius.cpp <blasius>` for an example using this class.
+ *
+ * .. tags:: C++, user-defined model
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -55,7 +59,9 @@ public:
  * Class BoundaryValueProblem derives from Cantera's Domain1D
  * class.
  */
-class BoundaryValueProblem : public Cantera::Domain1D
+class BoundaryValueProblem :
+    public Cantera::Domain1D,
+    public std::enable_shared_from_this<BoundaryValueProblem>
 {
 
 public:
@@ -73,13 +79,17 @@ public:
         m_left(0), m_right(0), m_sim(0)
     {
         // Create the initial uniform grid
-        Cantera::vector_fp z(np);
+        Cantera::vector<double> z(np);
         int iz;
         for (iz = 0; iz < np; iz++) {
             z[iz] = zmin + iz*(zmax - zmin)/(np-1);
         }
         setupGrid(np, z.data());
         resize(nv, np);
+
+        // Add dummy terminator domains on either side of this one.
+        m_left = std::make_shared<Cantera::Empty1D>();
+        m_right = std::make_shared<Cantera::Empty1D>();
     }
 
     /**
@@ -93,20 +103,14 @@ public:
     {
         setupGrid(np, z);
         resize(nv, np);
+
+        // Add dummy terminator domains on either side of this one.
+        m_left = std::make_shared<Cantera::Empty1D>();
+        m_right = std::make_shared<Cantera::Empty1D>();
     }
 
     /**
-     * Destructor. Deletes the dummy terminator domains, and the
-     * solver.
-     */
-    virtual ~BoundaryValueProblem() {
-        delete m_left;
-        delete m_right;
-        delete m_sim;
-    }
-
-    /**
-     *  Set parameters and options for solution component \a n.
+     *  Set parameters and options for solution component @e n.
      *  This method should be invoked for each solution component
      *  before calling 'solve'. The parameter values should first
      *  be set by creating an instance of class Component, and
@@ -116,9 +120,6 @@ public:
      *  @param c Component parameter values
      */
     void setComponent(size_t n, Component& c) {
-        if (m_sim == 0) {
-            start();
-        }
         if (n >= m_nv) {
             throw Cantera::CanteraError("BoundaryValueProblem::setComponent",
                                         "Illegal solution component number");
@@ -143,7 +144,7 @@ public:
      * @param loglevel controls amount of diagnostic output.
      */
     void solve(int loglevel=0) {
-        if (m_sim == 0) {
+        if (!m_sim) {
             start();
         }
         bool refine = true;
@@ -185,19 +186,19 @@ public:
     }
 
     /**
-     * Initial value of solution component \a n at initial grid
-     * point \a j. The default is zero for all components at all
+     * Initial value of solution component @e n at initial grid
+     * point @e j. The default is zero for all components at all
      * grid points. Overload in derived classes to specify other
      * choices for initial values.
      */
-    virtual double initialValue(size_t n, size_t j) {
+    double initialValue(size_t n, size_t j) override {
         return 0.0;
     }
 
 protected:
-    Cantera::Domain1D* m_left; ///< dummy terminator
-    Cantera::Domain1D* m_right; ///< dummy terminator
-    Cantera::Sim1D* m_sim; ///< controller for solution
+    std::shared_ptr<Cantera::Domain1D> m_left; ///< dummy terminator
+    std::shared_ptr<Cantera::Domain1D> m_right; ///< dummy terminator
+    std::shared_ptr<Cantera::Sim1D> m_sim; ///< controller for solution
 
     /**
      * Set up the problem. Creates the solver instance, and sets
@@ -206,14 +207,13 @@ protected:
      * derived classes.
      */
     void start() {
-        // Add dummy terminator domains on either side of this one.
-        m_left = new Cantera::Empty1D;
-        m_right = new Cantera::Empty1D;
-        std::vector<Cantera::Domain1D*> domains { m_left, this, m_right };
+        std::vector<std::shared_ptr<Cantera::Domain1D>> domains {
+            m_left, shared_from_this(), m_right
+        };
 
         // create the Sim1D instance that will control the
         // solution process
-        m_sim = new Cantera::Sim1D(domains);
+        m_sim = std::make_shared<Cantera::Sim1D>(domains);
 
         // set default grid refinement parameters
         m_sim->setRefineCriteria(1, max_grid_ratio, max_delta,
@@ -263,7 +263,7 @@ protected:
     }
 
     /**
-     * First derivative of component \a n at point \a j. The derivative
+     * First derivative of component @e n at point @e j. The derivative
      * is formed to the right of point j, using values at point j
      * and point j + 1.
      */
@@ -272,7 +272,7 @@ protected:
     }
 
     /**
-     * First derivative of component \a n at point \a j. The derivative
+     * First derivative of component @e n at point @e j. The derivative
      * is formed to the left of point j, using values at point j
      * and point j - 1.
      */

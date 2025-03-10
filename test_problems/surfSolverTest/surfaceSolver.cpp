@@ -77,7 +77,7 @@ void printBulk(ostream& oooo,
          << "   (kmol/m^3)                   (kmol/m^2/s) " << endl;
     double sum = 0.0;
     double Wsum = 0.0;
-    const vector_fp& molecW = bulkPhaseTP->molecularWeights();
+    const vector<double>& molecW = bulkPhaseTP->molecularWeights();
     size_t nspBulk = bulkPhaseTP->nSpecies();
     for (size_t k = 0; k < nspBulk; k++) {
         kstart = iKin_ptr->kineticsSpeciesIndex(k, iPhase);
@@ -132,9 +132,6 @@ void printSurf(ostream& oooo,
 
 int main(int argc, char** argv)
 {
-#if defined(_MSC_VER) && _MSC_VER < 1900
-    _set_output_format(_TWO_DIGIT_EXPONENT);
-#endif
     string infile = "haca2.yaml";
     string gasPhaseName = "gas";
     string bulkParticlePhaseName = "soot";
@@ -197,7 +194,8 @@ int main(int argc, char** argv)
         double tmp = 0.3 * std::min(x[0], x[1]);
         x[0] += tmp;
         x[1] -= tmp;
-        gasTP->setState_PX(pres, x);
+        gasTP->setMoleFractions(x);
+        gasTP->setPressure(pres);
 
         iKin_ptr->solvePseudoSteadyStateProblem();
         iKin_ptr->getNetProductionRates(src);

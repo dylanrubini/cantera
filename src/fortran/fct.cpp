@@ -12,11 +12,12 @@
 
 // Cantera includes
 #include "cantera/kinetics/KineticsFactory.h"
+#include "cantera/kinetics/Reaction.h"
 #include "cantera/transport/TransportFactory.h"
 #include "cantera/thermo/ThermoFactory.h"
 #include "cantera/base/NoExitLogger.h"
 #include "cantera/base/stringUtils.h"
-#include "clib/Cabinet.h"
+#include "clib/clib_utils.h"
 #include "cantera/kinetics/InterfaceKinetics.h"
 
 #include "cantera/clib/clib_defs.h"
@@ -38,30 +39,35 @@ namespace {
 
 ThermoPhase* _fph(const integer* n)
 {
-    return &ThermoCabinet::item(*n);
+    return ThermoCabinet::at(*n).get();
 }
 
 static Kinetics* _fkin(const integer* n)
 {
-    return &KineticsCabinet::item(*n);
+    return KineticsCabinet::at(*n).get();
 }
 
 ThermoPhase* _fth(const integer* n)
 {
-    return &ThermoCabinet::item(*n);
+    return ThermoCabinet::at(*n).get();
+}
+
+shared_ptr<ThermoPhase> _fthermo(const integer* n)
+{
+    return ThermoCabinet::at(*n);
 }
 
 Transport* _ftrans(const integer* n)
 {
-    return &TransportCabinet::item(*n);
+    return TransportCabinet::at(*n).get();
 }
 
 } // unnamed namespace
 
-std::string f2string(const char* s, ftnlen n)
+string f2string(const char* s, ftnlen n)
 {
     int k;
-    std::string ss = "";
+    string ss = "";
     for (k = 0; k < n; k++) {
         if (s[k] == '\0') {
             break;
@@ -79,8 +85,8 @@ extern "C" {
     status_t cantera_error_(const char* proc, const char* msg,
                             ftnlen proclen, ftnlen msglen)
     {
-        std::string sproc = f2string(proc, proclen);
-        std::string smsg = f2string(msg, msglen);
+        string sproc = f2string(proc, proclen);
+        string smsg = f2string(msg, msglen);
         throw CanteraError(sproc, smsg);
         return -1;
     }
@@ -96,7 +102,7 @@ extern "C" {
                             ftnlen lennm)
     {
         try {
-            std::string pnm = _fph(n)->name();
+            string pnm = _fph(n)->name();
             int lout = std::min(lennm, (int) pnm.size());
             std::copy(pnm.c_str(), pnm.c_str() + lout, nm);
             for (int nn = lout; nn < lennm; nn++) {
@@ -185,7 +191,7 @@ extern "C" {
     integer phase_elementindex_(const integer* n, char* nm, ftnlen lennm)
     {
         try {
-            std::string elnm = f2string(nm, lennm);
+            string elnm = f2string(nm, lennm);
             return _fph(n)->elementIndex(elnm) + 1;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -195,7 +201,7 @@ extern "C" {
     integer phase_speciesindex_(const integer* n, char* nm, ftnlen lennm)
     {
         try {
-            std::string spnm = f2string(nm, lennm);
+            string spnm = f2string(nm, lennm);
             return _fph(n)->speciesIndex(spnm) + 1;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -298,7 +304,7 @@ extern "C" {
     {
         try {
             ThermoPhase* p = _fph(n);
-            const vector_fp& wt = p->atomicWeights();
+            const vector<double>& wt = p->atomicWeights();
             copy(wt.begin(), wt.end(), atw);
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -310,7 +316,7 @@ extern "C" {
     {
         try {
             ThermoPhase* p = _fph(n);
-            const vector_fp& wt = p->molecularWeights();
+            const vector<double>& wt = p->molecularWeights();
             copy(wt.begin(), wt.end(), mw);
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -321,7 +327,7 @@ extern "C" {
     status_t phase_getspeciesname_(const integer* n, integer* k, char* nm, ftnlen lennm)
     {
         try {
-            std::string spnm = _fph(n)->speciesName(*k-1);
+            string spnm = _fph(n)->speciesName(*k-1);
             int lout = std::min(lennm, (int) spnm.size());
             std::copy(spnm.c_str(), spnm.c_str() + lout, nm);
             for (int nn = lout; nn < lennm; nn++) {
@@ -336,7 +342,7 @@ extern "C" {
     status_t phase_getelementname_(const integer* n, integer* m, char* nm, ftnlen lennm)
     {
         try {
-            std::string elnm = _fph(n)->elementName(*m-1);
+            string elnm = _fph(n)->elementName(*m-1);
             int lout = std::min(lennm, (int) elnm.size());
             std::copy(elnm.c_str(), elnm.c_str() + lout, nm);
             for (int nn = lout; nn < lennm; nn++) {
@@ -362,8 +368,8 @@ extern "C" {
     integer th_newfromfile_(char* filename, char* phasename, ftnlen lenf, ftnlen lenp)
     {
         try {
-            ThermoPhase* th = newPhase(f2string(filename, lenf),
-                                    f2string(phasename, lenp));
+            auto th = newThermo(f2string(filename, lenf),
+                                f2string(phasename, lenp));
             return ThermoCabinet::add(th);
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -676,23 +682,22 @@ extern "C" {
                              const integer* neighbor4, ftnlen nlen, ftnlen plen)
     {
         try {
-            std::vector<ThermoPhase*> phases;
-            phases.push_back(_fth(reactingPhase));
+            vector<shared_ptr<ThermoPhase>> phases;
+            phases.push_back(_fthermo(reactingPhase));
             if (*neighbor1 >= 0) {
-                phases.push_back(_fth(neighbor1));
+                phases.push_back(_fthermo(neighbor1));
                 if (*neighbor2 >= 0) {
-                    phases.push_back(_fth(neighbor2));
+                    phases.push_back(_fthermo(neighbor2));
                     if (*neighbor3 >= 0) {
-                        phases.push_back(_fth(neighbor3));
+                        phases.push_back(_fthermo(neighbor3));
                         if (*neighbor4 >= 0) {
-                            phases.push_back(_fth(neighbor4));
+                            phases.push_back(_fthermo(neighbor4));
                         }
                     }
                 }
             }
-            auto kin = newKinetics(phases, f2string(filename, nlen),
-                                   f2string(phasename, plen));
-            return KineticsCabinet::add(kin.release());
+            auto kin = newKinetics(phases, f2string(filename, nlen));
+            return KineticsCabinet::add(kin);
         } catch (...) {
             return handleAllExceptions(999, ERR);
         }
@@ -721,8 +726,7 @@ extern "C" {
                               ftnlen lennm, ftnlen lenph)
     {
         try {
-            return _fkin(n)->kineticsSpeciesIndex(f2string(nm, lennm),
-                                                  f2string(ph, lenph)) + 1;
+            return _fkin(n)->kineticsSpeciesIndex(f2string(nm, lennm)) + 1;
         } catch (...) {
             return handleAllExceptions(-1, ERR);
         }
@@ -787,7 +791,7 @@ extern "C" {
     status_t kin_getreactiontype_(const integer* n, integer* i, char* buf, ftnlen lenbuf)
     {
         try {
-            std::string r = _fkin(n)->reactionType(*i-1);
+            string r = _fkin(n)->reaction(*i-1)->type();
             int lout = std::min(lenbuf, (int) r.size());
             std::copy(r.c_str(), r.c_str() + lout, buf);
             for (int nn = lout; nn < lenbuf; nn++) {
@@ -898,7 +902,7 @@ extern "C" {
     {
         try {
             Kinetics* k = _fkin(n);
-            std::string r = k->reactionString(*i-1);
+            string r = k->reaction(*i-1)->equation();
             int lout = std::min(lenbuf, (int) r.size());
             std::copy(r.c_str(), r.c_str() + lout, buf);
             for (int nn = lout; nn < lenbuf; nn++) {
@@ -924,7 +928,7 @@ extern "C" {
     {
         try {
             Kinetics* k = _fkin(n);
-            if (k->kineticsType() == "Surf" || k->kineticsType() == "Edge") {
+            if (k->kineticsType() == "surface" || k->kineticsType() == "edge") {
                 ((InterfaceKinetics*)k)->advanceCoverages(*tstep);
             } else {
                 throw CanteraError("kin_advanceCoverages",
@@ -942,9 +946,9 @@ extern "C" {
                           integer* loglevel, ftnlen lenmodel)
     {
         try {
-            std::string mstr = f2string(model, lenmodel);
-            ThermoPhase* t = _fth(ith);
-            Transport* tr = newTransportMgr(mstr, t, *loglevel);
+            string mstr = f2string(model, lenmodel);
+            auto t = _fthermo(ith);
+            auto tr = newTransport(t, mstr);
             return TransportCabinet::add(tr);
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -954,8 +958,8 @@ extern "C" {
     integer trans_newdefault_(integer* ith, integer* loglevel, ftnlen lenmodel)
     {
         try {
-            ThermoPhase* t = _fth(ith);
-            Transport* tr = newDefaultTransportMgr(t, *loglevel);
+            auto t = _fthermo(ith);
+            auto tr = newTransport(t, "default");
             return TransportCabinet::add(tr);
         } catch (...) {
             return handleAllExceptions(-1, ERR);
@@ -1049,16 +1053,6 @@ extern "C" {
         }
     }
 
-    status_t trans_setparameters_(const integer* n, integer* type, integer* k, double* d)
-    {
-        try {
-            _ftrans(n)->setParameters(*type, *k, d);
-            return 0;
-        } catch (...) {
-            return handleAllExceptions(-1, ERR);
-        }
-    }
-
     //-------------------- Functions ---------------------------
 
     status_t ctphase_report_(const integer* nth,
@@ -1066,7 +1060,7 @@ extern "C" {
     {
         try {
             bool stherm = (*show_thermo != 0);
-            std::string s = _fth(nth)->report(stherm);
+            string s = _fth(nth)->report(stherm);
             if (int(s.size()) > buflen - 1) {
                 return -(s.size() + 1);
             }
@@ -1083,7 +1077,7 @@ extern "C" {
     status_t ctgetcanteraerror_(char* buf, ftnlen buflen)
     {
         try {
-            std::string e;
+            string e;
             e = Application::Instance()->lastErrorMessage();
             int n = std::min((int) e.size(), buflen-1);
             copy(e.begin(), e.begin() + n, buf);
@@ -1099,7 +1093,7 @@ extern "C" {
     status_t ctaddcanteradirectory_(integer* buflen, char* buf)
     {
         try {
-            addDirectory(std::string(buf));
+            addDirectory(string(buf));
         } catch (...) {
             return handleAllExceptions(-1, ERR);
         }

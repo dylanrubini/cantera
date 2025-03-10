@@ -1,8 +1,5 @@
 /**
  * @file EdgeKinetics.h
- *
- * @ingroup chemkinetics
- * @ingroup electrochem
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -18,17 +15,18 @@ namespace Cantera
 /**
  * Heterogeneous reactions at one-dimensional interfaces between
  * multiple adjacent two-dimensional surfaces.
+ * @ingroup kineticsmgr
  */
 class EdgeKinetics : public InterfaceKinetics
 {
 public:
     //! Constructor
-    EdgeKinetics() : InterfaceKinetics() {
+    EdgeKinetics() {
         m_nDim = 1;
     }
 
-    virtual std::string kineticsType() const {
-        return "Edge";
+    string kineticsType() const override {
+        return "edge";
     }
 };
 }

@@ -1,8 +1,8 @@
 /**
  *  @file BinarySolutionTabulatedThermo.cpp Implementation file for an binary
  *      solution model with tabulated standard state thermodynamic data (see
- *       \ref thermoprops and class
- *       \link Cantera::BinarySolutionTabulatedThermo BinarySolutionTabulatedThermo\endlink).
+ *       @ref thermoprops and class
+ *       @link Cantera::BinarySolutionTabulatedThermo BinarySolutionTabulatedThermo@endlink).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -19,11 +19,8 @@
 namespace Cantera
 {
 
-BinarySolutionTabulatedThermo::BinarySolutionTabulatedThermo(const std::string& inputFile,
-                                                             const std::string& id_)
-    : m_kk_tab(npos)
-    , m_xlast(-1)
-
+BinarySolutionTabulatedThermo::BinarySolutionTabulatedThermo(const string& inputFile,
+                                                             const string& id_)
 {
     initThermoFile(inputFile, id_);
 }
@@ -36,22 +33,24 @@ void BinarySolutionTabulatedThermo::compositionChanged()
 
 void BinarySolutionTabulatedThermo::_updateThermo() const
 {
-    double xnow = moleFraction(m_kk_tab);
-    bool x_changed = (m_xlast != xnow);
+    static const int cacheId = m_cache.getId();
+    CachedScalar cached = m_cache.getScalar(cacheId);
+    bool x_changed = !cached.validate(stateMFNumber());
 
     if (x_changed) {
-        m_h0_tab = interpolate(xnow, m_enthalpy_tab);
-        m_s0_tab = interpolate(xnow, m_entropy_tab);
-        if (xnow == 0) {
+        double x_tab = moleFraction(m_kk_tab);
+        double x_other = moleFraction(1 - m_kk_tab);
+        m_h0_tab = interpolate(x_tab, m_enthalpy_tab);
+        m_s0_tab = interpolate(x_tab, m_entropy_tab);
+        if (x_tab == 0) {
             m_s0_tab = -BigNumber;
-        } else if (xnow == 1) {
+        } else if (x_other == 0) {
             m_s0_tab = BigNumber;
         } else {
-            m_s0_tab += GasConstant*std::log(xnow/(1.0-xnow)) +
+            m_s0_tab += GasConstant*std::log(x_tab / x_other) +
                     GasConstant/Faraday*std::log(standardConcentration(1-m_kk_tab)
                     /standardConcentration(m_kk_tab));
         }
-        m_xlast = xnow;
     }
 
     double tnow = temperature();
@@ -94,11 +93,11 @@ void BinarySolutionTabulatedThermo::initThermo()
                 m_input["tabulated-species"].asString(), name());
         }
         const AnyMap& table = m_input["tabulated-thermo"].as<AnyMap>();
-        vector_fp x = table["mole-fractions"].asVector<double>();
+        vector<double> x = table["mole-fractions"].asVector<double>();
         size_t N = x.size();
-        vector_fp h = table.convertVector("enthalpy", "J/kmol", N);
-        vector_fp s = table.convertVector("entropy", "J/kmol/K", N);
-        vector_fp vmol(N);
+        vector<double> h = table.convertVector("enthalpy", "J/kmol", N);
+        vector<double> s = table.convertVector("entropy", "J/kmol/K", N);
+        vector<double> vmol(N);
         // Check for molar-volume key in tabulatedThermo table,
         // otherwise calculate molar volume from pure species molar volumes
         if (table.hasKey("molar-volume")) {
@@ -111,7 +110,7 @@ void BinarySolutionTabulatedThermo::initThermo()
         }
 
         // Sort the x, h, s, vmol data in the order of increasing x
-        std::vector<std::pair<double,double>> x_h(N), x_s(N), x_vmol(N);
+        vector<pair<double,double>> x_h(N), x_s(N), x_vmol(N);
         for(size_t i = 0; i < N; i++) {
             x_h[i] = {x[i], h[i]};
             x_s[i] = {x[i], s[i]};
@@ -127,8 +126,6 @@ void BinarySolutionTabulatedThermo::initThermo()
         m_entropy_tab.resize(N);
         m_molar_volume_tab.resize(N);
         m_derived_molar_volume_tab.resize(N);
-        m_partial_molar_volume_1_tab.resize(N);
-        m_partial_molar_volume_2_tab.resize(N);
 
         for (size_t i = 0; i < N; i++) {
             m_molefrac_tab[i] = x_h[i].first;
@@ -138,13 +135,6 @@ void BinarySolutionTabulatedThermo::initThermo()
         }
 
         diff(m_molar_volume_tab, m_derived_molar_volume_tab);
-
-        for (size_t i = 0; i < N; i++) {
-            m_partial_molar_volume_1_tab[i] = m_molar_volume_tab[i] +
-                    (1-m_molefrac_tab[i]) * m_derived_molar_volume_tab[i];
-            m_partial_molar_volume_2_tab[i] = m_molar_volume_tab[i] -
-                    m_molefrac_tab[i] * m_derived_molar_volume_tab[i];
-        }
     }
     IdealSolidSolnPhase::initThermo();
 }
@@ -162,11 +152,12 @@ void BinarySolutionTabulatedThermo::getParameters(AnyMap& phaseNode) const
     tabThermo["mole-fractions"] = m_molefrac_tab;
     tabThermo["enthalpy"].setQuantity(m_enthalpy_tab, "J/kmol");
     tabThermo["entropy"].setQuantity(m_entropy_tab, "J/kmol/K");
+    tabThermo["molar-volume"].setQuantity(m_molar_volume_tab, "m^3/kmol");
     phaseNode["tabulated-thermo"] = std::move(tabThermo);
 }
 
 double BinarySolutionTabulatedThermo::interpolate(const double x,
-                                                  const vector_fp& inputData) const
+                                                  const vector<double>& inputData) const
 {
     double c;
     // Check if x is out of bound
@@ -185,8 +176,8 @@ double BinarySolutionTabulatedThermo::interpolate(const double x,
     return c;
 }
 
-void BinarySolutionTabulatedThermo::diff(const vector_fp& inputData,
-                                         vector_fp& derivedData) const
+void BinarySolutionTabulatedThermo::diff(const vector<double>& inputData,
+                                         vector<double>& derivedData) const
 {
     if (inputData.size() > 1) {
         derivedData[0] = (inputData[1] - inputData[0]) /
@@ -207,15 +198,18 @@ void BinarySolutionTabulatedThermo::diff(const vector_fp& inputData,
 
 void BinarySolutionTabulatedThermo::getPartialMolarVolumes(double* vbar) const
 {
-    vbar[m_kk_tab] = interpolate(moleFraction(m_kk_tab), m_partial_molar_volume_1_tab);
-    vbar[1-m_kk_tab] = interpolate(moleFraction(m_kk_tab),
-                                   m_partial_molar_volume_2_tab);
+    std::copy(m_speciesMolarVolume.begin(), m_speciesMolarVolume.end(), vbar);
 }
 
 void BinarySolutionTabulatedThermo::calcDensity()
 {
-    double vmol = interpolate(moleFraction(m_kk_tab), m_molar_volume_tab);
-    double dens = meanMolecularWeight()/vmol;
+    double Xtab = moleFraction(m_kk_tab);
+    double Vm = interpolate(Xtab, m_molar_volume_tab);
+    double dVdX_tab = interpolate(Xtab, m_derived_molar_volume_tab);
+    m_speciesMolarVolume[m_kk_tab] = Vm + (1 - Xtab) * dVdX_tab;
+    m_speciesMolarVolume[1-m_kk_tab] = Vm - Xtab * dVdX_tab;
+
+    double dens = meanMolecularWeight() / Vm;
 
     // Set the density in the parent State object directly, by calling the
     // Phase::assignDensity() function.

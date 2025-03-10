@@ -2,19 +2,18 @@
 # at https://cantera.org/license.txt for license and copyright information.
 
 from math import erf
-from email.utils import formatdate
+from pathlib import Path
 import warnings
 import numpy as np
 
 from ._cantera import *
 from .composite import Solution, SolutionArray
-from . import __version__, __git_commit__
+from . import __version__, __git_commit__, hdf_support
 
 
 class FlameBase(Sim1D):
     """ Base class for flames with a single flow domain """
     __slots__ = ('gas',)
-    _other = ()
 
     def __init__(self, domains, gas, grid=None):
         """
@@ -31,34 +30,6 @@ class FlameBase(Sim1D):
         #: The `Solution` object representing the species and reactions in the flame
         self.gas = gas
         self.flame.P = gas.P
-
-    def other_components(self, domain=None):
-        """
-        The method returns simulation components that are specific to a class
-        derived from `FlameBase` or a specific ``domain`` within the `FlameBase`
-        simulation object. Entries may include:
-
-        * ``grid``: grid point positions along the flame [m]
-        * ``velocity``: normal velocity [m/s]
-        * ``spread_rate``: tangential velocity gradient [1/s]
-        * ``lambda``: radial pressure gradient [N/m^4]
-        * ``eField``: electric field strength
-
-        :param domain:
-            Index of a specific domain within the `Sim1D.domains`
-            list. The default is to return other columns of the `Sim1D` object.
-        """
-        if domain is None:
-            return self._other
-
-        dom = self.domains[self.domain_index(domain)]
-        if isinstance(dom, Inlet1D):
-            return tuple([e for e in self._other
-                          if e not in {'grid', 'lambda', 'eField'}])
-        elif isinstance(dom, (IdealGasFlow, IonFlow)):
-            return self._other
-        else:
-            return ()
 
     def set_refine_criteria(self, ratio=10.0, slope=0.8, curve=0.8, prune=0.0):
         """
@@ -106,11 +77,11 @@ class FlameBase(Sim1D):
         :param data:
             Restart data, which are typically based on an earlier simulation
             result. Restart data may be specified using a `SolutionArray`,
-            `pandas.DataFrame`, or previously saved CSV or HDF container files.
+            `pandas.DataFrame`, or previously saved CSV, YAML or HDF container files.
             Note that restart data do not overwrite boundary conditions.
-            DataFrame input requires a working installation of *pandas*, whereas
-            HDF input requires an installation of *h5py*. These packages can be
-            installed using pip or conda (``pandas`` and ``h5py``, respectively).
+            HDF input requires Cantera compiled with HDF support. DataFrame input
+            requires a working installation of *pandas*, which can be installed using
+            pip or conda (package: ``pandas``).
         :param group:
             Group identifier within a HDF container file (only used in
             combination with HDF restart data).
@@ -124,20 +95,26 @@ class FlameBase(Sim1D):
             # already a solution array
             arr = data
 
-        elif isinstance(data, str):
-            if data.endswith('.hdf5') or data.endswith('.h5'):
+        elif isinstance(data, (str, Path)):
+            data = str(data)
+            arr = SolutionArray(self.gas)
+            if any(data.endswith(suffix) for suffix in [".hdf5", ".h5", ".hdf"]):
                 # data source identifies a HDF file
-                arr = SolutionArray(self.gas, extra=self.other_components())
-                arr.read_hdf(data, group=group, subgroup=self.domains[1].name)
+                if "native" in hdf_support():
+                    arr.restore(data, name=group, sub=self.domains[1].name)
+                else:
+                    arr.read_hdf(data, group=group, subgroup=self.domains[1].name)
+            elif data.endswith(".yaml") or data.endswith(".yml"):
+                # data source identifies a YAML file
+                arr.restore(data, name=group, sub=self.domains[1].name)
             elif data.endswith('.csv'):
                 # data source identifies a CSV file
-                arr = SolutionArray(self.gas, extra=self.other_components())
                 arr.read_csv(data)
             else:
-                raise ValueError(f"'{data}' does not identify CSV or HDF file.")
+                raise ValueError(f"'{data}' does not identify CSV, YAML or HDF file.")
         else:
             # data source is presumably a pandas DataFrame
-            arr = SolutionArray(self.gas, extra=self.other_components())
+            arr = SolutionArray(self.gas)
             arr.from_pandas(data)
 
         # get left and right boundaries
@@ -146,7 +123,7 @@ class FlameBase(Sim1D):
 
         if isinstance(left, Inlet1D) and isinstance(right, Inlet1D):
             # find stagnation plane
-            i = np.flatnonzero(self.velocity > 0)[-1]
+            i = np.flatnonzero(arr.velocity > 0)[-1]
 
             # adjust temperatures
             grid = arr.grid
@@ -159,12 +136,10 @@ class FlameBase(Sim1D):
             u = arr.velocity
 
             self.gas.TPY = left.T, self.P, left.Y
-            u[:i] = u[:i] * left.mdot / self.gas.density / u[0]
+            arr[:i].velocity = u[:i] * left.mdot / self.gas.density / u[0]
 
             self.gas.TPY = right.T, self.P, right.Y
-            u[i:] = - u[i:] * right.mdot / self.gas.density / u[-1]
-
-            arr.velocity = u
+            arr[i:].velocity = - u[i:] * right.mdot / self.gas.density / u[-1]
 
         elif isinstance(left, Inlet1D):
             # adjust temperatures
@@ -172,12 +147,12 @@ class FlameBase(Sim1D):
             arr.TP = T + left.T - T[0], self.P
 
             # adjust velocities
-            if self.flame.flow_type != "Free Flame":
+            if not self.flame.domain_type.startswith("free"):
                 self.gas.TPY = left.T, self.P, left.Y
                 u0 = left.mdot / self.gas.density
-                arr.velocity *= u0 / arr.velocity[0]
+                arr.velocity = u0 * arr.velocity / arr.velocity[0]
 
-        self.from_solution_array(arr)
+        self.from_array(arr)
 
     def set_profile(self, component, positions, values):
         """
@@ -239,6 +214,20 @@ class FlameBase(Sim1D):
     @soret_enabled.setter
     def soret_enabled(self, enable):
         self.flame.soret_enabled = enable
+
+    @property
+    def flux_gradient_basis(self):
+        """
+        Get/Set whether or not species diffusive fluxes are computed with
+        respect to their mass fraction gradients ('mass')
+        or mole fraction gradients ('molar', default) when
+        using the mixture-averaged transport model.
+        """
+        return self.flame.flux_gradient_basis
+
+    @flux_gradient_basis.setter
+    def flux_gradient_basis(self, basis):
+        self.flame.flux_gradient_basis = basis
 
     @property
     def radiation_enabled(self):
@@ -304,6 +293,52 @@ class FlameBase(Sim1D):
         """
         return self.profile(self.flame, 'lambda')
 
+    @property
+    def E(self):
+        """
+        Array containing the electric field strength at each point.
+        """
+        if self.flame.transport_model != "ionized-gas":
+            raise AttributeError(
+                "Electric field is only defined for transport model 'ionized_gas'.")
+        return self.profile(self.flame, 'eField')
+
+    @property
+    def Uo(self):
+        """
+        Array containing the oxidizer velocity (right boundary velocity) [m/s] at
+        each point. Note: This value is only defined when using two-point control.
+        """
+        return self.profile(self.flame, 'Uo')
+
+    @property
+    def left_control_point_temperature(self):
+        """ Get/Set the left control point temperature [K] """
+        return self.flame.left_control_point_temperature
+
+    @left_control_point_temperature.setter
+    def left_control_point_temperature(self, T):
+        self.flame.left_control_point_temperature = T
+
+    @property
+    def left_control_point_coordinate(self):
+        """ Get the left control point coordinate [m] """
+        return self.flame.left_control_point_coordinate
+
+    @property
+    def right_control_point_temperature(self):
+        """ Get/Set the right control point temperature [K] """
+        return self.flame.right_control_point_temperature
+
+    @right_control_point_temperature.setter
+    def right_control_point_temperature(self, T):
+        self.flame.right_control_point_temperature = T
+
+    @property
+    def right_control_point_coordinate(self):
+        """ Get the right control point coordinate [m] """
+        return self.flame.right_control_point_coordinate
+
     def elemental_mass_fraction(self, m):
         r"""
         Get the elemental mass fraction :math:`Z_{\mathrm{mass},m}` of element
@@ -351,17 +386,6 @@ class FlameBase(Sim1D):
             vals[i] = self.gas.elemental_mole_fraction(m)
         return vals
 
-    def solution(self, component, point=None):
-        """
-        Get the solution at one point or for the full flame domain (if
-        ``point=None``) for the specified ``component``. The ``component`` can be
-        specified by name or index.
-        """
-        if point is None:
-            return self.profile(self.flame, component)
-        else:
-            return self.value(self.flame, component, point)
-
     def set_gas_state(self, point):
         """
         Set the state of the the `Solution` object used for calculations
@@ -369,85 +393,47 @@ class FlameBase(Sim1D):
         ``point``.
         """
         k0 = self.flame.component_index(self.gas.species_name(0))
-        Y = [self.solution(k, point)
+        Y = [self.value(self.flame, k, point)
              for k in range(k0, k0 + self.gas.n_species)]
         self.gas.set_unnormalized_mass_fractions(Y)
         self.gas.TP = self.value(self.flame, 'T', point), self.P
 
-    def write_csv(self, filename, species='X', quiet=True, normalize=True):
+    def to_array(self, domain=None, normalize=False):
         """
-        Write the velocity, temperature, density, and species profiles
-        to a CSV file.
+        Retrieve domain data as a `SolutionArray` object.
 
-        :param filename:
-            Output file name
-        :param species:
-            Attribute to use obtaining species profiles, for example ``X`` for
-            mole fractions or ``Y`` for mass fractions.
+        :param domain:
+            Domain to be converted; by default, the method retrieves the flow domain
         :param normalize:
-            Boolean flag to indicate whether the mole/mass fractions should
-            be normalized.
-        """
+            Boolean flag indicating whether mass/mole fractions should be normalized
 
-        # save data
-        cols = ('extra', 'T', 'D', species)
-        self.to_solution_array(normalize=normalize).write_csv(filename, cols=cols)
-
-        if not quiet:
-            print("Solution saved to '{0}'.".format(filename))
-
-    def to_solution_array(self, domain=None, normalize=True):
-        """
-        Return the solution vector as a `SolutionArray` object.
-
-        Derived classes define default values for *other*.
-
-        By default, the mass or mole fractions will be normalized i.e they
-        sum up to 1.0. If this is not desired, the ``normalize`` argument
-        can be set to ``False``.
+        .. versionadded:: 3.0
         """
         if domain is None:
             domain = self.flame
         else:
             domain = self.domains[self.domain_index(domain)]
-        other = self.other_components(domain)
+        dest = SolutionArray(domain.phase, init=False)
+        dest = domain._to_array(dest, normalize)
+        dest.shape = dest._api_shape()
+        return dest
 
-        states, other_cols, meta = super().collect_data(domain, other)
-        n_points = np.array(states[0]).size
-        if n_points:
-            arr = SolutionArray(self.phase(domain), n_points,
-                                extra=other_cols, meta=meta)
-            if normalize:
-                arr.TPY = states
-            else:
-                if len(states) == 3:
-                    for i in range(n_points):
-                        arr._phase.set_unnormalized_mass_fractions(states[2][i])
-                        arr._phase.TP = np.atleast_1d(states[0])[i], states[1]
-                        arr._states[i] = arr._phase.state
-                else:
-                    arr.TP = states
-            return arr
-        else:
-            return SolutionArray(self.phase(domain), meta=meta)
-
-    def from_solution_array(self, arr, domain=None):
+    def from_array(self, arr, domain=None):
         """
         Restore the solution vector from a `SolutionArray` object.
 
-        Derived classes define default values for *other*.
+        :param arr:
+            `SolutionArray` containing data to be restored.
+        :param domain:
+            Domain to be converted; by default, the method retrieves the flow domain
+
+        .. versionadded:: 3.0
         """
         if domain is None:
             domain = self.flame
         else:
             domain = self.domains[self.domain_index(domain)]
-        other = self.other_components(domain)
-
-        states = arr.TPY
-        other_cols = {e: getattr(arr, e) for e in other
-                      if e in arr._extra}
-        meta = arr.meta
-        super().restore_data(domain, states, other_cols, meta)
+        domain._from_array(arr)
 
     def to_pandas(self, species='X', normalize=True):
         """
@@ -460,195 +446,32 @@ class FlameBase(Sim1D):
             Boolean flag to indicate whether the mole/mass fractions should
             be normalized (default is ``True``)
 
-        This method uses `to_solution_array` and requires a working *pandas*
+        This method uses `to_array` and requires a working *pandas*
         installation. Use pip or conda to install ``pandas`` to enable this
         method.
         """
         cols = ('extra', 'T', 'D', species)
-        return self.to_solution_array(normalize=normalize).to_pandas(cols=cols)
-
-    def from_pandas(self, df, restore_boundaries=True, settings=None):
-        """
-        Restore the solution vector from a `pandas.DataFrame`; currently disabled
-        (`save`/`restore` or `write_hdf`/`read_hdf` should be used as alternatives).
-
-        :param df:
-            `pandas.DataFrame` containing data to be restored
-        :param restore_boundaries:
-            Boolean flag to indicate whether boundaries should be restored
-            (default is ``True``)
-        :param settings:
-            dictionary containing simulation settings
-            (see `FlameBase.settings`)
-
-        This method is intendend for loading of data that were previously
-        exported by `to_pandas`. The method uses `from_solution_array` and
-        requires a working *pandas* installation. The package ``pandas`` can be
-        installed using pip or conda.
-        """
-        # @todo: Discuss implementation that allows for restoration of boundaries
-        raise NotImplementedError(
-            "Use 'save'/'restore' or 'write_hdf'/'read_hdf' as alternatives.")
-
-    def write_hdf(self, filename, *args, group=None, species='X', mode='a',
-                  description=None, compression=None, compression_opts=None,
-                  quiet=True, normalize=True, **kwargs):
-        """
-        Write the solution vector to a HDF container file.
-
-        The `write_hdf` method preserves the structure of a `FlameBase`-derived
-        object (such as `FreeFlame`). Each simulation is saved as a *group*,
-        whereas individual domains are saved as subgroups. In addition to
-        datasets, information on `Sim1D.settings` and `Domain1D.settings` is
-        saved in form of HDF attributes. The internal HDF file structure is
-        illustrated for a `FreeFlame` output as:::
-
-            /                                Group
-            /group0                          Group
-            /group0/Sim1D_type               Attribute
-            ...
-            /group0/flame                    Group
-            /group0/flame/Domain1D_type      Attribute
-            ...
-            /group0/flame/T                  Dataset
-            ...
-            /group0/flame/phase              Group
-            /group0/products                 Group
-            /group0/products/Domain1D_type   Attribute
-            ...
-            /group0/products/T               Dataset
-            ...
-            /group0/products/phase           Group
-            /group0/reactants                Group
-            /group0/reactants/Domain1D_type  Attribute
-            ...
-            /group0/reactants/T              Dataset
-            ...
-            /group0/reactants/phase          Group
-
-        where ``group0`` is the default name for the top level HDF entry, and
-        ``reactants``, ``flame`` and ``products`` correspond to domain names.
-        Note that it is possible to save multiple solutions to a single HDF
-        container file.
-
-        :param filename:
-            HDF container file containing data to be restored
-        :param group:
-            Identifier for the group in the container file. A group may contain
-            multiple `SolutionArray` objects.
-        :param species:
-            Attribute to use obtaining species profiles, for example ``X`` for
-            mole fractions or ``Y`` for mass fractions.
-        :param mode:
-            Mode *h5py* uses to open the output file {'a' to read/write if file
-            exists, create otherwise (default); 'w' to create file, truncate if
-            exists; 'r+' to read/write, file must exist}.
-        :param description:
-            Custom comment describing the dataset to be stored.
-        :param compression:
-            Pre-defined *h5py* compression filters {None, 'gzip', 'lzf', 'szip'}
-            used for data compression.
-        :param compression_opts:
-            Options for the *h5py* compression filter; for 'gzip', this
-            corresponds to the compression level {None, 0-9}.
-        :param quiet:
-            Suppress message confirming successful file output.
-        :param normalize:
-            Boolean flag to indicate whether the mole/mass fractions should
-            be normalized (default is ``True``)
-
-        Additional arguments (that is, ``*args`` and ``**kwargs``) are passed on to
-        `SolutionArray.collect_data`. The method exports data using
-        `SolutionArray.write_hdf` via `to_solution_array` and requires a working
-        installation of *h5py* (``h5py`` can be installed using pip or conda).
-        """
-        cols = ('extra', 'T', 'P', species)
-        meta = self.settings
-        meta['date'] = formatdate(localtime=True)
-        meta['cantera_version'] = __version__
-        meta['git_commit'] = __git_commit__
-        if description is not None:
-            meta['description'] = description
-        for i in range(3):
-            arr = self.to_solution_array(domain=self.domains[i], normalize=normalize)
-            group = arr.write_hdf(filename, *args, group=group, cols=cols,
-                                  subgroup=self.domains[i].name,
-                                  attrs=meta, mode=mode, append=(i > 0),
-                                  compression=compression,
-                                  compression_opts=compression_opts,
-                                  **kwargs)
-            meta = {}
-            mode = 'a'
-
-        if not quiet:
-            msg = "Solution saved to '{0}' as group '{1}'."
-            print(msg.format(filename, group))
-
-    def read_hdf(self, filename, group=None, restore_boundaries=True, normalize=True):
-        """
-        Restore the solution vector from a HDF container file.
-
-        :param filename:
-            HDF container file containing data to be restored
-        :param group:
-            String identifying the HDF group containing the data
-        :param restore_boundaries:
-            Boolean flag to indicate whether boundaries should be restored
-            (default is ``True``)
-        :param normalize:
-            Boolean flag to indicate whether the mole/mass fractions should
-            be normalized (default is ``True``)
-
-        The method imports data using `SolutionArray.read_hdf` via
-        `from_solution_array` and requires a working installation of *h5py*
-        (``h5py`` can be installed using pip or conda).
-        """
-        if restore_boundaries:
-            domains = range(3)
-        else:
-            domains = [1]
-
-        for d in domains:
-            arr = SolutionArray(self.phase(d), extra=self.other_components(d))
-            meta = arr.read_hdf(filename, group=group,
-                                subgroup=self.domains[d].name, normalize=normalize)
-            self.from_solution_array(arr, domain=d)
-
-        self.settings = meta
-
-        return meta
+        return self.to_array(normalize=normalize).to_pandas(cols=cols)
 
     @property
-    def settings(self):
-        """ Return a dictionary listing simulation settings """
-        out = {'Sim1D_type': type(self).__name__}
-        out['transport_model'] = self.transport_model
-        out['energy_enabled'] = self.energy_enabled
-        out['soret_enabled'] = self.soret_enabled
-        out['radiation_enabled'] = self.radiation_enabled
-        out['fixed_temperature'] = self.fixed_temperature
-        out.update(self.get_refine_criteria())
-        out['max_time_step_count'] = self.max_time_step_count
-        out['max_grid_points'] = self.get_max_grid_points(self.flame)
+    def electric_field_enabled(self):
+        """ Get/Set whether or not to solve the Poisson's equation."""
+        return self.flame.electric_field_enabled
 
-        return out
+    @electric_field_enabled.setter
+    def electric_field_enabled(self, enable):
+        self.flame.electric_field_enabled = enable
 
-    @settings.setter
-    def settings(self, s):
-        # simple setters
-        attr = {'transport_model',
-                'energy_enabled', 'soret_enabled', 'radiation_enabled',
-                'fixed_temperature',
-                'max_time_step_count', 'max_grid_points'}
-        attr = attr & set(s.keys())
-        for key in attr:
-            setattr(self, key, s[key])
+    @property
+    def two_point_control_enabled(self):
+        """
+        Get/Set whether or not to active two point flame control.
+        """
+        return self.flame.two_point_control_enabled
 
-        # refine criteria
-        refine = {k: v for k, v in s.items()
-                  if k in ['ratio', 'slope', 'curve', 'prune']}
-        if refine:
-            self.set_refine_criteria(**refine)
+    @two_point_control_enabled.setter
+    def two_point_control_enabled(self, enable):
+        self.flame.two_point_control_enabled = enable
 
 
 def _trim(docstring):
@@ -710,8 +533,8 @@ for _attr in ['density', 'density_mass', 'density_mole', 'volume_mass',
               'entropy_mass', 'g', 'gibbs_mole', 'gibbs_mass', 'cv',
               'cv_mole', 'cv_mass', 'cp', 'cp_mole', 'cp_mass',
               'isothermal_compressibility', 'thermal_expansion_coeff',
-              'viscosity', 'thermal_conductivity', 'heat_release_rate',
-              'mean_molecular_weight']:
+              'sound_speed', 'viscosity', 'thermal_conductivity',
+              'heat_release_rate', 'mean_molecular_weight']:
     setattr(FlameBase, _attr, _array_property(_attr))
 FlameBase.volume = _array_property('v') # avoid confusion with velocity gradient 'V'
 FlameBase.int_energy = _array_property('u') # avoid collision with velocity 'u'
@@ -757,13 +580,12 @@ for _attr in ['forward_rates_of_progress', 'reverse_rates_of_progress', 'net_rat
 class FreeFlame(FlameBase):
     """A freely-propagating flat flame."""
     __slots__ = ('inlet', 'flame', 'outlet')
-    _other = ('grid', 'velocity')
 
     def __init__(self, gas, grid=None, width=None):
         """
-        A domain of type IdealGasFlow named 'flame' will be created to represent
-        the flame and set to free flow. The three domains comprising the stack
-        are stored as ``self.inlet``, ``self.flame``, and ``self.outlet``.
+        A domain of type `FreeFlow` named 'flame' will be created to represent
+        the flame. The three domains comprising the stack are stored as ``self.inlet``,
+        ``self.flame``, and ``self.outlet``.
 
         :param grid:
             A list of points to be used as the initial grid. Not recommended
@@ -782,11 +604,12 @@ class FreeFlame(FlameBase):
 
         if not hasattr(self, 'flame'):
             # Create flame domain if not already instantiated by a child class
-            #: `IdealGasFlow` domain representing the flame
-            self.flame = IdealGasFlow(gas, name='flame')
-            self.flame.set_free_flow()
+            #: `FreeFlow` domain representing the flame
+            self.flame = FreeFlow(gas, name='flame')
 
         if width is not None:
+            if grid is not None:
+                raise ValueError("'grid' and 'width' arguments are mutually exclusive")
             grid = np.array([0.0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]) * width
 
         super().__init__((self.inlet, self.flame, self.outlet), gas, grid)
@@ -852,7 +675,7 @@ class FreeFlame(FlameBase):
             self.set_profile(self.gas.species_name(n),
                              locs, [Y0[n], Y0[n], Yeq[n], Yeq[n]])
 
-    def solve(self, loglevel=1, refine_grid=True, auto=False):
+    def solve(self, loglevel=1, refine_grid=True, auto=False, stage=1):
         """
         Solve the problem.
 
@@ -869,7 +692,11 @@ class FreeFlame(FlameBase):
             If non-default tolerances have been specified or multicomponent
             transport is enabled, an additional solution using these options
             will be calculated.
+        :param stage: solution stage; only used when transport model is ``ionized-gas``.
         """
+        if self.flame.transport_model == 'ionized-gas':
+            self.flame.solving_stage = stage
+
         if not auto:
             return super().solve(loglevel, refine_grid, auto)
 
@@ -945,52 +772,9 @@ class FreeFlame(FlameBase):
         return self.solve_adjoint(perturb, self.gas.n_reactions, dgdx) / Su0
 
 
-class IonFlameBase(FlameBase):
-
-    @property
-    def electric_field_enabled(self):
-        """ Get/Set whether or not to solve the Poisson's equation."""
-        return self.flame.electric_field_enabled
-
-    @electric_field_enabled.setter
-    def electric_field_enabled(self, enable):
-        self.flame.electric_field_enabled = enable
-
-    @property
-    def E(self):
-        """
-        Array containing the electric field strength at each point.
-        """
-        return self.profile(self.flame, 'eField')
-
-    def solve(self, loglevel=1, refine_grid=True, auto=False, stage=1, enable_energy=True):
-        self.flame.set_solving_stage(stage)
-        if stage == 1:
-            super().solve(loglevel, refine_grid, auto)
-        if stage == 2:
-            self.poisson_enabled = True
-            super().solve(loglevel, refine_grid, auto)
-
-
-class IonFreeFlame(IonFlameBase, FreeFlame):
-    """A freely-propagating flame with ionized gas."""
-    __slots__ = ('inlet', 'flame', 'outlet')
-    _other = ('grid', 'velocity', 'eField')
-
-    def __init__(self, gas, grid=None, width=None):
-        if not hasattr(self, 'flame'):
-            # Create flame domain if not already instantiated by a child class
-            #: `IonFlow` domain representing the flame
-            self.flame = IonFlow(gas, name='flame')
-            self.flame.set_free_flow()
-
-        super().__init__(gas, grid, width)
-
-
 class BurnerFlame(FlameBase):
     """A burner-stabilized flat flame."""
     __slots__ = ('burner', 'flame', 'outlet')
-    _other = ('grid', 'velocity')
 
     def __init__(self, gas, grid=None, width=None):
         """
@@ -1005,10 +789,9 @@ class BurnerFlame(FlameBase):
             Defines a grid on the interval [0, width] with internal points
             determined automatically by the solver.
 
-        A domain of class `IdealGasFlow` named ``flame`` will be created to
-        represent the flame and set to axisymmetric stagnation flow. The three
-        domains comprising the stack are stored as ``self.burner``,
-        ``self.flame``, and ``self.outlet``.
+        A domain of class `UnstrainedFlow` named ``flame`` will be created to
+        represent the flame. The three domains comprising the stack are stored as
+        ``self.burner``, ``self.flame``, and ``self.outlet``.
         """
         #: `Inlet1D` at the left of the domain representing the burner surface through
         #: which reactants flow
@@ -1019,11 +802,12 @@ class BurnerFlame(FlameBase):
 
         if not hasattr(self, 'flame'):
             # Create flame domain if not already instantiated by a child class
-            #: `IdealGasFlow` domain representing the flame
-            self.flame = IdealGasFlow(gas, name='flame')
-            self.flame.set_axisymmetric_flow()
+            #: `UnstrainedFlow` domain representing the flame
+            self.flame = UnstrainedFlow(gas, name='flame')
 
         if width is not None:
+            if grid is not None:
+                raise ValueError("'grid' and 'width' arguments are mutually exclusive")
             grid = np.array([0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0]) * width
 
         super().__init__((self.burner, self.flame, self.outlet), gas, grid)
@@ -1064,7 +848,7 @@ class BurnerFlame(FlameBase):
             self.set_profile(self.gas.species_name(n),
                              locs, [Y0[n], Yeq[n], Yeq[n]])
 
-    def solve(self, loglevel=1, refine_grid=True, auto=False):
+    def solve(self, loglevel=1, refine_grid=True, auto=False, stage=1):
         """
         Solve the problem.
 
@@ -1081,7 +865,10 @@ class BurnerFlame(FlameBase):
             If non-default tolerances have been specified or multicomponent
             transport is enabled, an additional solution using these options
             will be calculated.
+        :param stage: solution stage; only used when transport model is ``ionized-gas``.
         """
+        if self.flame.transport_model == 'ionized-gas':
+            self.flame.solving_stage = stage
 
         # Use a callback function to check that the flame has not been blown off
         # the burner surface. If the user provided a callback, store this so it
@@ -1123,25 +910,9 @@ class BurnerFlame(FlameBase):
         self.set_steady_callback(original_callback)
 
 
-class IonBurnerFlame(IonFlameBase, BurnerFlame):
-    """A burner-stabilized flat flame with ionized gas."""
-    __slots__ = ('burner', 'flame', 'outlet')
-    _other = ('grid', 'velocity', 'eField')
-
-    def __init__(self, gas, grid=None, width=None):
-        if not hasattr(self, 'flame'):
-            # Create flame domain if not already instantiated by a child class
-            #: `IonFlow` domain representing the flame
-            self.flame = IonFlow(gas, name='flame')
-            self.flame.set_axisymmetric_flow()
-
-        super().__init__(gas, grid, width)
-
-
 class CounterflowDiffusionFlame(FlameBase):
     """ A counterflow diffusion flame """
     __slots__ = ('fuel_inlet', 'flame', 'oxidizer_inlet')
-    _other = ('grid', 'velocity', 'spread_rate', 'lambda')
 
     def __init__(self, gas, grid=None, width=None):
         """
@@ -1156,10 +927,9 @@ class CounterflowDiffusionFlame(FlameBase):
             Defines a grid on the interval [0, width] with internal points
             determined automatically by the solver.
 
-        A domain of class `IdealGasFlow` named ``flame`` will be created to
-        represent the flame and set to axisymmetric stagnation flow. The three
-        domains comprising the stack are stored as ``self.fuel_inlet``,
-        ``self.flame``, and ``self.oxidizer_inlet``.
+        A domain of class `AxisymmetricFlow` named ``flame`` will be created to
+        represent the flame. The three domains comprising the stack are stored as
+        ``self.fuel_inlet``, ``self.flame``, and ``self.oxidizer_inlet``.
         """
 
         #: `Inlet1D` at the left of the domain representing the fuel mixture
@@ -1170,11 +940,12 @@ class CounterflowDiffusionFlame(FlameBase):
         self.oxidizer_inlet = Inlet1D(name='oxidizer_inlet', phase=gas)
         self.oxidizer_inlet.T = gas.T
 
-        #: `IdealGasFlow` domain representing the flame
-        self.flame = IdealGasFlow(gas, name='flame')
-        self.flame.set_axisymmetric_flow()
+        #: `AxisymmetricFlow` domain representing the flame
+        self.flame = AxisymmetricFlow(gas, name='flame')
 
         if width is not None:
+            if grid is not None:
+                raise ValueError("'grid' and 'width' arguments are mutually exclusive")
             grid = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0]) * width
 
         super().__init__((self.fuel_inlet, self.flame, self.oxidizer_inlet), gas, grid)
@@ -1190,9 +961,6 @@ class CounterflowDiffusionFlame(FlameBase):
         if data:
             return
 
-        moles = lambda el: (self.gas.elemental_mass_fraction(el) /
-                            self.gas.atomic_weight(el))
-
         # Compute stoichiometric mixture composition
         Yin_f = self.fuel_inlet.Y
         self.gas.TPY = self.fuel_inlet.T, self.P, Yin_f
@@ -1201,12 +969,6 @@ class CounterflowDiffusionFlame(FlameBase):
         u0f = mdotf / rho0f
         T0f = self.fuel_inlet.T
 
-        sFuel = moles('O')
-        if 'C' in self.gas.element_names:
-            sFuel -= 2 * moles('C')
-        if 'H' in self.gas.element_names:
-            sFuel -= 0.5 * moles('H')
-
         Yin_o = self.oxidizer_inlet.Y
         self.gas.TPY = self.oxidizer_inlet.T, self.P, Yin_o
         mdoto = self.oxidizer_inlet.mdot
@@ -1214,13 +976,11 @@ class CounterflowDiffusionFlame(FlameBase):
         u0o = mdoto / rho0o
         T0o = self.oxidizer_inlet.T
 
-        sOx = moles('O')
-        if 'C' in self.gas.element_names:
-            sOx -= 2 * moles('C')
-        if 'H' in self.gas.element_names:
-            sOx -= 0.5 * moles('H')
+        if mdoto == mdotf == 0.0:
+            raise CanteraError("Mass flow for fuel and/or oxidizer "
+                               "must be positive")
 
-        zst = 1.0 / (1 - sFuel / sOx)
+        zst = 1 / (1 + self.gas.stoich_air_fuel_ratio(Yin_f, Yin_o, 'mass'))
         Yst = zst * Yin_f + (1.0 - zst) * Yin_o
 
         # get adiabatic flame temperature and composition
@@ -1269,7 +1029,7 @@ class CounterflowDiffusionFlame(FlameBase):
     def extinct(self):
         return max(self.T) - max(self.fuel_inlet.T, self.oxidizer_inlet.T) < 10
 
-    def solve(self, loglevel=1, refine_grid=True, auto=False):
+    def solve(self, loglevel=1, refine_grid=True, auto=False, stage=1):
         """
         Solve the problem.
 
@@ -1286,7 +1046,14 @@ class CounterflowDiffusionFlame(FlameBase):
             If non-default tolerances have been specified or multicomponent
             transport is enabled, an additional solution using these options
             will be calculated.
+        :param stage: solution stage; only used when transport model is ``ionized-gas``.
         """
+        if self.flame.transport_model == 'ionized-gas':
+            warnings.warn(
+                "The 'ionized-gas' transport model is untested for "
+                "'CounterflowDiffusionFlame' objects.", UserWarning)
+            self.flame.solving_stage = stage
+
         super().solve(loglevel, refine_grid, auto)
         # Do some checks if loglevel is set
         if loglevel > 0:
@@ -1439,8 +1206,9 @@ class CounterflowDiffusionFlame(FlameBase):
         >>> f.mixture_fraction('Bilger')
         """
 
-        Yf = [self.solution(k, 0) for k in self.gas.species_names]
-        Yo = [self.solution(k, self.flame.n_points-1) for k in self.gas.species_names]
+        Yf = [self.value(self.flame, k, 0) for k in self.gas.species_names]
+        Yo = [self.value(self.flame, k, self.flame.n_points - 1)
+              for k in self.gas.species_names]
 
         vals = np.empty(self.flame.n_points)
         for i in range(self.flame.n_points):
@@ -1450,8 +1218,9 @@ class CounterflowDiffusionFlame(FlameBase):
 
     @property
     def equivalence_ratio(self):
-        Yf = [self.solution(k, 0) for k in self.gas.species_names]
-        Yo = [self.solution(k, self.flame.n_points-1) for k in self.gas.species_names]
+        Yf = [self.value(self.flame, k, 0) for k in self.gas.species_names]
+        Yo = [self.value(self.flame, k, self.flame.n_points - 1)
+              for k in self.gas.species_names]
 
         vals = np.empty(self.flame.n_points)
         for i in range(self.flame.n_points):
@@ -1463,7 +1232,6 @@ class CounterflowDiffusionFlame(FlameBase):
 class ImpingingJet(FlameBase):
     """An axisymmetric flow impinging on a surface at normal incidence."""
     __slots__ = ('inlet', 'flame', 'surface')
-    _other = ('grid', 'velocity', 'spread_rate', 'lambda')
 
     def __init__(self, gas, grid=None, width=None, surface=None):
         """
@@ -1480,20 +1248,21 @@ class ImpingingJet(FlameBase):
         :param surface:
             A Kinetics object used to compute any surface reactions.
 
-        A domain of class `IdealGasFlow` named ``flame`` will be created to
-        represent the flame and set to axisymmetric stagnation flow. The three
-        domains comprising the stack are stored as ``self.inlet``,
-        ``self.flame``, and ``self.surface``.
+        A domain of class `AxisymmetricFlow` named ``flame`` will be created to
+        represent the flame. The three domains comprising the stack are stored as
+        ``self.inlet``, ``self.flame``, and ``self.surface``.
         """
 
         #: `Inlet1D` at the left of the domain representing the incoming reactants
         self.inlet = Inlet1D(name='inlet', phase=gas)
 
-        #: `IdealGasFlow` domain representing the flame
-        self.flame = IdealGasFlow(gas, name='flame')
+        #: `AxisymmetricFlow` domain representing the flame
+        self.flame = AxisymmetricFlow(gas, name='flame')
         self.flame.set_axisymmetric_flow()
 
         if width is not None:
+            if grid is not None:
+                raise ValueError("'grid' and 'width' arguments are mutually exclusive")
             grid = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0]) * width
 
         if surface is None:
@@ -1553,7 +1322,6 @@ class ImpingingJet(FlameBase):
 class CounterflowPremixedFlame(FlameBase):
     """ A premixed counterflow flame """
     __slots__ = ('reactants', 'flame', 'products')
-    _other = ('grid', 'velocity', 'spread_rate', 'lambda')
 
     def __init__(self, gas, grid=None, width=None):
         """
@@ -1567,10 +1335,9 @@ class CounterflowPremixedFlame(FlameBase):
             Defines a grid on the interval [0, width] with internal points
             determined automatically by the solver.
 
-        A domain of class `IdealGasFlow` named ``flame`` will be created to
-        represent the flame and set to axisymmetric stagnation flow. The three
-        domains comprising the stack are stored as ``self.reactants``,
-        ``self.flame``, and ``self.products``.
+        A domain of class `AxisymmetricFlow` named ``flame`` will be created to
+        represent the flame. The three domains comprising the stack are stored as
+        ``self.reactants``, ``self.flame``, and ``self.products``.
         """
 
         #: `Inlet1D` at the left of the domain representing premixed reactants
@@ -1581,11 +1348,12 @@ class CounterflowPremixedFlame(FlameBase):
         self.products = Inlet1D(name='products', phase=gas)
         self.products.T = gas.T
 
-        #: `IdealGasFlow` domain representing the flame
-        self.flame = IdealGasFlow(gas, name='flame')
-        self.flame.set_axisymmetric_flow()
+        #: `AxisymmetricFlow` domain representing the flame
+        self.flame = AxisymmetricFlow(gas, name='flame')
 
         if width is not None:
+            if grid is not None:
+                raise ValueError("'grid' and 'width' arguments are mutually exclusive")
             # Create grid points aligned with initial guess profile
             grid = np.array([0.0, 0.3, 0.5, 0.7, 1.0]) * width
 
@@ -1631,6 +1399,10 @@ class CounterflowPremixedFlame(FlameBase):
         rhob = self.gas.density
         ub = self.products.mdot / rhob
 
+        if uu == ub == 0.0:
+            raise CanteraError("Mass flow for reactants and/or products "
+                               "must be positive")
+
         locs = np.array([0.0, 0.4, 0.6, 1.0])
         self.set_profile('T', locs, [Tu, Tu, Teq, Tb])
         for k in range(self.gas.n_species):
@@ -1657,7 +1429,6 @@ class CounterflowTwinPremixedFlame(FlameBase):
     shooting into each other.
     """
     __slots__ = ('reactants', 'flame', 'products')
-    _other = ('grid', 'velocity', 'spread_rate', 'lambda')
 
     def __init__(self, gas, grid=None, width=None):
         """
@@ -1671,21 +1442,22 @@ class CounterflowTwinPremixedFlame(FlameBase):
             Defines a grid on the interval [0, width] with internal points
             determined automatically by the solver.
 
-        A domain of class `IdealGasFlow` named ``flame`` will be created to
-        represent the flame and set to axisymmetric stagnation flow. The three
-        domains comprising the stack are stored as ``self.reactants``,
-        ``self.flame``, and ``self.products``.
+        A domain of class `AxisymmetricFlow` named ``flame`` will be created to
+        represent the flame. The three domains comprising the stack are stored as
+        ``self.reactants``, ``self.flame``, and ``self.products``.
         """
         self.reactants = Inlet1D(name='reactants', phase=gas)
         self.reactants.T = gas.T
 
-        self.flame = IdealGasFlow(gas, name='flame')
-        self.flame.set_axisymmetric_flow()
+        #: `AxisymmetricFlow` domain representing the flame
+        self.flame = AxisymmetricFlow(gas, name='flame')
 
         #The right boundary is a symmetry plane
         self.products = SymmetryPlane1D(name='products', phase=gas)
 
         if width is not None:
+            if grid is not None:
+                raise ValueError("'grid' and 'width' arguments are mutually exclusive")
             # Create grid points aligned with initial guess profile
             grid = np.array([0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0]) * width
 
@@ -1704,6 +1476,9 @@ class CounterflowTwinPremixedFlame(FlameBase):
         super().set_initial_guess(data=data, group=group)
         if data:
             return
+
+        if self.reactants.mdot == 0:
+            raise CanteraError("Reactants velocity must be positive")
 
         Yu = self.reactants.Y
         Tu = self.reactants.T

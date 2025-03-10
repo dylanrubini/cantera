@@ -4,27 +4,73 @@
 #include "cantera/zerodim.h"
 #include "cantera/base/Interface.h"
 #include "cantera/numerics/eigen_sparse.h"
-#include "cantera/numerics/PreconditionerFactory.h"
+#include "cantera/numerics/SystemJacobianFactory.h"
 #include "cantera/numerics/AdaptivePreconditioner.h"
 
 using namespace Cantera;
 
+// This test is an (almost) exact equivalent of a clib test
+// (clib::test_ctreactor.cpp::ctreactor::reactor_simple)
+TEST(zerodim, simple)
+{
+    double T = 1050;
+    double P = 5 * 101325;
+    string X = "CH4:1.0, O2:2.0, N2:7.52";
+
+    auto sol = newSolution("gri30.yaml", "gri30", "none");
+    sol->thermo()->setState_TPX(T, P, X);
+    auto cppReactor = newReactor("IdealGasReactor", sol, "simple");
+    ASSERT_EQ(cppReactor->name(), "simple");
+    cppReactor->initialize();
+    ReactorNet network;
+    network.addReactor(dynamic_cast<IdealGasReactor&>(*cppReactor));
+    network.initialize();
+
+    double t = 0.0;
+    while (t < 0.1) {
+        ASSERT_GE(cppReactor->temperature(), T);
+        t = network.time() + 5e-3;
+        network.advance(t);
+    }
+}
+
+// Test guards preventing segfaults for uninitialized zerodim objects
+TEST(zerodim, test_guards)
+{
+    // Reactor with no contents
+    Reactor reactor;
+    EXPECT_THROW(reactor.temperature(), CanteraError);
+    EXPECT_THROW(reactor.density(), CanteraError);
+    EXPECT_THROW(reactor.massFractions(), CanteraError);
+    EXPECT_THROW(reactor.massFraction(0), CanteraError);
+
+    // Wall with no adjacent reactors
+    Wall wall;
+    EXPECT_THROW(wall.heatRate(), CanteraError);
+    EXPECT_THROW(wall.expansionRate(), CanteraError);
+
+    // FlowDevice with no adjacent reactors
+    EXPECT_THROW(FlowDevice().massFlowRate(), CanteraError);
+    EXPECT_THROW(MassFlowController().updateMassFlowRate(0.), CanteraError);
+    EXPECT_THROW(PressureController().updateMassFlowRate(0.), CanteraError);
+    EXPECT_THROW(Valve().updateMassFlowRate(0.), CanteraError);
+}
+
 // This test ensures that prior reactor initialization of a reactor does
 // not affect later integration within a network. This example was
 // adapted from test_reactor.py::test_equilibrium_HP.
-TEST(ZeroDim, test_individual_reactor_initialization)
+TEST(zerodim, test_individual_reactor_initialization)
 {
     // initial conditions
     double T0 = 1100.0;
     double P0 = 10 * OneAtm;
     double tol = 1e-7;
-    std::string X0 = "H2:1.0, O2:0.5, AR:8.0";
+    string X0 = "H2:1.0, O2:0.5, AR:8.0";
     // reactor solution, phase, and kinetics objects
-    std::shared_ptr<Solution> sol1 = newSolution("h2o2.yaml");
+    shared_ptr<Solution> sol1 = newSolution("h2o2.yaml");
     sol1->thermo()->setState_TPX(T0, P0, X0);
     // set up reactor object
-    Reactor reactor1;
-    reactor1.insert(sol1);
+    Reactor reactor1(sol1);
     // initialize reactor prior to integration to ensure no impact
     reactor1.initialize();
     // setup reactor network and integrate
@@ -33,16 +79,15 @@ TEST(ZeroDim, test_individual_reactor_initialization)
     network.initialize();
     network.advance(1.0);
     // secondary gas for comparison
-    std::shared_ptr<Solution> sol2 = newSolution("h2o2.yaml");
+    shared_ptr<Solution> sol2 = newSolution("h2o2.yaml");
     sol2->thermo()->setState_TPX(T0, P0, X0);
     sol2->thermo()->equilibrate("UV");
     // secondary reactor for comparison
-    Reactor reactor2;
-    reactor2.insert(sol2);
+    Reactor reactor2(sol2);
     reactor2.initialize(0.0);
     // get state of reactors
-    vector_fp state1(reactor1.neq());
-    vector_fp state2(reactor2.neq());
+    vector<double> state1(reactor1.neq());
+    vector<double> state2(reactor2.neq());
     reactor1.getState(state1.data());
     reactor2.getState(state2.data());
     // compare the reactors.
@@ -58,15 +103,14 @@ TEST(MoleReactorTestSet, test_mole_reactor_get_state)
     double tol = 1e-8;
     auto sol = newSolution("h2o2.yaml");
     sol->thermo()->setState_TPY(1000.0, OneAtm, "H2:0.5, O2:0.5");
-    IdealGasConstPressureMoleReactor reactor;
-    reactor.insert(sol);
+    IdealGasConstPressureMoleReactor reactor(sol);
     reactor.setInitialVolume(0.5);
     reactor.setEnergy(false);
     reactor.initialize();
-    vector_fp state(reactor.neq());
+    vector<double> state(reactor.neq());
     // test get state
     const ThermoPhase& thermo = reactor.contents();
-    const vector_fp& imw = thermo.inverseMolecularWeights();
+    const vector<double>& imw = thermo.inverseMolecularWeights();
     // prescribed state
     double mass = reactor.volume() * thermo.density();
     size_t H2I = reactor.componentIndex("H2")-1;
@@ -93,7 +137,7 @@ TEST(AdaptivePreconditionerTests, test_adaptive_precon_utils)
     precon.setIlutDropTol(droptol);
     EXPECT_NEAR(precon.ilutDropTol(), droptol, tol);
 
-    double fillfactor = testSize/2;
+    int fillfactor = static_cast<int>(testSize) / 2;
     precon.setIlutFillFactor(fillfactor);
     EXPECT_NEAR(precon.ilutFillFactor(), fillfactor, tol);
 
@@ -101,13 +145,13 @@ TEST(AdaptivePreconditionerTests, test_adaptive_precon_utils)
     precon.setGamma(gamma);
     EXPECT_NEAR(precon.gamma(), gamma, tol);
     // test setup and getting the matrix
-    precon.setup();
+    precon.updatePreconditioner();
     Eigen::SparseMatrix<double> identity(testSize, testSize);
     identity.setIdentity();
     EXPECT_TRUE(precon.matrix().isApprox(identity));
     // test solve
-    vector_fp output(testSize, 0);
-    vector_fp rhs_vector(testSize, 10);
+    vector<double> output(testSize, 0);
+    vector<double> rhs_vector(testSize, 10);
     precon.solve(testSize, rhs_vector.data(), output.data());
     for (size_t i = 0; i < testSize; i++) {
         EXPECT_NEAR(rhs_vector[i], output[i], tol);
@@ -125,11 +169,11 @@ TEST(AdaptivePreconditionerTests, test_adaptive_precon_utils)
     testMat.setIdentity();
     testMat.fill(thresh * 0.9);
     EXPECT_TRUE(precon.jacobian().isApprox(testMat));
-    precon.setup();
+    precon.updatePreconditioner();
     EXPECT_TRUE(precon.matrix().isApprox(identity * (thresh * 1.1)));
     // reset and setup then test again
     precon.reset();
-    precon.setup();
+    precon.updatePreconditioner();
     EXPECT_TRUE(precon.matrix().isApprox(identity));
 }
 
@@ -138,14 +182,13 @@ TEST(AdaptivePreconditionerTests, test_precon_solver_stats)
     // setting up solution object and thermo/kinetics pointers
     auto sol = newSolution("h2o2.yaml");
     sol->thermo()->setState_TPY(1000.0, OneAtm, "H2:0.5, O2:0.5");
-    IdealGasMoleReactor reactor;
-    reactor.insert(sol);
+    IdealGasMoleReactor reactor(sol);
     reactor.setInitialVolume(0.5);
     // setup reactor network and integrate
     ReactorNet network;
     network.addReactor(reactor);
     // setup preconditioner
-    std::shared_ptr<PreconditionerBase> precon_ptr = newPreconditioner("Adaptive");
+    shared_ptr<SystemJacobian> precon_ptr = newSystemJacobian("Adaptive");
     network.setPreconditioner(precon_ptr);
     EXPECT_THROW(network.step(), CanteraError);
     // take a step
@@ -170,6 +213,8 @@ int main(int argc, char** argv)
     printf("Running main() from test_zeroD.cpp\n");
     testing::InitGoogleTest(&argc, argv);
     Cantera::make_deprecation_warnings_fatal();
+    Cantera::CanteraError::setStackTraceDepth(20);
+    printStackTraceOnSegfault();
     int result = RUN_ALL_TESTS();
     Cantera::appdelete();
     return result;

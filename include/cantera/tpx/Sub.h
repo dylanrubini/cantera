@@ -7,7 +7,6 @@
 #define TPX_SUB_H
 
 #include "cantera/base/ctexceptions.h"
-#include <algorithm>
 
 namespace tpx
 {
@@ -31,15 +30,15 @@ enum type { H, S, U, V, P, T };
 
 const double Undef = 999.1234;
 
-/*!
+/**
  * Base class from which all pure substances are derived
  */
 class Substance
 {
 public:
-    Substance();
+    Substance() = default;
 
-    virtual ~Substance() {}
+    virtual ~Substance() = default;
 
     void setStdState(double h0 = 0.0, double s0 = 0.0,
                      double t0 = 298.15, double p0 = 1.01325e5);
@@ -154,7 +153,7 @@ public:
 
     virtual double Pp()=0;
 
-    //! Enthaply of a single-phase state
+    //! Enthalpy of a single-phase state
     double hp() {
         return up() + Pp()/Rho;
     }
@@ -175,11 +174,14 @@ public:
     void Set(PropertyPair::type XY, double x0, double y0);
 
 protected:
-    double T, Rho;
-    double Tslast, Rhf, Rhv;
-    double Pst;
-    double m_energy_offset;
-    double m_entropy_offset;
+    double T = Undef;
+    double Rho = Undef;
+    double Tslast = Undef;
+    double Rhf = Undef;
+    double Rhv = Undef;
+    double Pst = Undef;
+    double m_energy_offset = 0.0;
+    double m_entropy_offset = 0.0;
     std::string m_name;
     std::string m_formula;
 
@@ -219,7 +221,7 @@ private:
                 double X, double Y,
                 double atx, double aty, double rtx, double rty);
 
-    int kbr;
+    int kbr = 0;
     double Vmin, Vmax;
     double Pmin, Pmax;
     double dvbf, dv;

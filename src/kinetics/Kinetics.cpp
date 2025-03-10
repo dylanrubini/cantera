@@ -1,6 +1,6 @@
 /**
  *  @file Kinetics.cpp Declarations for the base class for kinetics managers
- *      (see \ref  kineticsmgr and class \link Cantera::Kinetics  Kinetics \endlink).
+ *      (see @ref  kineticsmgr and class @link Cantera::Kinetics  Kinetics @endlink).
  *
  *  Kinetics managers calculate rates of progress of species due to
  *  homogeneous or heterogeneous kinetics.
@@ -17,31 +17,17 @@
 #include "cantera/base/utilities.h"
 #include "cantera/base/global.h"
 #include <unordered_set>
-#include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string.hpp>
 
 using namespace std;
 
 namespace Cantera
 {
-Kinetics::Kinetics() :
-    m_ready(false),
-    m_kk(0),
-    m_thermo(0),
-    m_surfphase(npos),
-    m_rxnphase(npos),
-    m_mindim(4),
-    m_skipUndeclaredSpecies(false),
-    m_skipUndeclaredThirdBodies(false)
-{
-}
-
-Kinetics::~Kinetics() {}
 
 void Kinetics::checkReactionIndex(size_t i) const
 {
     if (i >= nReactions()) {
-        throw IndexError("Kinetics::checkReactionIndex", "reactions", i,
-                         nReactions()-1);
+        throw IndexError("Kinetics::checkReactionIndex", "reactions", i, nReactions());
     }
 }
 
@@ -75,7 +61,7 @@ void Kinetics::checkReactionArraySize(size_t ii) const
 void Kinetics::checkPhaseIndex(size_t m) const
 {
     if (m >= nPhases()) {
-        throw IndexError("Kinetics::checkPhaseIndex", "phase", m, nPhases()-1);
+        throw IndexError("Kinetics::checkPhaseIndex", "phase", m, nPhases());
     }
 }
 
@@ -86,10 +72,15 @@ void Kinetics::checkPhaseArraySize(size_t mm) const
     }
 }
 
+shared_ptr<ThermoPhase> Kinetics::reactionPhase() const
+{
+    return m_thermo[0];
+}
+
 void Kinetics::checkSpeciesIndex(size_t k) const
 {
     if (k >= m_kk) {
-        throw IndexError("Kinetics::checkSpeciesIndex", "species", k, m_kk-1);
+        throw IndexError("Kinetics::checkSpeciesIndex", "species", k, m_kk);
     }
 }
 
@@ -100,11 +91,23 @@ void Kinetics::checkSpeciesArraySize(size_t kk) const
     }
 }
 
-std::pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
+void Kinetics::setExplicitThirdBodyDuplicateHandling(const string& flag)
+{
+    if (flag == "warn" || flag == "error" || flag == "mark-duplicate"
+        || flag == "modify-efficiency")
+    {
+        m_explicit_third_body_duplicates = flag;
+    } else {
+        throw CanteraError("Kinetics::setExplicitThirdBodyDuplicateHandling",
+            "Invalid flag '{}'", flag);
+    }
+}
+
+pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
 {
     //! Map of (key indicating participating species) to reaction numbers
-    std::map<size_t, std::vector<size_t> > participants;
-    std::vector<std::map<int, double> > net_stoich;
+    map<size_t, vector<size_t>> participants;
+    vector<map<int, double>> net_stoich;
     std::unordered_set<size_t> unmatched_duplicates;
     for (size_t i = 0; i < m_reactions.size(); i++) {
         if (m_reactions[i]->duplicate) {
@@ -112,21 +115,22 @@ std::pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
         }
     }
 
+    vector<InputFileError> errs;
     for (size_t i = 0; i < m_reactions.size(); i++) {
         // Get data about this reaction
         unsigned long int key = 0;
         Reaction& R = *m_reactions[i];
         net_stoich.emplace_back();
-        std::map<int, double>& net = net_stoich.back();
-        for (const auto& sp : R.reactants) {
-            int k = static_cast<int>(kineticsSpeciesIndex(sp.first));
+        map<int, double>& net = net_stoich.back();
+        for (const auto& [name, stoich] : R.reactants) {
+            int k = static_cast<int>(kineticsSpeciesIndex(name));
             key += k*(k+1);
-            net[-1 -k] -= sp.second;
+            net[-1 -k] -= stoich;
         }
-        for (const auto& sp : R.products) {
-            int k = static_cast<int>(kineticsSpeciesIndex(sp.first));
+        for (const auto& [name, stoich] : R.products) {
+            int k = static_cast<int>(kineticsSpeciesIndex(name));
             key += k*(k+1);
-            net[1+k] += sp.second;
+            net[1+k] += stoich;
         }
 
         // Compare this reaction to others with similar participants
@@ -145,7 +149,7 @@ std::pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
             {
                 continue; // different rate parameterizations
             }
-            doublereal c = checkDuplicateStoich(net_stoich[i], net_stoich[m]);
+            double c = checkDuplicateStoich(net_stoich[i], net_stoich[m]);
             if (c == 0) {
                 continue; // stoichiometries differ (not by a multiple)
             } else if (c < 0.0 && !R.reversible && !other.reversible) {
@@ -165,14 +169,41 @@ std::pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
                 }
                 if (thirdBodyOk) {
                     continue; // No overlap in third body efficiencies
+                } else if ((tb1.name() == "M") != (tb2.name() == "M")) {
+                    // Exactly one of the reactions uses M as the third body
+                    if (m_explicit_third_body_duplicates == "mark-duplicate") {
+                        R.duplicate = true;
+                        other.duplicate = true;
+                        continue;
+                    } else if (m_explicit_third_body_duplicates == "modify-efficiency") {
+                        if (tb1.name() == "M") {
+                            tb1.efficiencies[tb2.name()] = 0.0;
+                        } else {
+                            tb2.efficiencies[tb1.name()] = 0.0;
+                        }
+                        continue;
+                    } else if (m_explicit_third_body_duplicates == "warn") {
+                        InputFileError msg("Kinetics::checkDuplicates",
+                            R.input, other.input,
+                            "Undeclared duplicate third body reactions with a common "
+                            "third body detected.\nAdd the field "
+                            "'explicit-third-body-duplicates: mark-duplicate' or\n"
+                            "'explicit-third-body-duplicates: modify-efficiency' to "
+                            "the YAML phase entry\nto choose how these reactions "
+                            "should be handled and suppress this warning.\n"
+                            "Reaction {}: {}\nReaction {}: {}\n",
+                            m+1, R.equation(), i+1, other.equation());
+                        warn_user("Kinetics::checkDuplicates", msg.what());
+                        continue;
+                    } // else m_explicit_third_body_duplicates == "error"
                 }
             }
             if (throw_err) {
-                throw InputFileError("Kinetics::checkDuplicates",
+                errs.emplace_back("Kinetics::checkDuplicates",
                         R.input, other.input,
                         "Undeclared duplicate reactions detected:\n"
                         "Reaction {}: {}\nReaction {}: {}\n",
-                        i+1, other.equation(), m+1, R.equation());
+                        m+1, R.equation(), i+1, other.equation());
             } else {
                 return {i,m};
             }
@@ -182,7 +213,7 @@ std::pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
     if (unmatched_duplicates.size()) {
         size_t i = *unmatched_duplicates.begin();
         if (throw_err) {
-            throw InputFileError("Kinetics::checkDuplicates",
+            errs.emplace_back("Kinetics::checkDuplicates",
                 m_reactions[i]->input,
                 "No duplicate found for declared duplicate reaction number {}"
                 " ({})", i, m_reactions[i]->equation());
@@ -190,22 +221,31 @@ std::pair<size_t, size_t> Kinetics::checkDuplicates(bool throw_err) const
             return {i, i};
         }
     }
-    return {npos, npos};
+    if (errs.empty()) {
+        return {npos, npos};
+    } else if (errs.size() == 1) {
+        throw errs[0];
+    } else {
+        fmt::memory_buffer msg;
+        for (const auto& err : errs) {
+            fmt_append(msg, "\n{}\n", err.getMessage());
+        }
+        throw CanteraError("Kinetics::checkDuplicates", to_string(msg));
+    }
 }
 
-double Kinetics::checkDuplicateStoich(std::map<int, double>& r1,
-                                      std::map<int, double>& r2) const
+double Kinetics::checkDuplicateStoich(map<int, double>& r1, map<int, double>& r2) const
 {
     std::unordered_set<int> keys; // species keys (k+1 or -k-1)
-    for (auto& r : r1) {
-        keys.insert(r.first);
+    for (auto& [speciesKey, stoich] : r1) {
+        keys.insert(speciesKey);
     }
-    for (auto& r : r2) {
-        keys.insert(r.first);
+    for (auto& [speciesKey, stoich] : r2) {
+        keys.insert(speciesKey);
     }
     int k1 = r1.begin()->first;
     // check for duplicate written in the same direction
-    doublereal ratio = 0.0;
+    double ratio = 0.0;
     if (r1[k1] && r2[k1]) {
         ratio = r2[k1]/r1[k1];
         bool different = false;
@@ -237,20 +277,6 @@ double Kinetics::checkDuplicateStoich(std::map<int, double>& r1,
     return ratio;
 }
 
-void Kinetics::selectPhase(const double* data, const ThermoPhase* phase,
-                           double* phase_data)
-{
-    for (size_t n = 0; n < nPhases(); n++) {
-        if (phase == m_thermo[n]) {
-            size_t nsp = phase->nSpecies();
-            copy(data + m_start[n],
-                 data + m_start[n] + nsp, phase_data);
-            return;
-        }
-    }
-    throw CanteraError("Kinetics::selectPhase", "Phase not found.");
-}
-
 string Kinetics::kineticsSpeciesName(size_t k) const
 {
     for (size_t n = m_start.size()-1; n != npos; n--) {
@@ -261,7 +287,7 @@ string Kinetics::kineticsSpeciesName(size_t k) const
     return "<unknown>";
 }
 
-size_t Kinetics::kineticsSpeciesIndex(const std::string& nm) const
+size_t Kinetics::kineticsSpeciesIndex(const string& nm) const
 {
     for (size_t n = 0; n < m_thermo.size(); n++) {
         // Check the ThermoPhase object for a match
@@ -273,27 +299,7 @@ size_t Kinetics::kineticsSpeciesIndex(const std::string& nm) const
     return npos;
 }
 
-size_t Kinetics::kineticsSpeciesIndex(const std::string& nm,
-                                      const std::string& ph) const
-{
-    if (ph == "<any>") {
-        return kineticsSpeciesIndex(nm);
-    }
-
-    for (size_t n = 0; n < m_thermo.size(); n++) {
-        string id = thermo(n).name();
-        if (ph == id) {
-            size_t k = thermo(n).speciesIndex(nm);
-            if (k == npos) {
-                return npos;
-            }
-            return k + m_start[n];
-        }
-    }
-    return npos;
-}
-
-ThermoPhase& Kinetics::speciesPhase(const std::string& nm)
+ThermoPhase& Kinetics::speciesPhase(const string& nm)
 {
     for (size_t n = 0; n < m_thermo.size(); n++) {
         size_t k = thermo(n).speciesIndex(nm);
@@ -304,9 +310,9 @@ ThermoPhase& Kinetics::speciesPhase(const std::string& nm)
     throw CanteraError("Kinetics::speciesPhase", "unknown species '{}'", nm);
 }
 
-const ThermoPhase& Kinetics::speciesPhase(const std::string& nm) const
+const ThermoPhase& Kinetics::speciesPhase(const string& nm) const
 {
-    for (const auto thermo : m_thermo) {
+    for (const auto& thermo : m_thermo) {
         if (thermo->speciesIndex(nm) != npos) {
             return *thermo;
         }
@@ -335,45 +341,19 @@ double Kinetics::productStoichCoeff(size_t kSpec, size_t irxn) const
     return m_productStoich.stoichCoeffs().coeff(kSpec, irxn);
 }
 
-std::string Kinetics::reactionType(size_t i) const {
-    return m_reactions[i]->type();
-}
-
-std::string Kinetics::reactionTypeStr(size_t i) const {
-    warn_deprecated("Kinetics::reactionTypeStr", "To be removed after Cantera 3.0.");
-    return reactionType(i);
-}
-
-std::string Kinetics::reactionString(size_t i) const
-{
-    return m_reactions[i]->equation();
-}
-
-//! Returns a string containing the reactants side of the reaction equation.
-std::string Kinetics::reactantString(size_t i) const
-{
-    return m_reactions[i]->reactantString();
-}
-
-//! Returns a string containing the products side of the reaction equation.
-std::string Kinetics::productString(size_t i) const
-{
-    return m_reactions[i]->productString();
-}
-
-void Kinetics::getFwdRatesOfProgress(doublereal* fwdROP)
+void Kinetics::getFwdRatesOfProgress(double* fwdROP)
 {
     updateROP();
     std::copy(m_ropf.begin(), m_ropf.end(), fwdROP);
 }
 
-void Kinetics::getRevRatesOfProgress(doublereal* revROP)
+void Kinetics::getRevRatesOfProgress(double* revROP)
 {
     updateROP();
     std::copy(m_ropr.begin(), m_ropr.end(), revROP);
 }
 
-void Kinetics::getNetRatesOfProgress(doublereal* netROP)
+void Kinetics::getNetRatesOfProgress(double* netROP)
 {
     updateROP();
     std::copy(m_ropnet.begin(), m_ropnet.end(), netROP);
@@ -411,7 +391,7 @@ void Kinetics::getCreationRates(double* cdot)
     m_reactantStoich.incrementSpecies(m_ropr.data(), cdot);
 }
 
-void Kinetics::getDestructionRates(doublereal* ddot)
+void Kinetics::getDestructionRates(double* ddot)
 {
     updateROP();
 
@@ -422,7 +402,7 @@ void Kinetics::getDestructionRates(doublereal* ddot)
     m_reactantStoich.incrementSpecies(m_ropf.data(), ddot);
 }
 
-void Kinetics::getNetProductionRates(doublereal* net)
+void Kinetics::getNetProductionRates(double* net)
 {
     updateROP();
 
@@ -479,6 +459,16 @@ Eigen::SparseMatrix<double> Kinetics::creationRates_ddX()
     return jac;
 }
 
+Eigen::SparseMatrix<double> Kinetics::creationRates_ddCi()
+{
+    Eigen::SparseMatrix<double> jac;
+    // the forward direction creates product species
+    jac = m_productStoich.stoichCoeffs() * fwdRatesOfProgress_ddCi();
+    // the reverse direction creates reactant species
+    jac += m_reactantStoich.stoichCoeffs() * revRatesOfProgress_ddCi();
+    return jac;
+}
+
 void Kinetics::getDestructionRates_ddT(double* dwdot)
 {
     Eigen::Map<Eigen::VectorXd> out(dwdot, m_kk);
@@ -525,6 +515,16 @@ Eigen::SparseMatrix<double> Kinetics::destructionRates_ddX()
     return jac;
 }
 
+Eigen::SparseMatrix<double> Kinetics::destructionRates_ddCi()
+{
+    Eigen::SparseMatrix<double> jac;
+    // the reverse direction destroys products in reversible reactions
+    jac = m_revProductStoich.stoichCoeffs() * revRatesOfProgress_ddCi();
+    // the forward direction destroys reactants
+    jac += m_reactantStoich.stoichCoeffs() * fwdRatesOfProgress_ddCi();
+    return jac;
+}
+
 void Kinetics::getNetProductionRates_ddT(double* dwdot)
 {
     Eigen::Map<Eigen::VectorXd> out(dwdot, m_kk);
@@ -554,21 +554,24 @@ Eigen::SparseMatrix<double> Kinetics::netProductionRates_ddX()
     return m_stoichMatrix * netRatesOfProgress_ddX();
 }
 
-void Kinetics::addPhase(ThermoPhase& thermo)
+Eigen::SparseMatrix<double> Kinetics::netProductionRates_ddCi()
+{
+    return m_stoichMatrix * netRatesOfProgress_ddCi();
+}
+
+void Kinetics::addThermo(shared_ptr<ThermoPhase> thermo)
 {
     // the phase with lowest dimensionality is assumed to be the
     // phase/interface at which reactions take place
-    if (thermo.nDim() <= m_mindim) {
-        m_mindim = thermo.nDim();
-        m_rxnphase = nPhases();
+    if (thermo->nDim() <= m_mindim) {
+        if (!m_thermo.empty()) {
+            throw CanteraError("Kinetics::addThermo",
+                "The reacting (lowest dimensional) phase must be added first.");
+        }
+        m_mindim = thermo->nDim();
     }
 
-    // there should only be one surface phase
-    if (thermo.type() == kineticsType()) {
-        m_surfphase = nPhases();
-        m_rxnphase = nPhases();
-    }
-    m_thermo.push_back(&thermo);
+    m_thermo.push_back(thermo);
     m_phaseindex[m_thermo.back()->name()] = nPhases();
     resizeSpecies();
 }
@@ -581,6 +584,15 @@ AnyMap Kinetics::parameters()
         out["kinetics"] = name;
         if (nReactions() == 0) {
             out["reactions"] = "none";
+        }
+        if (m_hasUndeclaredThirdBodies) {
+            out["skip-undeclared-third-bodies"] = true;
+        }
+        if (m_explicit_third_body_duplicates == "error") {
+            // "warn" is the default, and does not need to be added. "mark-duplicate"
+            // and "modify-efficiency" do not need to be propagated here as their
+            // effects are already applied to the corresponding reactions.
+            out["explicit-third-body-duplicates"] = "error";
         }
     }
     return out;
@@ -617,38 +629,38 @@ bool Kinetics::addReaction(shared_ptr<Reaction> r, bool resize)
     // For reactions created outside the context of a Kinetics object, the units
     // of the rate coefficient can't be determined in advance. Do that here.
     if (r->rate_units.factor() == 0) {
-        r->calculateRateCoeffUnits(*this);
+        r->rate()->setRateUnits(r->calculateRateCoeffUnits(*this));
     }
 
     size_t irxn = nReactions(); // index of the new reaction
 
     // indices of reactant and product species within this Kinetics object
-    std::vector<size_t> rk, pk;
+    vector<size_t> rk, pk;
 
     // Reactant and product stoichiometric coefficients, such that rstoich[i] is
     // the coefficient for species rk[i]
-    vector_fp rstoich, pstoich;
+    vector<double> rstoich, pstoich;
 
-    for (const auto& sp : r->reactants) {
-        rk.push_back(kineticsSpeciesIndex(sp.first));
-        rstoich.push_back(sp.second);
+    for (const auto& [name, stoich] : r->reactants) {
+        rk.push_back(kineticsSpeciesIndex(name));
+        rstoich.push_back(stoich);
     }
 
-    for (const auto& sp : r->products) {
-        pk.push_back(kineticsSpeciesIndex(sp.first));
-        pstoich.push_back(sp.second);
+    for (const auto& [name, stoich] : r->products) {
+        pk.push_back(kineticsSpeciesIndex(name));
+        pstoich.push_back(stoich);
     }
 
     // The default order for each reactant is its stoichiometric coefficient,
     // which can be overridden by entries in the Reaction.orders map. rorder[i]
     // is the order for species rk[i].
-    vector_fp rorder = rstoich;
-    for (const auto& sp : r->orders) {
-        size_t k = kineticsSpeciesIndex(sp.first);
+    vector<double> rorder = rstoich;
+    for (const auto& [name, order] : r->orders) {
+        size_t k = kineticsSpeciesIndex(name);
         // Find the index of species k within rk
         auto rloc = std::find(rk.begin(), rk.end(), k);
         if (rloc != rk.end()) {
-            rorder[rloc - rk.begin()] = sp.second;
+            rorder[rloc - rk.begin()] = order;
         } else {
             // If the reaction order involves a non-reactant species, add an
             // extra term to the reactants with zero stoichiometry so that the
@@ -656,7 +668,7 @@ bool Kinetics::addReaction(shared_ptr<Reaction> r, bool resize)
             // reaction rate.
             rk.push_back(k);
             rstoich.push_back(0.0);
-            rorder.push_back(sp.second);
+            rorder.push_back(order);
         }
     }
 
@@ -683,6 +695,10 @@ bool Kinetics::addReaction(shared_ptr<Reaction> r, bool resize)
         m_ready = false;
     }
 
+    for (const auto& [id, callback] : m_reactionAddedCallbacks) {
+        callback();
+    }
+
     return true;
 }
 
@@ -690,6 +706,13 @@ void Kinetics::modifyReaction(size_t i, shared_ptr<Reaction> rNew)
 {
     checkReactionIndex(i);
     shared_ptr<Reaction>& rOld = m_reactions[i];
+
+    if (rNew->rate()->type() == "electron-collision-plasma") {
+        throw CanteraError("Kinetics::modifyReaction",
+            "Type electron-collision-plasma is not supported. "
+            "Use the rate object of the reaction to modify the data.");
+    }
+
     if (rNew->type() != rOld->type()) {
         throw CanteraError("Kinetics::modifyReaction",
             "Reaction types are different: {} != {}.",
@@ -727,26 +750,6 @@ shared_ptr<const Reaction> Kinetics::reaction(size_t i) const
 {
     checkReactionIndex(i);
     return m_reactions[i];
-}
-
-double Kinetics::reactionEnthalpy(const Composition& reactants, const Composition& products)
-{
-    vector_fp hk(nTotalSpecies());
-    for (size_t n = 0; n < nPhases(); n++) {
-        thermo(n).getPartialMolarEnthalpies(&hk[m_start[n]]);
-    }
-    double rxn_deltaH = 0;
-    for (const auto& product : products) {
-        size_t k = kineticsSpeciesIndex(product.first);
-        double stoich = product.second;
-        rxn_deltaH += hk[k] * stoich;
-    }
-    for (const auto& reactant : reactants) {
-            size_t k = kineticsSpeciesIndex(reactant.first);
-            double stoich = reactant.second;
-            rxn_deltaH -= hk[k] * stoich;
-        }
-    return rxn_deltaH;
 }
 
 }

@@ -6,11 +6,12 @@
 #include "cantera/base/FactoryBase.h"
 #include "application.h"
 #include "cantera/base/AnyMap.h"
-#ifdef CT_USE_DEMANGLE
-  #include <boost/core/demangle.hpp>
-#endif
 
-using namespace std;
+#define BOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED
+#include <boost/stacktrace.hpp>
+#include <boost/core/demangle.hpp>
+
+#include <signal.h>
 
 namespace Cantera
 {
@@ -32,7 +33,7 @@ void setLogger(Logger* logwriter)
     }
 }
 
-void writelog_direct(const std::string& msg)
+void writelog_direct(const string& msg)
 {
     app()->writelog(msg);
 }
@@ -47,19 +48,18 @@ void writeline(char repeat, size_t count, bool endl_after, bool endl_before)
     if (endl_before) {
         writelogendl();
     }
-    writelog_direct(std::string(count, repeat));
+    writelog_direct(string(count, repeat));
     if (endl_after) {
         writelogendl();
     }
 }
 
-void _warn_deprecated(const std::string& method, const std::string& extra)
+void _warn_deprecated(const string& method, const string& extra)
 {
     app()->warn_deprecated(method, extra);
 }
 
-void _warn(const std::string& warning,
-           const std::string& method, const std::string& extra)
+void _warn(const string& warning, const string& method, const string& extra)
 {
     app()->warn(warning, method, extra);
 }
@@ -109,6 +109,26 @@ bool legacy_rate_constants_used()
     return app()->legacy_rate_constants_used();
 }
 
+namespace {
+void stacktraceWriter(int signum) {
+    if (signum == SIGSEGV) {
+        std::cerr << "\nSegmentation fault. Stack trace:\n";
+    } else {
+        std::cerr << "\nProcess terminated abnormally. Stack trace:\n";
+    }
+    ::signal(signum, SIG_DFL);
+    std::cerr << boost::stacktrace::stacktrace();
+    ::raise(signum);
+}
+}
+
+void printStackTraceOnSegfault()
+{
+    // Install signal handler to print stacktrace in case of segfault.
+    ::signal(SIGSEGV, &stacktraceWriter);
+    ::signal(SIGABRT, &stacktraceWriter);
+}
+
 // **************** Global Data ****************
 
 void appdelete()
@@ -122,7 +142,12 @@ void thread_complete()
     app()->thread_complete();
 }
 
-std::string gitCommit()
+string version()
+{
+    return CANTERA_VERSION;
+}
+
+string gitCommit()
 {
 #ifdef GIT_COMMIT
     return GIT_COMMIT;
@@ -131,22 +156,22 @@ std::string gitCommit()
 #endif
 }
 
-void addDirectory(const std::string& dir)
+void addDirectory(const string& dir)
 {
     app()->addDataDirectory(dir);
 }
 
-std::string getDataDirectories(const std::string& sep)
+string getDataDirectories(const string& sep)
 {
     return app()->getDataDirectories(sep);
 }
 
-std::string findInputFile(const std::string& name)
+string findInputFile(const string& name)
 {
     return app()->findInputFile(name);
 }
 
-void loadExtension(const std::string& extType, const std::string& name)
+void loadExtension(const string& extType, const string& name)
 {
     app()->loadExtension(extType, name);
 }
@@ -161,6 +186,10 @@ void loadExtensions(const AnyMap& node)
     }
 }
 
+void searchPythonVersions(const string& versions) {
+    app()->searchPythonVersions(versions);
+}
+
 bool debugModeEnabled()
 {
 #ifdef NDEBUG
@@ -170,16 +199,25 @@ bool debugModeEnabled()
 #endif
 }
 
-std::vector<FactoryBase*> FactoryBase::s_vFactoryRegistry;
-
-std::string demangle(const std::type_info& type)
+bool usesHDF5()
 {
-    static std::map<std::string, std::string> typenames = {
+#if CT_USE_HDF5
+    return true;
+#else
+    return false;
+#endif
+}
+
+vector<FactoryBase*> FactoryBase::s_vFactoryRegistry;
+
+string demangle(const std::type_info& type)
+{
+    static map<string, string> typenames = {
         {typeid(void).name(), "void"},
         {typeid(double).name(), "double"},
         {typeid(long int).name(), "long int"},
         {typeid(bool).name(), "bool"},
-        {typeid(std::string).name(), "string"},
+        {typeid(string).name(), "string"},
         {typeid(vector<AnyValue>).name(), "vector<AnyValue>"},
         {typeid(vector<AnyMap>).name(), "vector<AnyMap>"},
         {typeid(vector<double>).name(), "vector<double>"},
@@ -196,11 +234,7 @@ std::string demangle(const std::type_info& type)
     if (typenames.count(type.name())) {
         return typenames[type.name()];
     } else {
-        #ifdef CT_USE_DEMANGLE
-            return boost::core::demangle(type.name());
-        #else
-            return type.name();
-        #endif
+        return boost::core::demangle(type.name());
     }
 }
 

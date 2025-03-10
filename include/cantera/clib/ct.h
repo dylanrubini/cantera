@@ -1,5 +1,8 @@
 /**
  * @file ct.h
+ *
+ * @warning  This module is an experimental part of the %Cantera API and
+ *      may be changed or removed without notice.
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -16,8 +19,27 @@ extern "C" {
 
     CANTERA_CAPI int ct_appdelete();
 
-    CANTERA_CAPI int thermo_newFromFile(const char* filename, const char* phasename);
-    CANTERA_CAPI int thermo_del(int n);
+    CANTERA_CAPI int soln_newSolution(const char* infile,
+                                      const char* name,
+                                      const char* transport);
+    CANTERA_CAPI int soln_newInterface(const char* infile,
+                                       const char* name,
+                                       int na,
+                                       const int* adjacent);
+    CANTERA_CAPI int soln_del(int n); //!< note that linked objects are deleted as well
+    CANTERA_CAPI int soln_name(int n, int buflen, char* buf);
+    CANTERA_CAPI int soln_thermo(int n);
+    CANTERA_CAPI int soln_kinetics(int n);
+    CANTERA_CAPI int soln_transport(int n);
+    //! note that soln_setTransportModel deletes the previous transport model
+    CANTERA_CAPI int soln_setTransportModel(int n, const char* model);
+    CANTERA_CAPI size_t soln_nAdjacent(int n);
+    CANTERA_CAPI int soln_adjacent(int n, int a);
+    CANTERA_CAPI int soln_adjacentName(int n, int a, int lennm, char* nm);
+
+    CANTERA_CAPI int thermo_parent(int n);
+    CANTERA_CAPI int thermo_size();
+    CANTERA_CAPI int thermo_del(int n);  //!< no-op; object is managed by Solution
     CANTERA_CAPI size_t thermo_nElements(int n);
     CANTERA_CAPI size_t thermo_nSpecies(int n);
     CANTERA_CAPI double thermo_temperature(int n);
@@ -25,7 +47,6 @@ extern "C" {
     CANTERA_CAPI double thermo_density(int n);
     CANTERA_CAPI int thermo_setDensity(int n, double rho);
     CANTERA_CAPI double thermo_molarDensity(int n);
-    CANTERA_CAPI int thermo_setMolarDensity(int n, double ndens);
     CANTERA_CAPI double thermo_meanMolecularWeight(int n);
     CANTERA_CAPI double thermo_moleFraction(int n, size_t k);
     CANTERA_CAPI double thermo_massFraction(int n, size_t k);
@@ -46,8 +67,8 @@ extern "C" {
     CANTERA_CAPI int thermo_setName(int n, const char* nm);
     CANTERA_CAPI size_t thermo_elementIndex(int n, const char* nm);
     CANTERA_CAPI size_t thermo_speciesIndex(int n, const char* nm);
-    CANTERA_CAPI int thermo_report(int nth,
-                                  int ibuf, char* buf, int show_thermo);
+    //! @since Changed signature in %Cantera 3.1
+    CANTERA_CAPI int thermo_report(int nth, int show_thermo, double threshold, int ibuf, char* buf);
     CANTERA_CAPI int thermo_print(int nth, int show_thermo, double threshold);
     CANTERA_CAPI double thermo_nAtoms(int n, size_t k, size_t m);
     CANTERA_CAPI int thermo_addElement(int n, const char* name, double weight);
@@ -73,12 +94,19 @@ extern "C" {
     CANTERA_CAPI double thermo_thermalExpansionCoeff(int n);
     CANTERA_CAPI double thermo_isothermalCompressibility(int n);
     CANTERA_CAPI int thermo_chemPotentials(int n, size_t lenm, double* murt);
+    CANTERA_CAPI int thermo_electrochemPotentials(int n, size_t lenm, double* emu);
     CANTERA_CAPI int thermo_getEnthalpies_RT(int n, size_t lenm, double* h_rt);
     CANTERA_CAPI int thermo_getEntropies_R(int n, size_t lenm, double* s_r);
     CANTERA_CAPI int thermo_getCp_R(int n, size_t lenm, double* cp_r);
     CANTERA_CAPI int thermo_setElectricPotential(int n, double v);
+    CANTERA_CAPI int thermo_getPartialMolarEnthalpies(int n, size_t lenm, double* pmh);
+    CANTERA_CAPI int thermo_getPartialMolarEntropies(int n, size_t lenm, double* pms);
+    CANTERA_CAPI int thermo_getPartialMolarIntEnergies(int n, size_t lenm, double* pmu);
+    CANTERA_CAPI int thermo_getPartialMolarCp(int n, size_t lenm, double* pmcp);
+    CANTERA_CAPI int thermo_getPartialMolarVolumes(int n, size_t lenm, double* pmv);
     CANTERA_CAPI int thermo_set_TP(int n, double* vals);
-    CANTERA_CAPI int thermo_set_RP(int n, double* vals);
+    CANTERA_CAPI int thermo_set_TD(int n, double* vals);
+    CANTERA_CAPI int thermo_set_DP(int n, double* vals);
     CANTERA_CAPI int thermo_set_HP(int n, double* vals);
     CANTERA_CAPI int thermo_set_UV(int n, double* vals);
     CANTERA_CAPI int thermo_set_SV(int n, double* vals);
@@ -90,7 +118,7 @@ extern "C" {
     CANTERA_CAPI int thermo_set_VH(int n, double* vals);
     CANTERA_CAPI int thermo_set_TH(int n, double* vals);
     CANTERA_CAPI int thermo_set_SH(int n, double* vals);
-    CANTERA_CAPI int thermo_equilibrate(int n, const char* XY, int solver,
+    CANTERA_CAPI int thermo_equilibrate(int n, const char* XY, const char* solver,
                                         double rtol, int maxsteps, int maxiter,
                                         int loglevel);
 
@@ -103,15 +131,12 @@ extern "C" {
     CANTERA_CAPI int thermo_setState_Psat(int n, double p, double x);
     CANTERA_CAPI int thermo_setState_Tsat(int n, double t, double x);
 
-    CANTERA_CAPI int kin_newFromFile(const char* filename, const char* phasename,
-                                     int reactingPhase, int neighbor1, int neighbor2,
-                                     int neighbor3, int neighbor4);
-    CANTERA_CAPI int kin_del(int n);
+    CANTERA_CAPI int kin_parent(int n);
+    CANTERA_CAPI int kin_del(int n);  //!< no-op; object is managed by Solution
     CANTERA_CAPI size_t kin_nSpecies(int n);
     CANTERA_CAPI size_t kin_nReactions(int n);
     CANTERA_CAPI size_t kin_nPhases(int n);
     CANTERA_CAPI size_t kin_phaseIndex(int n, const char* ph);
-    CANTERA_CAPI size_t kin_reactionPhaseIndex(int n);
     CANTERA_CAPI double kin_reactantStoichCoeff(int n, int i, int k);
     CANTERA_CAPI double kin_productStoichCoeff(int n, int i, int k);
     CANTERA_CAPI int kin_getReactionType(int n, int i, size_t len, char* name);
@@ -134,13 +159,13 @@ extern "C" {
     CANTERA_CAPI int kin_isReversible(int n, int i);
     CANTERA_CAPI int kin_getType(int n, size_t len, char* name);
     CANTERA_CAPI size_t kin_start(int n, int p);
-    CANTERA_CAPI size_t kin_speciesIndex(int n, const char* nm, const char* ph);
+    CANTERA_CAPI size_t kin_speciesIndex(int n, const char* nm);
     CANTERA_CAPI int kin_advanceCoverages(int n, double tstep);
     CANTERA_CAPI size_t kin_phase(int n, size_t i);
 
-    CANTERA_CAPI int trans_newDefault(int th, int loglevel);
-    CANTERA_CAPI int trans_new(const char* model, int th, int loglevel);
-    CANTERA_CAPI int trans_del(int n);
+    CANTERA_CAPI int trans_parent(int n);
+    CANTERA_CAPI int trans_del(int n);  //!< no-op; object is managed by Solution
+    CANTERA_CAPI int trans_transportModel(int n, int lennm, char* nm);
     CANTERA_CAPI double trans_viscosity(int n);
     CANTERA_CAPI double trans_electricalConductivity(int n);
     CANTERA_CAPI double trans_thermalConductivity(int n);
@@ -148,7 +173,6 @@ extern "C" {
     CANTERA_CAPI int trans_getMixDiffCoeffs(int n, int ld, double* d);
     CANTERA_CAPI int trans_getBinDiffCoeffs(int n, int ld, double* d);
     CANTERA_CAPI int trans_getMultiDiffCoeffs(int n, int ld, double* d);
-    CANTERA_CAPI int trans_setParameters(int n, int type, int k, double* d);
     CANTERA_CAPI int trans_getMolarFluxes(int n, const double* state1,
                                           const double* state2, double delta, double* fluxes);
     CANTERA_CAPI int trans_getMassFluxes(int n, const double* state1,
@@ -158,12 +182,14 @@ extern "C" {
     CANTERA_CAPI int ct_setLogWriter(void* logger);
     CANTERA_CAPI int ct_setLogCallback(LogCallback writer);
     CANTERA_CAPI int ct_addCanteraDirectory(size_t buflen, const char* buf);
-    CANTERA_CAPI int ct_getDataDirectories(int buflen, char* buf, const char* sep);
+    //! @since Changed signature in %Cantera 3.1
+    CANTERA_CAPI int ct_getDataDirectories(const char* sep, int buflen, char* buf);
     CANTERA_CAPI int ct_getCanteraVersion(int buflen, char* buf);
     CANTERA_CAPI int ct_getGitCommit(int buflen, char* buf);
     CANTERA_CAPI int ct_suppress_thermo_warnings(int suppress);
     CANTERA_CAPI int ct_use_legacy_rate_constants(int legacy);
     CANTERA_CAPI int ct_clearStorage();
+    CANTERA_CAPI int ct_resetStorage();
 
 #ifdef __cplusplus
 }

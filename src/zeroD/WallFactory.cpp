@@ -6,7 +6,6 @@
 #include "cantera/zeroD/WallFactory.h"
 #include "cantera/zeroD/Wall.h"
 
-using namespace std;
 namespace Cantera
 {
 
@@ -15,12 +14,26 @@ std::mutex WallFactory::wall_mutex;
 
 WallFactory::WallFactory()
 {
-    reg("Wall", []() { return new Wall(); });
+    reg("Wall", [](const string& name) { return new Wall(name); });
 }
 
-WallBase* WallFactory::newWall(const std::string& wallType)
+WallFactory* WallFactory::factory() {
+    std::unique_lock<std::mutex> lock(wall_mutex);
+    if (!s_factory) {
+        s_factory = new WallFactory;
+    }
+    return s_factory;
+}
+
+void WallFactory::deleteFactory() {
+    std::unique_lock<std::mutex> lock(wall_mutex);
+    delete s_factory;
+    s_factory = 0;
+}
+
+shared_ptr<WallBase> newWall(const string& model, const string& name)
 {
-    return create(wallType);
+    return shared_ptr<WallBase>(WallFactory::factory()->create(model, name));
 }
 
 }

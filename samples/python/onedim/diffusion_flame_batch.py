@@ -2,6 +2,9 @@
 # at https://cantera.org/license.txt for license and copyright information.
 
 """
+Scaling of diffusion flames with pressure and strain rate
+=========================================================
+
 This example creates two batches of counterflow diffusion flame simulations.
 The first batch computes counterflow flames at increasing pressure, the second
 at increasing strain rates.
@@ -13,13 +16,13 @@ explanation. Also, please don't forget to cite it if you make use of it.
 This example can, for example, be used to iterate to a counterflow diffusion flame to an
 awkward pressure and strain rate, or to create the basis for a flamelet table.
 
-Requires: cantera >= 2.5.0, matplotlib >= 2.0
-Keywords: combustion, 1D flow, extinction, diffusion flame, strained flame,
+Requires: cantera >= 3.0, matplotlib >= 2.0
+
+.. tags:: Python, combustion, 1D flow, extinction, diffusion flame, strained flame,
           saving output, plotting
 """
 
-import os
-import importlib
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -30,20 +33,10 @@ class FlameExtinguished(Exception):
     pass
 
 
-hdf_output = importlib.util.find_spec('h5py') is not None
-
-if not hdf_output:
-    # Create directory for output data files
-    data_directory = 'diffusion_flame_batch_data'
-    if not os.path.exists(data_directory):
-        os.makedirs(data_directory)
-    fig_name = os.path.join(data_directory, 'figure_{0}.png')
-else:
-    fig_name = 'diffusion_flame_batch_{0}.png'
-
-
-# PART 1: INITIALIZATION
-
+# %%
+# Initialization
+# --------------
+#
 # Set up an initial hydrogen-oxygen counterflow flame at 1 bar and low strain
 # rate (maximum axial velocity gradient = 2414 1/s)
 
@@ -64,6 +57,7 @@ f.oxidizer_inlet.T = 300  # K
 # Set refinement parameters, if used
 f.set_refine_criteria(ratio=3.0, slope=0.1, curve=0.2, prune=0.03)
 
+# %%
 # Define a limit for the maximum temperature below which the flame is
 # considered as extinguished and the computation is aborted
 # This increases the speed of refinement, if enabled
@@ -78,33 +72,47 @@ def interrupt_extinction(t):
 
 f.set_interrupt(interrupt_extinction)
 
+# %%
 # Initialize and solve
 print('Creating the initial solution')
 f.solve(loglevel=0, auto=True)
 
-# Save to data directory
+# Define output locations
+output_path = Path() / "diffusion_flame_batch_data"
+output_path.mkdir(parents=True, exist_ok=True)
+
+hdf_output = "native" in ct.hdf_support()
 if hdf_output:
-    # save to HDF container file if h5py is installed
-    file_name = 'diffusion_flame_batch.h5'
-    f.write_hdf(file_name, group='initial_solution', mode='w', quiet=False,
-                description=('Initial hydrogen-oxygen counterflow flame '
-                             'at 1 bar and low strain rate'))
-else:
-    file_name = 'initial_solution.yaml'
-    f.save(os.path.join(data_directory, file_name), name='solution',
-           description='Initial hydrogen-oxygen counterflow flame '
-                       'at 1 bar and low strain rate')
+    file_name = output_path / "flame_data.h5"
+    file_name.unlink(missing_ok=True)
 
+def names(test):
+    if hdf_output:
+        # use internal container structure for HDF
+        file_name = output_path / "flame_data.h5"
+        return file_name, test
+    # use separate files for YAML
+    file_name = output_path / f"{test}.yaml".replace("-", "_").replace("/", "_")
+    return file_name, "solution"
 
-# PART 2: BATCH PRESSURE LOOP
+# Save to data directory
+file_name, entry = names("initial-solution")
+desc = "Initial hydrogen-oxygen counterflow flame at 1 bar and low strain rate"
+f.save(file_name, name=entry, description=desc, overwrite=True)
 
+# %%
+# Batch Pressure Loop
+# -------------------
+#
 # Compute counterflow diffusion flames over a range of pressures
+
 # Arbitrarily define a pressure range (in bar)
 p_range = np.round(np.logspace(0, 2, 50), decimals=1)
 
+# %%
 # Exponents for the initial solution variation with changes in pressure Taken
 # from Fiala and Sattelmayer (2014). The exponents are adjusted such that the
-# strain rates increases proportional to p^(3/2), which results in flames
+# strain rates increases proportional to :math:`p^{3/2}`, which results in flames
 # similar with respect to the extinction strain rate.
 exp_d_p = -5. / 4.
 exp_u_p = 1. / 4.
@@ -139,34 +147,26 @@ for p in p_range:
     try:
         # Try solving the flame
         f.solve(loglevel=0)
-        if hdf_output:
-            group = 'pressure_loop/{:05.1f}'.format(p)
-            f.write_hdf(file_name, group=group, quiet=False,
-                        description='pressure = {0} bar'.format(p))
-        else:
-            file_name = 'pressure_loop_' + format(p, '05.1f') + '.yaml'
-            f.save(os.path.join(data_directory, file_name), name='solution', loglevel=1,
-                   description='pressure = {0} bar'.format(p))
+        file_name, entry = names(f"pressure-loop/{p:05.1f}")
+        f.save(file_name, name=entry, description=f"pressure = {p} bar",
+               overwrite=True)
         p_previous = p
     except ct.CanteraError as e:
         print('Error occurred while solving:', e, 'Try next pressure level')
         # If solution failed: Restore the last successful solution and continue
-        if hdf_output:
-            f.read_hdf(file_name, group=group)
-        else:
-            f.restore(filename=os.path.join(data_directory, file_name), name='solution',
-                      loglevel=0)
+        f.restore(file_name, name=entry)
 
-
-# PART 3: STRAIN RATE LOOP
-
+# %%
+# Strain Rate Loop
+# ----------------
 # Compute counterflow diffusion flames at increasing strain rates at 1 bar
 # The strain rate is assumed to increase by 25% in each step until the flame is
 # extinguished
 strain_factor = 1.25
 
-# Exponents for the initial solution variation with changes in strain rate
-# Taken from Fiala and Sattelmayer (2014)
+# %%
+# Exponents for the initial solution variation with changes in strain rate.
+# Taken from Fiala and Sattelmayer (2014).
 exp_d_a = - 1. / 2.
 exp_u_a = 1. / 2.
 exp_V_a = 1.
@@ -174,11 +174,8 @@ exp_lam_a = 2.
 exp_mdot_a = 1. / 2.
 
 # Restore initial solution
-if hdf_output:
-    f.read_hdf(file_name, group='initial_solution')
-else:
-    file_name = 'initial_solution.yaml'
-    f.restore(filename=os.path.join(data_directory, file_name), name='solution', loglevel=0)
+file_name, entry = names("initial-solution")
+f.restore(file_name, name=entry)
 
 # Counter to identify the loop
 n = 0
@@ -203,14 +200,9 @@ while np.max(f.T) > temperature_limit_extinction:
     try:
         # Try solving the flame
         f.solve(loglevel=0)
-        if hdf_output:
-            group = 'strain_loop/{:02d}'.format(n)
-            f.write_hdf(file_name, group=group, quiet=False,
-                        description='strain rate iteration {}'.format(n))
-        else:
-            file_name = 'strain_loop_' + format(n, '02d') + '.yaml'
-            f.save(os.path.join(data_directory, file_name), name='solution', loglevel=1,
-                   description='strain rate iteration {}'.format(n))
+        file_name, entry = names(f"strain-loop/{n:02d}")
+        f.save(file_name, name=entry,
+               description=f"strain rate iteration {n}", overwrite=True)
     except FlameExtinguished:
         print('Flame extinguished')
         break
@@ -218,8 +210,9 @@ while np.max(f.T) > temperature_limit_extinction:
         print('Error occurred while solving:', e)
         break
 
-
-# PART 4: PLOT SOME FIGURES
+# %%
+# Plotting Results
+# ----------------
 
 fig1 = plt.figure()
 fig2 = plt.figure()
@@ -228,60 +221,52 @@ ax2 = fig2.add_subplot(1, 1, 1)
 p_selected = p_range[::7]
 
 for p in p_selected:
-    if hdf_output:
-        group = 'pressure_loop/{0:05.1f}'.format(p)
-        f.read_hdf(file_name, group=group)
-    else:
-        file_name = 'pressure_loop_{0:05.1f}.yaml'.format(p)
-        f.restore(filename=os.path.join(data_directory, file_name), name='solution', loglevel=0)
+    file_name, entry = names(f"pressure-loop/{p:05.1f}")
+    f.restore(file_name, name=entry)
 
     # Plot the temperature profiles for selected pressures
-    ax1.plot(f.grid / f.grid[-1], f.T, label='{0:05.1f} bar'.format(p))
+    ax1.plot(f.grid / f.grid[-1], f.T, label=f"{p:05.1f} bar")
 
     # Plot the axial velocity profiles (normalized by the fuel inlet velocity)
     # for selected pressures
-    ax2.plot(f.grid / f.grid[-1], f.velocity / f.velocity[0],
-             label='{0:05.1f} bar'.format(p))
+    ax2.plot(f.grid / f.grid[-1], f.velocity / f.velocity[0], label=f"{p:05.1f} bar")
 
 ax1.legend(loc=0)
 ax1.set_xlabel(r'$z/z_{max}$')
 ax1.set_ylabel(r'$T$ [K]')
-fig1.savefig(fig_name.format('T_p'))
+fig1.savefig(output_path / "figure_T_p.png")
 
 ax2.legend(loc=0)
 ax2.set_xlabel(r'$z/z_{max}$')
 ax2.set_ylabel(r'$u/u_f$')
-fig2.savefig(fig_name.format('u_p'))
+fig2.savefig(output_path / "figure_u_p.png")
+plt.show()
 
+# %%
 fig3 = plt.figure()
 fig4 = plt.figure()
 ax3 = fig3.add_subplot(1, 1, 1)
 ax4 = fig4.add_subplot(1, 1, 1)
 n_selected = range(1, n, 5)
 for n in n_selected:
-    if hdf_output:
-        group = 'strain_loop/{0:02d}'.format(n)
-        f.read_hdf(file_name, group=group)
-    else:
-        file_name = 'strain_loop_{0:02d}.yaml'.format(n)
-        f.restore(filename=os.path.join(data_directory, file_name),
-                  name='solution', loglevel=0)
+    file_name, entry = names(f"strain-loop/{n:02d}")
+    f.restore(file_name, name=entry)
     a_max = f.strain_rate('max')  # the maximum axial strain rate
 
     # Plot the temperature profiles for the strain rate loop (selected)
-    ax3.plot(f.grid / f.grid[-1], f.T, label='{0:.2e} 1/s'.format(a_max))
+    ax3.plot(f.grid / f.grid[-1], f.T, label=f"{a_max:.2e} 1/s")
 
     # Plot the axial velocity profiles (normalized by the fuel inlet velocity)
     # for the strain rate loop (selected)
-    ax4.plot(f.grid / f.grid[-1], f.velocity / f.velocity[0],
-             label=format(a_max, '.2e') + ' 1/s')
+    ax4.plot(f.grid / f.grid[-1], f.velocity / f.velocity[0], label=f"{a_max:.2e} 1/s")
 
 ax3.legend(loc=0)
 ax3.set_xlabel(r'$z/z_{max}$')
 ax3.set_ylabel(r'$T$ [K]')
-fig3.savefig(fig_name.format('T_a'))
+fig3.savefig(output_path / "figure_T_a.png")
 
 ax4.legend(loc=0)
 ax4.set_xlabel(r'$z/z_{max}$')
 ax4.set_ylabel(r'$u/u_f$')
-fig4.savefig(fig_name.format('u_a'))
+fig4.savefig(output_path / "figure_u_a.png")
+plt.show()

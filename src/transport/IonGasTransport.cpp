@@ -13,12 +13,8 @@
 
 namespace Cantera
 {
-IonGasTransport::IonGasTransport() :
-    m_kElectron(npos)
-{
-}
 
-void IonGasTransport::init(ThermoPhase* thermo, int mode, int log_level)
+void IonGasTransport::init(ThermoPhase* thermo, int mode)
 {
     m_thermo = thermo;
     m_nsp = m_thermo->nSpecies();
@@ -27,7 +23,6 @@ void IonGasTransport::init(ThermoPhase* thermo, int mode, int log_level)
         throw CanteraError("IonGasTransport::init",
                            "mode = CK_Mode, which is an outdated lower-order fit.");
     }
-    m_log_level = log_level;
     // make a local copy of species charge
     for (size_t k = 0; k < m_nsp; k++) {
         m_speciesCharge.push_back(m_thermo->charge(k));
@@ -36,9 +31,9 @@ void IonGasTransport::init(ThermoPhase* thermo, int mode, int log_level)
     // Find the index of electron
     size_t nElectronSpecies = 0;
     for (size_t k = 0; k < m_nsp; k++) {
-        if (m_thermo->molecularWeight(k) ==
-            m_thermo->atomicWeight(m_thermo->elementIndex("E")) &&
-            m_thermo->charge(k)  == -1) {
+        if (m_thermo->molecularWeight(k) == getElementWeight("E") &&
+            m_thermo->charge(k) == -1)
+        {
             m_kElectron = k;
             nElectronSpecies++;
         }
@@ -60,11 +55,11 @@ void IonGasTransport::init(ThermoPhase* thermo, int mode, int log_level)
     }
     // set up O2/O2- collision integral [A^2]
     // Data taken from Prager (2005)
-    const vector_fp temp{300.0, 400.0, 500.0, 600.0, 800.0, 1000.0,
+    const vector<double> temp{300.0, 400.0, 500.0, 600.0, 800.0, 1000.0,
                          1200.0, 1500.0, 2000.0, 2500.0, 3000.0, 4000.0};
-    const vector_fp om11_O2{120.0, 107.0, 98.1, 92.1, 83.0, 77.0,
+    const vector<double> om11_O2{120.0, 107.0, 98.1, 92.1, 83.0, 77.0,
                             72.6, 67.9, 62.7, 59.3, 56.7, 53.8};
-    vector_fp w(temp.size(),-1);
+    vector<double> w(temp.size(),-1);
     int degree = 5;
     m_om11_O2.resize(degree + 1);
     polyfit(temp.size(), degree, temp.data(), om11_O2.data(),
@@ -129,7 +124,7 @@ double IonGasTransport::thermalConductivity()
         updateCond_T();
     }
     if (!m_condmix_ok) {
-        doublereal sum1 = 0.0, sum2 = 0.0;
+        double sum1 = 0.0, sum2 = 0.0;
         for (size_t k : m_kNeutral) {
             sum1 += m_molefracs[k] * m_cond[k];
             sum2 += m_molefracs[k] / m_cond[k];
@@ -142,7 +137,7 @@ double IonGasTransport::thermalConductivity()
 
 double IonGasTransport::electricalConductivity()
 {
-    vector_fp mobi(m_nsp);
+    vector<double> mobi(m_nsp);
     getMobilities(&mobi[0]);
     double p = m_thermo->pressure();
     double sum = 0.0;
@@ -165,8 +160,8 @@ void IonGasTransport::fitDiffCoeffs(MMCollisionInt& integrals)
     const size_t np = 50;
     int degree = 4;
     double dt = (m_thermo->maxTemp() - m_thermo->minTemp())/(np-1);
-    vector_fp tlog(np);
-    vector_fp w(np);
+    vector<double> tlog(np);
+    vector<double> w(np);
 
     // generate array of log(t) values
     for (size_t n = 0; n < np; n++) {
@@ -175,11 +170,11 @@ void IonGasTransport::fitDiffCoeffs(MMCollisionInt& integrals)
     }
 
     // vector of polynomial coefficients
-    vector_fp c(degree + 1);
+    vector<double> c(degree + 1);
     double err = 0.0, relerr = 0.0,
            mxerr = 0.0, mxrelerr = 0.0;
 
-    vector_fp diff(np + 1);
+    vector<double> diff(np + 1);
     // The array order still not ideal
     for (size_t k = 0; k < m_nsp; k++) {
         for (size_t j = k; j < m_nsp; j++) {
@@ -233,19 +228,14 @@ void IonGasTransport::fitDiffCoeffs(MMCollisionInt& integrals)
             }
             size_t sum = k * (k + 1) / 2;
             m_diffcoeffs[k*m_nsp+j-sum] = c;
-            if (m_log_level >= 2) {
-                writelog(m_thermo->speciesName(k) + "__" +
-                         m_thermo->speciesName(j) + ": [" + vec2str(c) + "]\n");
-            }
         }
     }
-
-    if (m_log_level) {
-        writelogf("Maximum binary diffusion coefficient absolute error:"
-                 "  %12.6g\n", mxerr);
-        writelogf("Maximum binary diffusion coefficient relative error:"
-                 "%12.6g", mxrelerr);
-    }
+    m_fittingErrors["diff-coeff-max-abs-error"] =
+        std::max(m_fittingErrors.getDouble("diff-coeff-max-abs-error", 0.0),
+                 mxerr);
+    m_fittingErrors["diff-coeff-max-rel-error"] =
+        std::max(m_fittingErrors.getDouble("diff-coeff-max-rel-error", 0.0),
+                 mxrelerr);
 }
 
 void IonGasTransport::setupN64()

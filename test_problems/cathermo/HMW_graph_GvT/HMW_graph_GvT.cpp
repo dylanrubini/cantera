@@ -21,7 +21,7 @@ int main(int argc, char** argv)
     int extraCols = 1;
 
     try {
-        std::string iFile = (argc > 1) ? argv[1] : "HMW_NaCl.yaml";
+        string iFile = (argc > 1) ? argv[1] : "HMW_NaCl.yaml";
         HMWSoln* HMW = new HMWSoln(iFile, "NaCl_electrolyte");
 
 
@@ -30,7 +30,7 @@ int main(int argc, char** argv)
          */
         string nacl_s = "NaCl_Solid.yaml";
         string id = "NaCl(S)";
-        Cantera::ThermoPhase* solid = Cantera::newPhase(nacl_s, id);
+        auto solid = Cantera::newThermo(nacl_s, id);
 
         size_t nsp = HMW->nSpecies();
         double acMol[100];
@@ -212,8 +212,6 @@ int main(int argc, char** argv)
 
         delete HMW;
         HMW = 0;
-        delete solid;
-        solid = 0;
         Cantera::appdelete();
 
         return retn;

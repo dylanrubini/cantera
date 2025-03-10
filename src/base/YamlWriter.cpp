@@ -11,17 +11,10 @@
 #include "cantera/kinetics/Reaction.h"
 #include "cantera/transport/Transport.h"
 
-#include <set>
 #include <fstream>
 #include <chrono>
 
 namespace Cantera {
-
-YamlWriter::YamlWriter()
-    : m_float_precision(15)
-    , m_skip_user_defined(false)
-{
-}
 
 void YamlWriter::setHeader(const AnyMap& header) {
     m_header = header;
@@ -59,7 +52,7 @@ void YamlWriter::addPhase(shared_ptr<ThermoPhase> thermo,
     addPhase(soln);
 }
 
-std::string YamlWriter::toYamlString() const
+string YamlWriter::toYamlString() const
 {
     AnyMap output;
     bool hasDescription = m_header.hasKey("description");
@@ -80,22 +73,21 @@ std::string YamlWriter::toYamlString() const
     output["date"].setLoc(-2, 0);
 
     // Add remaining header information, ignoring obsolete information
-    std::set<std::string> exclude = {
+    set<string> exclude = {
         "description", "generator", "cantera-version", "git-commit", "date"};
-    for (const auto& item : m_header) {
-        std::string key = item.first;
+    for (const auto& [key, value] : m_header) {
         if (!exclude.count(key)) {
-            output[key] = item.second;
+            output[key] = value;
         }
     }
 
     // Build phase definitions
-    std::vector<AnyMap> phaseDefs(m_phases.size());
+    vector<AnyMap> phaseDefs(m_phases.size());
     size_t nspecies_total = 0;
     for (size_t i = 0; i < m_phases.size(); i++) {
         phaseDefs[i] = m_phases[i]->parameters(!m_skip_user_defined);
         if (m_phases[i]->nAdjacent()) {
-            std::vector<std::string> adj_names;
+            vector<string> adj_names;
             for (size_t j = 0; j < m_phases[i]->nAdjacent(); j++) {
                 adj_names.push_back(m_phases[i]->adjacent(j)->name());
             }
@@ -106,9 +98,9 @@ std::string YamlWriter::toYamlString() const
     output["phases"] = phaseDefs;
 
     // Build species definitions for all phases
-    std::vector<AnyMap> speciesDefs;
+    vector<AnyMap> speciesDefs;
     speciesDefs.reserve(nspecies_total);
-    std::unordered_map<std::string, size_t> speciesDefIndex;
+    std::unordered_map<string, size_t> speciesDefIndex;
     for (const auto& phase : m_phases) {
         const auto thermo = phase->thermo();
         for (const auto& name : thermo->speciesNames()) {
@@ -130,13 +122,13 @@ std::string YamlWriter::toYamlString() const
     output["species"] = speciesDefs;
 
     // build reaction definitions for all phases
-    std::map<std::string, std::vector<AnyMap>> allReactions;
+    map<string, vector<AnyMap>> allReactions;
     for (const auto& phase : m_phases) {
         const auto kin = phase->kinetics();
         if (!kin || !kin->nReactions()) {
             continue;
         }
-        std::vector<AnyMap> reactions;
+        vector<AnyMap> reactions;
         for (size_t i = 0; i < kin->nReactions(); i++) {
             reactions.push_back(kin->reaction(i)->parameters(!m_skip_user_defined));
         }
@@ -148,18 +140,18 @@ std::string YamlWriter::toYamlString() const
 
     // key: canonical phase in allReactions
     // value: phases using this reaction set
-    std::map<std::string, std::vector<std::string>> phaseGroups;
+    map<string, vector<string>> phaseGroups;
 
     for (const auto& phase : m_phases) {
         const auto kin = phase->kinetics();
-        std::string name = phase->name();
+        string name = phase->name();
         if (!kin || !kin->nReactions()) {
             continue;
         }
         bool match = false;
-        for (auto& group : phaseGroups) {
-            if (allReactions[group.first] == allReactions[name]) {
-                group.second.push_back(name);
+        for (auto& [canonicalPhase, dependentPhases] : phaseGroups) {
+            if (allReactions[canonicalPhase] == allReactions[name]) {
+                dependentPhases.push_back(name);
                 allReactions.erase(name);
                 match = true;
                 break;
@@ -174,17 +166,17 @@ std::string YamlWriter::toYamlString() const
     if (phaseGroups.size() == 1) {
         output["reactions"] = std::move(allReactions[phaseGroups.begin()->first]);
     } else {
-        for (const auto& group : phaseGroups) {
-            std::string groupName;
-            for (auto& name : group.second) {
+        for (const auto& [canonicalPhase, dependentPhases] : phaseGroups) {
+            string groupName;
+            for (auto& name : dependentPhases) {
                 groupName += name + "-";
             }
             groupName += "reactions";
-            output[groupName] = std::move(allReactions[group.first]);
+            output[groupName] = std::move(allReactions[canonicalPhase]);
 
-            for (auto& name : group.second) {
+            for (auto& name : dependentPhases) {
                 AnyMap& phaseDef = output["phases"].getMapWhere("name", name);
-                phaseDef["reactions"] = std::vector<std::string>{groupName};
+                phaseDef["reactions"] = vector<string>{groupName};
             }
         }
     }
@@ -194,13 +186,13 @@ std::string YamlWriter::toYamlString() const
     return output.toYamlString();
 }
 
-void YamlWriter::toYamlFile(const std::string& filename) const
+void YamlWriter::toYamlFile(const string& filename) const
 {
     std::ofstream out(filename);
     out << toYamlString();
 }
 
-void YamlWriter::setUnits(const std::map<std::string, std::string>& units)
+void YamlWriter::setUnits(const map<string, string>& units)
 {
     m_output_units = UnitSystem();
     m_output_units.setDefaults(units);

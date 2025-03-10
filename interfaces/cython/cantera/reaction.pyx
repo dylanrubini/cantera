@@ -8,6 +8,7 @@ from cython.operator cimport dereference as deref
 
 from .kinetics cimport Kinetics
 from ._utils cimport *
+from ._utils import CanteraError
 from .units cimport *
 from .delegator cimport *
 
@@ -59,6 +60,21 @@ cdef class ReactionRate:
             # update global reaction class registry
             register_subclasses(ReactionRate)
 
+        # Check for delegated rate, which will already have a Python wrapper
+        cdef CxxDelegator* drate = dynamic_cast[CxxDelegatorPtr](rate.get())
+        cdef CxxPythonHandle* handle
+
+        if drate != NULL:
+            handle = dynamic_pointer_cast[CxxPythonHandle, CxxExternalHandle](
+                drate.getExternalHandle(stringify("python"))).get()
+            if handle != NULL and handle.get() != NULL:
+                py_rate = <ReactionRate>(<PyObject*>handle.get())
+                py_rate._rate = rate
+                return py_rate
+            else:
+                raise CanteraError("Internal Error: Delegator does not have a "
+                                   "corresponding Python ExtensibleRate object")
+
         # identify class (either subType or type)
         rate_type = pystr(rate.get().subType())
         if rate_type == "":
@@ -94,7 +110,7 @@ cdef class ReactionRate:
                 f"Class method 'from_dict' was invoked from '{cls.__name__}' but "
                 "should be called from base class 'ReactionRate'")
 
-        cdef CxxAnyMap any_map = dict_to_anymap(data, hyphenize=hyphenize)
+        cdef CxxAnyMap any_map = py_to_anymap(data, hyphenize=hyphenize)
         cxx_rate = CxxNewReactionRate(any_map)
         return ReactionRate.wrap(cxx_rate)
 
@@ -129,7 +145,15 @@ cdef class ReactionRate:
         Get input data for this reaction rate with its current parameter values.
         """
         def __get__(self):
-            return anymap_to_dict(self.rate.parameters())
+            return anymap_to_py(self.rate.parameters())
+
+    @property
+    def conversion_units(self) -> Units:
+        """
+        Get the units for converting the leading term in the reaction rate expression
+        to different unit systems.
+        """
+        return Units.copy(self.rate.conversionUnits())
 
 
 cdef class ArrheniusRateBase(ReactionRate):
@@ -221,8 +245,8 @@ cdef class ArrheniusRate(ArrheniusRateBase):
         if init:
             self._cinit(input_data, A=A, b=b, Ea=Ea)
 
-    def _from_dict(self, dict input_data):
-        self._rate.reset(new CxxArrheniusRate(dict_to_anymap(input_data)))
+    def _from_dict(self, input_data):
+        self._rate.reset(new CxxArrheniusRate(py_to_anymap(input_data)))
 
     def _from_parameters(self, A, b, Ea):
         self._rate.reset(new CxxArrheniusRate(A, b, Ea))
@@ -248,8 +272,8 @@ cdef class BlowersMaselRate(ArrheniusRateBase):
         if init:
             self._cinit(input_data, A=A, b=b, Ea0=Ea0, w=w)
 
-    def _from_dict(self, dict input_data):
-        self._rate.reset(new CxxBlowersMaselRate(dict_to_anymap(input_data)))
+    def _from_dict(self, input_data):
+        self._rate.reset(new CxxBlowersMaselRate(py_to_anymap(input_data)))
 
     def _from_parameters(self, A, b, Ea0, w):
         self._rate.reset(new CxxBlowersMaselRate(A, b, Ea0, w))
@@ -278,8 +302,10 @@ cdef class BlowersMaselRate(ArrheniusRateBase):
         testing purposes, as any value will be overwritten by an update of the
         thermodynamic state.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return self.cxx_object().deltaH()
@@ -321,9 +347,9 @@ cdef class TwoTempPlasmaRate(ArrheniusRateBase):
         """
         return self.rate.eval(temperature, elec_temp)
 
-    def _from_dict(self, dict input_data):
+    def _from_dict(self, input_data):
         self._rate.reset(
-            new CxxTwoTempPlasmaRate(dict_to_anymap(input_data, hyphenize=True))
+            new CxxTwoTempPlasmaRate(py_to_anymap(input_data, hyphenize=True))
         )
 
     def _from_parameters(self, A, b, Ea_gas, Ea_electron):
@@ -344,10 +370,72 @@ cdef class TwoTempPlasmaRate(ArrheniusRateBase):
             return self.cxx_object().activationElectronEnergy()
 
 
+cdef class ElectronCollisionPlasmaRate(ReactionRate):
+    r"""
+    A reaction rate coefficient which depends on electron collision cross section
+    and electron energy distribution
+
+    """
+    _reaction_rate_type = "electron-collision-plasma"
+
+    def __cinit__(self, energy_levels=None, cross_sections=None,
+                  input_data=None, init=True):
+        if init:
+            if isinstance(input_data, dict):
+                self._from_dict(input_data)
+            elif energy_levels is not None and cross_sections is not None:
+                self._from_parameters(energy_levels, cross_sections)
+            elif input_data is None:
+                self._from_dict({})
+            else:
+                raise TypeError("Invalid input parameters")
+            self.set_cxx_object()
+
+    def _from_dict(self, dict input_data):
+        self._rate.reset(
+            new CxxElectronCollisionPlasmaRate(py_to_anymap(input_data, hyphenize=True))
+        )
+
+    def _from_parameters(self, energy_levels, cross_sections):
+        # check length
+        if len(energy_levels) != len(cross_sections):
+            raise ValueError('Length of energy levels and '
+                             'cross sections are different')
+        cdef np.ndarray[np.double_t, ndim=1] data_energy_levels = \
+            np.ascontiguousarray(energy_levels, dtype=np.double)
+        cdef np.ndarray[np.double_t, ndim=1] data_cross_sections = \
+            np.ascontiguousarray(cross_sections, dtype=np.double)
+        input_data = {'type': 'electron-collision-plasma',
+                      'energy-levels': data_energy_levels,
+                      'cross-sections': data_cross_sections}
+        self._from_dict(input_data)
+
+    cdef set_cxx_object(self):
+        self.rate = self._rate.get()
+        self.base = <CxxElectronCollisionPlasmaRate*>self.rate
+
+    property energy_levels:
+        """
+        The energy levels [eV]. Each level corresponds to a cross section
+        of `cross_sections`.
+        """
+        def __get__(self):
+            return np.fromiter(self.base.energyLevels(), np.double)
+
+    property cross_sections:
+        """
+        The cross sections [m2]. Each cross section corresponds to a energy
+        level of `energy_levels`.
+        """
+        def __get__(self):
+            return np.fromiter(self.base.crossSections(), np.double)
+
+
 cdef class FalloffRate(ReactionRate):
     """
     Base class for parameterizations used to describe the fall-off in reaction rates
-    due to intermolecular energy transfer. These objects are used by `FalloffReaction`.
+    due to intermolecular energy transfer.
+
     Note that `FalloffRate` is a base class for specialized fall-off parameterizations
     and cannot be instantiated by itself.
     """
@@ -448,9 +536,9 @@ cdef class LindemannRate(FalloffRate):
     """
     _reaction_rate_type = "Lindemann"
 
-    def _from_dict(self, dict input_data):
+    def _from_dict(self, input_data):
         self._rate.reset(
-            new CxxLindemannRate(dict_to_anymap(input_data, hyphenize=True))
+            new CxxLindemannRate(py_to_anymap(input_data, hyphenize=True))
         )
 
     cdef set_cxx_object(self):
@@ -468,9 +556,9 @@ cdef class TroeRate(FalloffRate):
     """
     _reaction_rate_type = "Troe"
 
-    def _from_dict(self, dict input_data):
+    def _from_dict(self, input_data):
         self._rate.reset(
-            new CxxTroeRate(dict_to_anymap(input_data, hyphenize=True))
+            new CxxTroeRate(py_to_anymap(input_data, hyphenize=True))
         )
 
     cdef set_cxx_object(self):
@@ -488,9 +576,9 @@ cdef class SriRate(FalloffRate):
     """
     _reaction_rate_type = "SRI"
 
-    def _from_dict(self, dict input_data):
+    def _from_dict(self, input_data):
         self._rate.reset(
-            new CxxSriRate(dict_to_anymap(input_data, hyphenize=True))
+            new CxxSriRate(py_to_anymap(input_data, hyphenize=True))
         )
 
     cdef set_cxx_object(self):
@@ -504,9 +592,9 @@ cdef class TsangRate(FalloffRate):
     """
     _reaction_rate_type = "Tsang"
 
-    def _from_dict(self, dict input_data):
+    def _from_dict(self, input_data):
         self._rate.reset(
-            new CxxTsangRate(dict_to_anymap(input_data, hyphenize=True))
+            new CxxTsangRate(py_to_anymap(input_data, hyphenize=True))
         )
 
     cdef set_cxx_object(self):
@@ -528,9 +616,9 @@ cdef class PlogRate(ReactionRate):
 
         elif init:
             if isinstance(input_data, dict):
-                self._rate.reset(new CxxPlogRate(dict_to_anymap(input_data)))
+                self._rate.reset(new CxxPlogRate(py_to_anymap(input_data)))
             elif rates is None:
-                self._rate.reset(new CxxPlogRate(dict_to_anymap({})))
+                self._rate.reset(new CxxPlogRate(py_to_anymap({})))
             elif input_data:
                 raise TypeError("Invalid parameter 'input_data'")
             else:
@@ -572,11 +660,32 @@ cdef class PlogRate(ReactionRate):
             self._rate.reset(new CxxPlogRate(ratemap))
             self.rate = self._rate.get()
 
+cdef class LinearBurkeRate(ReactionRate):
+    r"""
+    A reaction rate dependent on both pressure and mixture composition that accounts for
+    collisions between reactants and bath gas species.
+    """
+    _reaction_rate_type = "linear-Burke"
+
+    def __cinit__(self, input_data=None, init=True):
+        self.set_cxx_object()
+
+        if init:
+            if isinstance(input_data, dict):
+                self._rate.reset(new CxxLinearBurkeRate(py_to_anymap(input_data)))
+            elif input_data:
+                raise TypeError("'input_data' must be a dict")
+            else:
+                raise ValueError("No input data provided")
+            self.set_cxx_object()
+
+    cdef CxxLinearBurkeRate* cxx_object(self):
+        return <CxxLinearBurkeRate*>self.rate
 
 cdef class ChebyshevRate(ReactionRate):
     r"""
-    A pressure-dependent reaction rate parameterized by a bivariate Chebyshev
-    polynomial in temperature and pressure.
+    A pressure-dependent reaction rate parameterized by a bivariate Chebyshev polynomial
+    in temperature and pressure.
     """
     _reaction_rate_type = "Chebyshev"
 
@@ -585,7 +694,7 @@ cdef class ChebyshevRate(ReactionRate):
 
         if init:
             if isinstance(input_data, dict):
-                self._rate.reset(new CxxChebyshevRate(dict_to_anymap(input_data)))
+                self._rate.reset(new CxxChebyshevRate(py_to_anymap(input_data)))
             elif all([arg is not None
                     for arg in [temperature_range, pressure_range, data]]):
                 Tmin = temperature_range[0]
@@ -593,10 +702,11 @@ cdef class ChebyshevRate(ReactionRate):
                 Pmin = pressure_range[0]
                 Pmax = pressure_range[1]
                 self._rate.reset(
-                    new CxxChebyshevRate(Tmin, Tmax, Pmin, Pmax, self._cxxarray2d(data)))
+                    new CxxChebyshevRate(Tmin, Tmax, Pmin, Pmax, self._cxxarray2d(data))
+                    )
             elif all([arg is None
                     for arg in [temperature_range, pressure_range, data, input_data]]):
-                self._rate.reset(new CxxChebyshevRate(dict_to_anymap({})))
+                self._rate.reset(new CxxChebyshevRate(py_to_anymap({})))
             elif input_data:
                 raise TypeError("Invalid parameter 'input_data'")
             else:
@@ -673,8 +783,10 @@ cdef class CustomRate(ReactionRate):
 
         rr = CustomRate(lambda T: 38.7 * T**2.7 * exp(-3150.15/T))
 
-    **Warning:** this class is an experimental part of the Cantera API and
-    may be changed or removed without notice.
+    .. warning::
+
+        This class is an experimental part of the Cantera API and
+        may be changed or removed without notice.
     """
     _reaction_rate_type = "custom-rate-function"
 
@@ -713,37 +825,19 @@ cdef class CustomRate(ReactionRate):
 
 cdef class ExtensibleRate(ReactionRate):
     """
-    A base class for a reaction rate with delegated methods. Classes derived from this
-    class should be decorated with the `extension` decorator to specify the name
-    of the rate parameterization and to make these rates constructible through factory
-    functions and input files.
+    A base class for a user-defined reaction rate parameterization. Classes derived from
+    this class should be decorated with the `extension` decorator to specify the name
+    of the rate parameterization and its corresponding data class, and to make these
+    rates constructible through factory functions and input files.
 
-    The following methods of the C++ :ct:`ReactionRate` class can be modified by a
-    Python class that inherits from this class. For each method, the name below should
-    be prefixed with ``before_``, ``after_``, or ``replace_``, indicating whether this
-    method should be called before, after, or instead of the corresponding method from
-    the base class.
+    Classes derived from `ExtensibleRate` should implement the `set_parameters`,
+    `get_parameters`, `eval`, and (optionally) `validate` methods, which will be called
+    as delegates from the C++ :ct:`ReactionRate` class.
 
-    For methods that return a value and have a ``before`` method specified, if that
-    method returns a value other than ``None`` that value will be returned without
-    calling the base class method; otherwise, the value from the base class method will
-    be returned. For methods that return a value and have an ``after`` method specified,
-    the returned value wil be the sum of the values from the supplied method and the
-    base class method.
+    .. warning::
 
-    ``set_parameters(self, params: dict, units: Units) -> None``
-        Responsible for setting rate parameters based on the input data. For example,
-        for reactions created from YAML, ``params`` is the YAML reaction entry converted
-        to a ``dict``. ``units`` specifies the units of the rate coefficient.
-
-    ``eval(self, T: float) -> float``
-        Responsible for calculating the forward rate constant based on the current state
-        of the phase.  This method must *replace* the base class method, as there is no
-        base class implementation. Currently, the state information provided is the
-        temperature, ``T`` [K].
-
-    **Warning:** The delegatable methods defined here are an experimental part of the
-    Cantera API and may change without notice.
+        The delegatable methods defined here are an experimental part of the
+        Cantera API and may change without notice.
 
     .. versionadded:: 3.0
     """
@@ -751,28 +845,118 @@ cdef class ExtensibleRate(ReactionRate):
     _reaction_rate_type = "extensible"
 
     delegatable_methods = {
-        "eval": ("evalFromStruct", "double(void*)"),
-        "set_parameters": ("setParameters", "void(AnyMap&, UnitStack&)")
+        "eval": ("evalFromStruct", "double(void*)", "replace"),
+        "set_parameters": ("setParameters", "void(AnyMap&, UnitStack&)", "after"),
+        "get_parameters": ("getParameters", "void(AnyMap&)", "replace"),
+        "validate": ("validate", "void(string, void*)", "replace")
     }
+
     def __cinit__(self, *args, init=True, **kwargs):
         if init:
-            self._rate.reset(new CxxReactionRateDelegator())
             self.set_cxx_object()
 
-    def __init__(self, *args, **kwargs):
-        if self._rate.get() is not NULL:
-            assign_delegates(self, dynamic_cast[CxxDelegatorPtr](self.rate))
+    def __init__(self, *args, input_data=None, **kwargs):
         # ReactionRate does not define __init__, so it does not need to be called
+        if input_data is not None:
+            self.set_parameters(input_data, UnitStack())
+
+    def set_parameters(self, params: AnyMap, rate_coeff_units: UnitStack) -> None:
+        """
+        Responsible for setting rate parameters based on the input data. For example,
+        for reactions created from YAML, ``params`` is the YAML reaction entry converted
+        to an ``AnyMap``. ``rate_coeff_units`` specifies the units of the rate
+        coefficient.
+
+        Input values contained in ``params`` may be in non-default unit systems,
+        specified in the user-provided input file. To convert them to Cantera's native
+        mks+kmol unit system, use the functions `AnyMap.convert`,
+        `AnyMap.convert_activation_energy`, and `AnyMap.convert_rate_coeff` as needed.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__}.set_parameters")
+
+    def get_parameters(self, params: AnyMap) -> None:
+        """
+        Responsible for serializing the state of the ExtensibleRate object, using the
+        same format as a YAML reaction entry. This is the inverse of `set_parameters`.
+
+        Serialization methods may request output in unit systems other than Cantera's
+        native mks+kmol system. To enable conversions to the user-specified unit system,
+        dimensional values should be added to ``params`` using the methods
+        `AnyMap.set_quantity` and `AnyMap.set_activation_energy`.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__}.get_parameters")
+
+    def eval(self, data: ExtensibleRateData) -> float:
+        """
+        Responsible for calculating the forward rate constant based on the current state
+        of the phase, stored in an instance of a class derived from
+        `ExtensibleRateData`.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__}.eval")
+
+    def validate(self, equation: str, soln: "Solution") -> None:
+        """
+        Responsible for validating that the rate expression is configured with valid
+        parameters. This may depend on properties of the Solution, for example
+        temperature ranges over which the rate expression can be evaluated. Raises an
+        exception if any validation fails.
+        """
+        pass
 
     cdef set_cxx_object(self, CxxReactionRate* rate=NULL):
+        cdef CxxDelegator* drate
+        cdef shared_ptr[CxxExternalHandle] handle
+
         if rate is NULL:
+            # Started with Python object first. Create the C++ object and attach to it.
+            # In this case, the Python object owns the C++ object, via self._rate
+            self._rate.reset(new CxxReactionRateDelegator())
             self.rate = self._rate.get()
+            drate = dynamic_cast[CxxDelegatorPtr](self.rate)
+            handle.reset(new CxxPythonHandle(<PyObject*>self, True))
+            drate.holdExternalHandle(stringify('python'), handle)
         else:
+            # Set up Python object from a C++ object that was created first. In this
+            # case, the C++ object owns the Python object, and self._rate is empty to
+            # avoid creating a circular dependency.
             self._rate.reset()
             self.rate = rate
-            assign_delegates(self, dynamic_cast[CxxDelegatorPtr](self.rate))
+
+        assign_delegates(self, dynamic_cast[CxxDelegatorPtr](self.rate))
         (<CxxReactionRateDelegator*>self.rate).setType(
             stringify(self._reaction_rate_type))
+
+
+cdef class ExtensibleRateData:
+    """
+    A base class for data used when evaluating instances of `ExtensibleRate`. Classes
+    derived from `ExtensibleRateData` are used to store common data needed to evaluate
+    all reactions of a particular type.
+
+    Classes derived from `ExtensibleRateData` must implement the `update` method. After
+    the `update` method has been called, instances of `ExtensibleRateData` are passed as
+    the argument to `ExtensibleRate.eval`.
+
+    .. versionadded:: 3.0
+    """
+    delegatable_methods = {
+        "update": ("update", "double(void*)", "replace")
+    }
+
+    def update(self, soln):
+        """
+        This method takes a `Solution` object and stores any thermodynamic data (for
+        example, temperature and pressure) needed to evaluate all reactions of the
+        corresponding ReactionRate type.
+
+        If this state data has changed since the last time `update` was called and the
+        reaction rates need to be updated, this method should return `True`. Otherwise,
+        it should return `False`.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__}.update")
+
+    cdef set_cxx_object(self, CxxReactionDataDelegator* data):
+        assign_delegates(self, dynamic_cast[CxxDelegatorPtr](data))
 
 
 cdef class InterfaceRateBase(ArrheniusRateBase):
@@ -785,8 +969,10 @@ cdef class InterfaceRateBase(ArrheniusRateBase):
         """
         Evaluate rate expression based on temperature and surface coverages.
 
-        **Warning:** this method is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This method is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         cdef vector[double] cxxdata
         for c in coverages:
@@ -805,9 +991,9 @@ cdef class InterfaceRateBase(ArrheniusRateBase):
         def __get__(self):
             cdef CxxAnyMap cxx_deps
             self.interface.getCoverageDependencies(cxx_deps)
-            return anymap_to_dict(cxx_deps)
-        def __set__(self, dict deps):
-            cdef CxxAnyMap cxx_deps = dict_to_anymap(deps)
+            return anymap_to_py(cxx_deps)
+        def __set__(self, deps):
+            cdef CxxAnyMap cxx_deps = py_to_anymap(deps)
 
             self.interface.setCoverageDependencies(cxx_deps)
 
@@ -830,8 +1016,10 @@ cdef class InterfaceRateBase(ArrheniusRateBase):
         testing purposes, as the value will be overwritten by an update of the
         thermodynamic state.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return self.interface.siteDensity()
@@ -864,8 +1052,8 @@ cdef class InterfaceArrheniusRate(InterfaceRateBase):
         if init:
             self._cinit(input_data, A=A, b=b, Ea=Ea)
 
-    def _from_dict(self, dict input_data):
-        self._rate.reset(new CxxInterfaceArrheniusRate(dict_to_anymap(input_data)))
+    def _from_dict(self, input_data):
+        self._rate.reset(new CxxInterfaceArrheniusRate(py_to_anymap(input_data)))
 
     def _from_parameters(self, A, b, Ea):
         self._rate.reset(new CxxInterfaceArrheniusRate(A, b, Ea))
@@ -892,8 +1080,8 @@ cdef class InterfaceBlowersMaselRate(InterfaceRateBase):
         if init:
             self._cinit(input_data, A=A, b=b, Ea0=Ea0, w=w)
 
-    def _from_dict(self, dict input_data):
-        self._rate.reset(new CxxInterfaceBlowersMaselRate(dict_to_anymap(input_data)))
+    def _from_dict(self, input_data):
+        self._rate.reset(new CxxInterfaceBlowersMaselRate(py_to_anymap(input_data)))
 
     def _from_parameters(self, A, b, Ea0, w):
         self._rate.reset(new CxxInterfaceBlowersMaselRate(A, b, Ea0, w))
@@ -923,8 +1111,10 @@ cdef class InterfaceBlowersMaselRate(InterfaceRateBase):
         testing purposes, as any value will be overwritten by an update of the
         thermodynamic state.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return self.cxx_object().deltaH()
@@ -967,8 +1157,10 @@ cdef class StickRateBase(InterfaceRateBase):
         The sticking order is not an independent property and is detected automatically
         by Cantera. Accordingly, the setter should be only used for testing purposes.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return self.stick.stickingOrder()
@@ -982,8 +1174,10 @@ cdef class StickRateBase(InterfaceRateBase):
         The sticking weight is not an independent property and is detected automatically
         by Cantera. Accordingly, the setter should be only used for testing purposes.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return self.stick.stickingWeight()
@@ -1002,8 +1196,8 @@ cdef class StickingArrheniusRate(StickRateBase):
         if init:
             self._cinit(input_data, A=A, b=b, Ea=Ea)
 
-    def _from_dict(self, dict input_data):
-        self._rate.reset(new CxxStickingArrheniusRate(dict_to_anymap(input_data)))
+    def _from_dict(self, input_data):
+        self._rate.reset(new CxxStickingArrheniusRate(py_to_anymap(input_data)))
 
     def _from_parameters(self, A, b, Ea):
         self._rate.reset(new CxxStickingArrheniusRate(A, b, Ea))
@@ -1029,8 +1223,8 @@ cdef class StickingBlowersMaselRate(StickRateBase):
         if init:
             self._cinit(input_data, A=A, b=b, Ea0=Ea0, w=w)
 
-    def _from_dict(self, dict input_data):
-        self._rate.reset(new CxxStickingBlowersMaselRate(dict_to_anymap(input_data)))
+    def _from_dict(self, input_data):
+        self._rate.reset(new CxxStickingBlowersMaselRate(py_to_anymap(input_data)))
 
     def _from_parameters(self, A, b, Ea0, w):
         self._rate.reset(new CxxStickingBlowersMaselRate(A, b, Ea0, w))
@@ -1061,8 +1255,10 @@ cdef class StickingBlowersMaselRate(StickRateBase):
         testing purposes, as any value will be overwritten by an update of the
         thermodynamic state.
 
-        **Warning:** this property is an experimental part of the Cantera API and
-        may be changed or removed without notice.
+        .. warning::
+
+            This property is an experimental part of the Cantera API and
+            may be changed or removed without notice.
         """
         def __get__(self):
             return self.cxx_object().deltaH()
@@ -1210,13 +1406,7 @@ cdef class Reaction:
     """
 
     def __cinit__(self, reactants=None, products=None, rate=None, *,
-                  equation=None, init=True, efficiencies=None,
-                  Kinetics kinetics=None, third_body=None):
-        if kinetics:
-            warnings.warn(
-                "Parameter 'kinetics' is no longer used and will be removed after "
-                "Cantera 3.0.", DeprecationWarning)
-
+                  equation=None, init=True, third_body=None):
         if not init:
             return
 
@@ -1253,13 +1443,6 @@ cdef class Reaction:
             _third_body = third_body
         elif isinstance(third_body, str):
             _third_body = ThirdBody(third_body)
-        elif efficiencies:
-            warnings.warn(
-                "Argument 'efficiencies' is deprecated and will be removed after "
-                "Cantera 3.0. Use ThirdBody instead.", DeprecationWarning)
-            third_body = "M"
-            _third_body = ThirdBody(third_body)
-            _third_body.efficiencies = efficiencies
 
         if reactants and products:
             # create from reactant and product compositions
@@ -1326,7 +1509,7 @@ cdef class Reaction:
             A `Kinetics` object whose associated phase(s) contain the species
             involved in the reaction.
         """
-        cdef CxxAnyMap any_map = dict_to_anymap(data, hyphenize=hyphenize)
+        cdef CxxAnyMap any_map = py_to_anymap(data, hyphenize=hyphenize)
         cxx_reaction = CxxNewReaction(any_map, deref(kinetics.kinetics))
         return Reaction.wrap(cxx_reaction)
 
@@ -1363,7 +1546,7 @@ cdef class Reaction:
         Directories on Cantera's input file path will be searched for the
         specified file.
         """
-        root = AnyMapFromYamlFile(stringify(filename))
+        root = AnyMapFromYamlFile(stringify(str(filename)))
         cxx_reactions = CxxGetReactions(root[stringify(section)],
                                         deref(kinetics.kinetics))
         return [Reaction.wrap(r) for r in cxx_reactions]
@@ -1409,11 +1592,11 @@ cdef class Reaction:
         species names and the values, are the stoichiometric coefficients, for example
         ``{'CH4':1, 'OH':1}``, or as a composition string, for example
         ``'CH4:1, OH:1'``.
+
+        .. versionchanged:: 3.1  This is a read-only property
         """
         def __get__(self):
             return comp_map_to_dict(self.reaction.reactants)
-        def __set__(self, reactants):
-            self.reaction.reactants = comp_map(reactants)
 
     property products:
         """
@@ -1421,11 +1604,11 @@ cdef class Reaction:
         species names and the values, are the stoichiometric coefficients, for example
         ``{'CH3':1, 'H2O':1}``, or as a composition string, for example
         ``'CH3:1, H2O:1'``.
+
+        .. versionchanged:: 3.1  This is a read-only property
         """
         def __get__(self):
             return comp_map_to_dict(self.reaction.products)
-        def __set__(self, products):
-            self.reaction.products = comp_map(products)
 
     def __contains__(self, species):
         return species in self.reactants or species in self.products
@@ -1521,7 +1704,7 @@ cdef class Reaction:
         definition.
         """
         def __get__(self):
-            return anymap_to_dict(self.reaction.parameters(True))
+            return anymap_to_py(self.reaction.parameters(True))
 
     def update_user_data(self, data):
         """
@@ -1529,7 +1712,7 @@ cdef class Reaction:
         YAML phase definition files with `Solution.write_yaml` or in the data returned
         by `input_data`. Existing keys with matching names are overwritten.
         """
-        self.reaction.input.update(dict_to_anymap(data), False)
+        self.reaction.input.update(py_to_anymap(data), False)
 
     def clear_user_data(self):
         """
@@ -1562,72 +1745,17 @@ cdef class Reaction:
             if self.reaction.usesThirdBody():
                 return ThirdBody.wrap(self.reaction.thirdBody())
 
-    property efficiencies:
+    @property
+    def third_body_name(self):
         """
-        Get/Set a `dict` defining non-default third-body efficiencies for this reaction,
-        where the keys are the species names and the values are the efficiencies.
+        Returns name of `ThirdBody` collider if `Reaction` uses a third body collider,
+        and ``None`` otherwise.
 
-        .. deprecated:: 3.0
-
-            To be removed after Cantera 3.0. Access via `third_body` property and
-            `ThirdBody` object instead.
+        .. versionadded:: 3.0
         """
-        def __get__(self):
-            warnings.warn(
-                "Property 'efficiencies' is deprecated and will be removed after "
-                "Cantera 3.0. Use ThirdBody instead.", DeprecationWarning)
-            if self.third_body is None:
-                raise ValueError("Reaction does not involve third body collider")
-            return self.third_body.efficiencies
-        def __set__(self, eff):
-            warnings.warn(
-                "Property 'efficiencies' is deprecated and will be removed after "
-                "Cantera 3.0. Use ThirdBody instead.", DeprecationWarning)
-            if self.third_body is None:
-                raise ValueError("Reaction does not involve third body collider")
-            self.third_body.efficiencies = comp_map(eff)
-
-    property default_efficiency:
-        """
-        Get/Set the default third-body efficiency for this reaction, used for species
-        not in `efficiencies`.
-
-        .. deprecated:: 3.0
-
-            To be removed after Cantera 3.0. Access via `third_body` property and
-            `ThirdBody` object instead.
-        """
-        def __get__(self):
-            warnings.warn(
-                "Property 'default_efficiency' is deprecated and will be removed after "
-                "Cantera 3.0. Use ThirdBody instead.", DeprecationWarning)
-            if self.third_body is None:
-                raise ValueError("Reaction does not involve third body collider")
-            return self.third_body.default_efficiency
-        def __set__(self, default_eff):
-            warnings.warn(
-                "Property 'default_efficiency' is deprecated and will be removed after "
-                "Cantera 3.0. Use ThirdBody instead.", DeprecationWarning)
-            if self.third_body is None:
-                raise ValueError("Reaction does not involve third body collider")
-            self.third_body.default_efficiency = default_eff
-
-    def efficiency(self, species):
-        """
-        Get the efficiency of the third body named ``species`` considering both
-        the default efficiency and species-specific efficiencies.
-
-        .. deprecated:: 3.0
-
-            To be removed after Cantera 3.0. Access via `third_body` property and
-            `ThirdBody` object instead.
-        """
-        warnings.warn(
-            "Method 'efficiency' is deprecated and will be removed after "
-            "Cantera 3.0. Use ThirdBody instead.", DeprecationWarning)
-        if self.third_body is None:
-            raise ValueError("Reaction does not involve third body collider")
-        return self.third_body.efficiency(stringify(species))
+        if self.reaction.usesThirdBody():
+            return ThirdBody.wrap(self.reaction.thirdBody()).name
+        return None
 
 
 cdef class Arrhenius:
@@ -1692,109 +1820,7 @@ cdef class Arrhenius:
         return self.base.evalRate(np.log(T), 1/T)
 
 
-cdef wrapArrhenius(CxxArrheniusRate* rate, Reaction reaction):
-    r = Arrhenius(init=False)
-    r.base = rate
-    r.reaction = reaction
-    return r
-
 cdef copyArrhenius(CxxArrheniusRate* rate):
     r = Arrhenius(rate.preExponentialFactor(), rate.temperatureExponent(),
                   rate.activationEnergy())
     return r
-
-
-cdef class ThreeBodyReaction(Reaction):
-    """
-    A reaction with a non-reacting third body "M" that acts to add or remove
-    energy from the reacting species.
-
-    An example for the definition of an `ThreeBodyReaction` object is given as::
-
-        rxn = ThreeBodyReaction(
-            equation="2 O + M <=> O2 + M",
-            rate={"A": 1.2e+17, "b": -1.0, "Ea": 0.0},
-            efficiencies={"H2": 2.4, "H2O": 15.4, "AR": 0.83},
-            kinetics=gas)
-
-    The YAML description corresponding to this reaction is::
-
-        equation: 2 O + M <=> O2 + M
-        type: three-body
-        rate-constant: {A: 1.2e+17 cm^6/mol^2/s, b: -1.0, Ea: 0.0 cal/mol}
-        efficiencies: {H2: 2.4, H2O: 15.4, AR: 0.83}
-
-    .. deprecated:: 3.0
-
-        Class to be removed after Cantera 3.0. Absorbed by `Reaction`.
-    """
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("Class to be removed after Cantera 3.0; no specialization "
-                      "necessary.", DeprecationWarning)
-
-
-cdef class FalloffReaction(Reaction):
-    """
-    A reaction that is first-order in [M] at low pressure, like a third-body
-    reaction, but zeroth-order in [M] as pressure increases.
-
-    An example for the definition of a `FalloffReaction` object is given as::
-
-        rxn = FalloffReaction(
-            equation="2 OH (+ M) <=> H2O2 (+ M)",
-            rate=ct.TroeRate(low=ct.Arrhenius(2.3e+12, -0.9, -7112800.0),
-                             high=ct.Arrhenius(7.4e+10, -0.37, 0),
-                             falloff_coeffs=[0.7346, 94.0, 1756.0, 5182.0]),
-            efficiencies={"AR": 0.7, "H2": 2.0, "H2O": 6.0},
-            kinetics=gas)
-
-    The YAML description corresponding to this reaction is::
-
-        equation: 2 OH (+ M) <=> H2O2 (+ M)  # Reaction 3
-        type: falloff
-        low-P-rate-constant: {A: 2.3e+12, b: -0.9, Ea: -1700.0 cal/mol}
-        high-P-rate-constant: {A: 7.4e+10, b: -0.37, Ea: 0.0 cal/mol}
-        Troe: {A: 0.7346, T3: 94.0, T1: 1756.0, T2: 5182.0}
-        efficiencies: {AR: 0.7, H2: 2.0, H2O: 6.0}
-
-    .. deprecated:: 3.0
-
-        Class to be removed after Cantera 3.0. Absorbed by `Reaction`.
-    """
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("Class to be removed after Cantera 3.0; no specialization "
-                      "necessary.", DeprecationWarning)
-
-cdef class ChemicallyActivatedReaction(FalloffReaction):
-    """
-    A reaction where the rate decreases as pressure increases due to collisional
-    stabilization of a reaction intermediate. Like a `FalloffReaction`, except
-    that the forward rate constant is written as being proportional to the low-
-    pressure rate constant.
-    """
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("Class to be removed after Cantera 3.0; no specialization "
-                      "necessary.", DeprecationWarning)
-
-cdef class CustomReaction(Reaction):
-    """
-    A reaction which follows mass-action kinetics with a custom reaction rate.
-
-    An example for the definition of a `CustomReaction` object is given as::
-
-        rxn = CustomReaction(
-            equation="H2 + O <=> H + OH",
-            rate=lambda T: 38.7 * T**2.7 * exp(-3150.15428/T),
-            kinetics=gas)
-
-    .. deprecated:: 3.0
-
-        Class to be removed after Cantera 3.0. Absorbed by `Reaction`.
-    """
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("Class to be removed after Cantera 3.0; no specialization "
-                      "necessary.", DeprecationWarning)

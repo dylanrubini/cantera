@@ -1,5 +1,5 @@
-//! @file Sub.cpp
-/*
+/**
+ * @file Sub.cpp
  * The Substance class
  * D. Goodwin, Caltech Nov. 1996
  */
@@ -11,28 +11,15 @@
 #include "cantera/base/stringUtils.h"
 #include "cantera/base/global.h"
 
-using std::string;
 using namespace Cantera;
 
 namespace {
 // these correspond to ordering withing propertyFlag::type
-std::string propertySymbols[] = {"H", "S", "U", "V", "P", "T"};
+string propertySymbols[] = {"H", "S", "U", "V", "P", "T"};
 }
 
 namespace tpx
 {
-Substance::Substance() :
-    T(Undef),
-    Rho(Undef),
-    Tslast(Undef),
-    Rhf(Undef),
-    Rhv(Undef),
-    Pst(Undef),
-    m_energy_offset(0.0),
-    m_entropy_offset(0.0),
-    kbr(0)
-{
-}
 
 void Substance::setStdState(double h0, double s0, double t0, double p0)
 {
@@ -721,7 +708,7 @@ void Substance::set_xy(propertyFlag::type ifx, propertyFlag::type ify,
         Set(PropertyPair::TV, t_here, v_here);
         LoopCount++;
         if (LoopCount > 200) {
-            std::string msg = fmt::format("No convergence. {} = {}, {} = {}",
+            string msg = fmt::format("No convergence. {} = {}, {} = {}",
                 propertySymbols[ifx], X, propertySymbols[ify], Y);
             if (t_here == Tmin()) {
                 msg += fmt::format("\nAt temperature limit (Tmin = {})", Tmin());

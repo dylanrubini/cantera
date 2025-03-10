@@ -6,12 +6,22 @@
 #include "cantera/base/stringUtils.h"
 #include "cantera/numerics/Func1.h"
 #include "cantera/zeroD/Wall.h"
-#include "cantera/thermo/SurfPhase.h"
 
 namespace Cantera
 {
 
-WallBase::WallBase() : m_left(0), m_right(0), m_surf(2), m_area(1.0) {}
+bool WallBase::setDefaultName(map<string, int>& counts)
+{
+    if (m_defaultNameSet) {
+        return false;
+    }
+    m_defaultNameSet = true;
+    if (m_name == "(none)" || m_name == "") {
+        m_name = fmt::format("{}_{}", type(), counts[type()]);
+    }
+    counts[type()]++;
+    return true;
+}
 
 bool WallBase::install(ReactorBase& rleft, ReactorBase& rright)
 {
@@ -23,31 +33,47 @@ bool WallBase::install(ReactorBase& rleft, ReactorBase& rright)
     m_right = &rright;
     m_left->addWall(*this, 0);
     m_right->addWall(*this, 1);
-    m_surf[0].setReactor(&rleft);
-    m_surf[1].setReactor(&rright);
     return true;
 }
 
 void WallBase::setArea(double a) {
     m_area = a;
-    m_surf[0].setArea(a);
-    m_surf[1].setArea(a);
 }
 
-Wall::Wall() : WallBase(), m_k(0.0), m_rrth(0.0), m_emiss(0.0), m_vf(0), m_qf(0) {}
+double Wall::velocity() const {
+    if (m_vf) {
+        return m_vf->eval(m_time);
+    }
+    return 0.;
+}
 
-double Wall::vdot(double t)
+double Wall::expansionRate()
 {
+    if (!ready()) {
+        throw CanteraError("Wall::expansionRate",
+                           "Wall is not ready; some parameters have not been set.");
+    }
     double rate = m_k * m_area * (m_left->pressure() - m_right->pressure());
 
     if (m_vf) {
-        rate += m_area * m_vf->eval(t);
+        rate += m_area * m_vf->eval(m_time);
     }
     return rate;
 }
 
-double Wall::Q(double t)
+double Wall::heatFlux() const {
+    if (m_qf) {
+        return m_qf->eval(m_time);
+    }
+    return 0.;
+}
+
+double Wall::heatRate()
 {
+    if (!ready()) {
+        throw CanteraError("Wall::heatRate",
+                           "Wall is not ready; some parameters have not been set.");
+    }
     double q1 = (m_area * m_rrth) *
                 (m_left->temperature() - m_right->temperature());
     if (m_emiss > 0.0) {
@@ -57,7 +83,7 @@ double Wall::Q(double t)
     }
 
     if (m_qf) {
-        q1 += m_area * m_qf->eval(t);
+        q1 += m_area * m_qf->eval(m_time);
     }
     return q1;
 }

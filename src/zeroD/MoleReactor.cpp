@@ -44,7 +44,7 @@ void MoleReactor::initialize(double t0)
 void MoleReactor::updateSurfaceState(double* y)
 {
     size_t loc = 0;
-    vector_fp coverages(m_nv_surf, 0.0);
+    vector<double> coverages(m_nv_surf, 0.0);
     for (auto& S : m_surfaces) {
         auto surf = S->thermo();
         double invArea = 1/S->area();
@@ -69,10 +69,8 @@ void MoleReactor::evalSurfaces(double* LHS, double* RHS, double* sdot)
         size_t nk = surf->nSpecies();
         S->syncState();
         kin->getNetProductionRates(&m_work[0]);
-        size_t ns = kin->surfacePhaseIndex();
-        size_t surfloc = kin->kineticsSpeciesIndex(0,ns);
         for (size_t k = 0; k < nk; k++) {
-            RHS[loc + k] = m_work[surfloc + k] * wallarea / surf->size(k);
+            RHS[loc + k] = m_work[k] * wallarea / surf->size(k);
         }
         loc += nk;
 
@@ -84,11 +82,67 @@ void MoleReactor::evalSurfaces(double* LHS, double* RHS, double* sdot)
     }
 }
 
+void MoleReactor::addSurfaceJacobian(vector<Eigen::Triplet<double>> &triplets)
+{
+    size_t offset = m_nsp;
+    for (auto& S : m_surfaces) {
+        S->syncState();
+        double A = S->area();
+        auto kin = S->kinetics();
+        size_t nk = S->thermo()->nSpecies();
+        // index of gas and surface phases to check if the species is in gas or surface
+        size_t spi = 0;
+        size_t gpi = kin->speciesPhaseIndex(kin->kineticsSpeciesIndex(
+            m_thermo->speciesName(0)));
+        // get surface jacobian in concentration units
+        Eigen::SparseMatrix<double> surfJac = kin->netProductionRates_ddCi();
+        // loop through surface specific jacobian and add elements to triplets vector
+        // accordingly
+        for (int k=0; k<surfJac.outerSize(); ++k) {
+            for (Eigen::SparseMatrix<double>::InnerIterator it(surfJac, k); it; ++it) {
+                size_t row = it.row();
+                size_t col = it.col();
+                auto& rowPhase = kin->speciesPhase(row);
+                auto& colPhase = kin->speciesPhase(col);
+                size_t rpi = kin->phaseIndex(rowPhase.name());
+                size_t cpi = kin->phaseIndex(colPhase.name());
+                // check if the reactor kinetics object contains both phases to avoid
+                // any solid phases which may be included then use phases to map surf
+                // kinetics indicies to reactor kinetic indices
+                if ((rpi == spi || rpi == gpi) && (cpi == spi || cpi == gpi) ) {
+                    // subtract start of phase
+                    row -= kin->kineticsSpeciesIndex(0, rpi);
+                    col -= kin->kineticsSpeciesIndex(0, cpi);
+                    // since the gas phase is the first phase in the reactor state
+                    // vector add the offset only if it is a surf species index to
+                    // both row and col
+                    row = (rpi != spi) ? row : row + offset;
+                    // determine appropriate scalar to account for dimensionality
+                    // gas phase species indices will be less than m_nsp
+                    // so use volume if that is the case or area otherwise
+                    double scalar = A;
+                    if (cpi == spi) {
+                        col += offset;
+                        scalar /= A;
+                    } else {
+                        scalar /= m_vol;
+                    }
+                    // push back scaled value triplet
+                    triplets.emplace_back(static_cast<int>(row), static_cast<int>(col),
+                                          scalar * it.value());
+                }
+            }
+        }
+        // add species in this surface to the offset
+        offset += nk;
+    }
+}
+
 void MoleReactor::getMoles(double* y)
 {
     // Use inverse molecular weights to convert to moles
     const double* Y = m_thermo->massFractions();
-    const vector_fp& imw = m_thermo->inverseMolecularWeights();
+    const vector<double>& imw = m_thermo->inverseMolecularWeights();
     for (size_t i = 0; i < m_nsp; i++) {
         y[i] = m_mass * imw[i] * Y[i];
     }
@@ -96,7 +150,7 @@ void MoleReactor::getMoles(double* y)
 
 void MoleReactor::setMassFromMoles(double* y)
 {
-    const vector_fp& mw = m_thermo->molecularWeights();
+    const vector<double>& mw = m_thermo->molecularWeights();
     // calculate mass from moles
     m_mass = 0;
     for (size_t i = 0; i < m_nsp; i++) {
@@ -123,7 +177,6 @@ void MoleReactor::getState(double* y)
     getSurfaceInitialConditions(y+m_nsp+m_sidx);
 }
 
-
 void MoleReactor::updateState(double* y)
 {
     // The components of y are [0] total internal energy, [1] the total volume, and
@@ -136,12 +189,12 @@ void MoleReactor::updateState(double* y)
         double U = y[0];
         // Residual function: error in internal energy as a function of T
         auto u_err = [this, U](double T) {
-            m_thermo->setState_TR(T, m_mass / m_vol);
+            m_thermo->setState_TD(T, m_mass / m_vol);
             return m_thermo->intEnergy_mass() * m_mass - U;
         };
         double T = m_thermo->temperature();
         boost::uintmax_t maxiter = 100;
-        std::pair<double, double> TT;
+        pair<double, double> TT;
         try {
             TT = bmt::bracket_and_solve_root(
                 u_err, T, 1.2, true, bmt::eps_tolerance<double>(48), maxiter);
@@ -153,7 +206,7 @@ void MoleReactor::updateState(double* y)
                     bmt::eps_tolerance<double>(48), maxiter);
             } catch (std::exception& err2) {
                 // Set m_thermo back to a reasonable state if root finding fails
-                m_thermo->setState_TR(T, m_mass / m_vol);
+                m_thermo->setState_TD(T, m_mass / m_vol);
                 throw CanteraError("MoleReactor::updateState",
                     "{}\nat U = {}, rho = {}", err2.what(), U, m_mass / m_vol);
             }
@@ -161,7 +214,7 @@ void MoleReactor::updateState(double* y)
         if (fabs(TT.first - TT.second) > 1e-7*TT.first) {
             throw CanteraError("MoleReactor::updateState", "root finding failed");
         }
-        m_thermo->setState_TR(TT.second, m_mass / m_vol);
+        m_thermo->setState_TD(TT.second, m_mass / m_vol);
     } else {
         m_thermo->setDensity(m_mass / m_vol);
     }
@@ -178,7 +231,7 @@ void MoleReactor::eval(double time, double* LHS, double* RHS)
 
     evalSurfaces(LHS + m_nsp + m_sidx, RHS + m_nsp + m_sidx, m_sdot.data());
     // inverse molecular weights for conversion
-    const vector_fp& imw = m_thermo->inverseMolecularWeights();
+    const vector<double>& imw = m_thermo->inverseMolecularWeights();
     // volume equation
     RHS[1] = m_vdot;
 
@@ -187,9 +240,9 @@ void MoleReactor::eval(double time, double* LHS, double* RHS)
     }
 
     // Energy equation.
-    // \f[
+    // @f[
     //     \dot U = -P\dot V + A \dot q + \dot m_{in} h_{in} - \dot m_{out} h.
-    // \f]
+    // @f]
     if (m_energy) {
         RHS[0] = - m_thermo->pressure() * m_vdot + m_Qdot;
     } else {
@@ -242,7 +295,7 @@ size_t MoleReactor::componentIndex(const string& nm) const
     }
 }
 
-std::string MoleReactor::componentName(size_t k) {
+string MoleReactor::componentName(size_t k) {
     if (k == 0) {
         return "int_energy";
     } else if (k == 1) {

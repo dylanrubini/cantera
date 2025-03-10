@@ -1,13 +1,12 @@
-/*!
- * @file gas_transport.cpp
- *
+/*
  * Gas phase transport properties
+ * ==============================
  *
  * Construct a gas phase Solution object and use it to compute viscosity,
  * thermal conductivity, mixture-averaged diffusion coefficients, and thermal
  * diffusivities for a range of temperatures.
  *
- * Keywords: tutorial, transport, saving output
+ * .. tags:: C++, tutorial, transport, saving output
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -23,8 +22,7 @@ using namespace Cantera;
 using std::cout;
 using std::endl;
 
-void write_csv(const std::string& name, const std::vector<std::string>& names,
-               const Array2D& data)
+void write_csv(const string& name, const vector<string>& names, const Array2D& data)
 {
     std::ofstream s(name);
     for (size_t i = 0; i < data.nRows(); i++) {
@@ -48,7 +46,7 @@ void write_csv(const std::string& name, const std::vector<std::string>& names,
 void transport_example()
 {
     // create a gas mixture, and set its state
-    auto sol = newSolution("gri30.yaml", "gri30", "Mix");
+    auto sol = newSolution("gri30.yaml", "gri30", "mixture-averaged");
     auto gas = sol->thermo();
     double temp = 500.0;
     double pres = 2.0*OneAtm;
@@ -71,7 +69,7 @@ void transport_example()
     }
 
     // Create a list of labels for the CSV output file
-    std::vector<std::string> labels {
+    vector<string> labels {
         "Temperature (K)",
         "Viscosity (Pa*s)",
         "Thermal Conductivity (W/m*K)"

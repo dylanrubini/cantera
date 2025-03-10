@@ -2,7 +2,7 @@
  *  @file SpeciesThermoFactory.cpp
  *    Definitions for factory functions to build instances of classes that
  *    manage the standard-state thermodynamic properties of a set of species
- *    (see \ref spthermo);
+ *    (see @ref spthermo);
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -20,8 +20,6 @@
 #include "cantera/thermo/VPStandardStateTP.h"
 #include "cantera/base/stringUtils.h"
 #include "cantera/base/Units.h"
-
-using namespace std;
 
 namespace Cantera
 {
@@ -51,11 +49,11 @@ SpeciesThermoInterpType* newSpeciesThermoInterpType(int type, double tlow,
     }
 }
 
-SpeciesThermoInterpType* newSpeciesThermoInterpType(const std::string& stype,
+SpeciesThermoInterpType* newSpeciesThermoInterpType(const string& stype,
     double tlow, double thigh, double pref, const double* coeffs)
 {
     int itype = -1;
-    std::string type = toLowerCopy(stype);
+    string type = toLowerCopy(stype);
     if (type == "nasa2" || type == "nasa") {
         itype = NASA2; // two-region 7-coefficient NASA polynomials
     } else if (type == "const_cp" || type == "simple") {
@@ -90,8 +88,8 @@ void setupSpeciesThermo(SpeciesThermoInterpType& thermo,
 void setupNasaPoly(NasaPoly2& thermo, const AnyMap& node)
 {
     setupSpeciesThermo(thermo, node);
-    vector_fp Tranges = node.convertVector("temperature-ranges", "K", 2, 3);
-    const auto& data = node["data"].asVector<vector_fp>(Tranges.size()-1);
+    vector<double> Tranges = node.convertVector("temperature-ranges", "K", 2, 3);
+    const auto& data = node["data"].asVector<vector<double>>(Tranges.size()-1);
     for (const auto& poly : data) {
         if (poly.size() != 7) {
             throw CanteraError("setupNasaPoly", "Wrong number of coefficients "
@@ -110,8 +108,8 @@ void setupNasaPoly(NasaPoly2& thermo, const AnyMap& node)
 void setupShomatePoly(ShomatePoly2& thermo, const AnyMap& node)
 {
     setupSpeciesThermo(thermo, node);
-    vector_fp Tranges = node.convertVector("temperature-ranges", "K", 2, 3);
-    const auto& data = node["data"].asVector<vector_fp>(Tranges.size()-1);
+    vector<double> Tranges = node.convertVector("temperature-ranges", "K", 2, 3);
+    const auto& data = node["data"].asVector<vector<double>>(Tranges.size()-1);
     for (const auto& poly : data) {
         if (poly.size() != 7) {
             throw CanteraError("setupShomatePoly", "Wrong number of coefficients "
@@ -146,9 +144,9 @@ void setupConstCp(ConstCpPoly& thermo, const AnyMap& node)
 void setupNasa9Poly(Nasa9PolyMultiTempRegion& thermo, const AnyMap& node)
 {
     setupSpeciesThermo(thermo, node);
-    vector_fp Tranges = node.convertVector("temperature-ranges", "K", 2, 999);
-    const auto& data = node["data"].asVector<vector_fp>(Tranges.size()-1);
-    map<double, vector_fp> regions;
+    vector<double> Tranges = node.convertVector("temperature-ranges", "K", 2, 999);
+    const auto& data = node["data"].asVector<vector<double>>(Tranges.size()-1);
+    map<double, vector<double>> regions;
     for (size_t i = 0; i < data.size(); i++) {
         if (data[i].size() != 9) {
             throw CanteraError("setupNasa9Poly", "Wrong number of coefficients "
@@ -174,12 +172,12 @@ void setupMu0(Mu0Poly& thermo, const AnyMap& node)
     bool dimensionless = node.getBool("dimensionless", false);
     double h0 = node.convert("h0", "J/kmol", 0.0);
     map<double, double> T_mu;
-    for (const auto& item : node["data"]) {
-        double T = node.units().convertTo(fpValueCheck(item.first), "K");
+    for (const auto& [T_str, mu] : node["data"]) {
+        double T = node.units().convertTo(fpValueCheck(T_str), "K");
         if (dimensionless) {
-            T_mu[T] = item.second.asDouble() * GasConstant * T;
+            T_mu[T] = mu.asDouble() * GasConstant * T;
         } else {
-            T_mu[T] = node.units().convert(item.second, "J/kmol");
+            T_mu[T] = node.units().convert(mu, "J/kmol");
         }
     }
     thermo.setParameters(h0, T_mu);
@@ -187,27 +185,27 @@ void setupMu0(Mu0Poly& thermo, const AnyMap& node)
 
 unique_ptr<SpeciesThermoInterpType> newSpeciesThermo(const AnyMap& node)
 {
-    std::string model = node["model"].asString();
+    string model = node["model"].asString();
     if (model == "NASA7") {
-        unique_ptr<NasaPoly2> thermo(new NasaPoly2());
+        auto thermo = make_unique<NasaPoly2>();
         setupNasaPoly(*thermo, node);
-        return unique_ptr<SpeciesThermoInterpType>(move(thermo));
+        return thermo;
     } else if (model == "Shomate") {
-        unique_ptr<ShomatePoly2> thermo(new ShomatePoly2());
+        auto thermo = make_unique<ShomatePoly2>();
         setupShomatePoly(*thermo, node);
-        return unique_ptr<SpeciesThermoInterpType>(move(thermo));
+        return thermo;
     } else if (model == "NASA9") {
-        unique_ptr<Nasa9PolyMultiTempRegion> thermo(new Nasa9PolyMultiTempRegion());
+        auto thermo = make_unique<Nasa9PolyMultiTempRegion>();
         setupNasa9Poly(*thermo, node);
-        return unique_ptr<SpeciesThermoInterpType>(move(thermo));
+        return thermo;
     } else if (model == "constant-cp") {
-        unique_ptr<ConstCpPoly> thermo(new ConstCpPoly());
+        auto thermo = make_unique<ConstCpPoly>();
         setupConstCp(*thermo, node);
-        return unique_ptr<SpeciesThermoInterpType>(move(thermo));
+        return thermo;
     } else if (model == "piecewise-Gibbs") {
-        unique_ptr<Mu0Poly> thermo(new Mu0Poly());
+        auto thermo = make_unique<Mu0Poly>();
         setupMu0(*thermo, node);
-        return unique_ptr<SpeciesThermoInterpType>(move(thermo));
+        return thermo;
     } else {
         throw CanteraError("newSpeciesThermo",
             "Unknown thermo model '{}'", model);

@@ -46,6 +46,7 @@ cdef extern from "cantera/thermo/ThermoPhase.h" namespace "Cantera":
         cbool hasPhaseTransition()
         cbool isPure()
         cbool isCompressible()
+        string nativeMode()
         stdmap[string, size_t] nativeState() except +translate_exception
         vector[string] fullStates()
         vector[string] partialStates()
@@ -75,6 +76,7 @@ cdef extern from "cantera/thermo/ThermoPhase.h" namespace "Cantera":
         double molarVolume() except +translate_exception
         double isothermalCompressibility() except +translate_exception
         double thermalExpansionCoeff() except +translate_exception
+        double soundSpeed() except +translate_exception
         double electricPotential() except +translate_exception
         void setElectricPotential(double) except +translate_exception
 
@@ -122,13 +124,13 @@ cdef extern from "cantera/thermo/ThermoPhase.h" namespace "Cantera":
         double elementalMoleFraction(size_t) except +translate_exception
 
         # state setters
-        void setState_TR(double, double) except +translate_exception
+        void setState_TD(double, double) except +translate_exception
         void setState_TP(double, double) except +translate_exception
         void setState_HP(double, double) except +translate_exception
         void setState_UV(double, double) except +translate_exception
         void setState_SP(double, double) except +translate_exception
         void setState_SV(double, double) except +translate_exception
-        void setState_RP(double, double) except +translate_exception
+        void setState_DP(double, double) except +translate_exception
         void setState_ST(double, double) except +translate_exception
         void setState_TV(double, double) except +translate_exception
         void setState_PV(double, double) except +translate_exception
@@ -173,6 +175,8 @@ cdef extern from "cantera/thermo/ThermoPhase.h" namespace "Cantera":
         double equivalenceRatio() except +translate_exception
         double stoichAirFuelRatio(const double* fuelComp, const double* oxComp, ThermoBasis basis) except +translate_exception
 
+        CxxAnyMap getAuxiliaryData() except +translate_exception
+
 
 cdef extern from "cantera/thermo/SurfPhase.h":
     cdef cppclass CxxSurfPhase "Cantera::SurfPhase":
@@ -186,9 +190,8 @@ cdef extern from "cantera/thermo/SurfPhase.h":
 
 
 cdef extern from "cantera/thermo/PlasmaPhase.h":
-    cdef cppclass CxxPlasmaPhase "Cantera::PlasmaPhase":
+    cdef cppclass CxxPlasmaPhase "Cantera::PlasmaPhase" (CxxThermoPhase):
         CxxPlasmaPhase()
-        double electronTemperature() except +translate_exception
         void setElectronTemperature(double) except +translate_exception
         void setElectronEnergyLevels(double*, size_t) except +translate_exception
         void getElectronEnergyLevels(double*)
@@ -199,12 +202,15 @@ cdef extern from "cantera/thermo/PlasmaPhase.h":
         string electronEnergyDistributionType()
         void setQuadratureMethod(const string&) except +translate_exception
         string quadratureMethod()
-        void enableNormalizeElectronEnergyDist(cbool) except +translate_exception
+        void enableNormalizeElectronEnergyDist(cbool)
         cbool normalizeElectronEnergyDistEnabled()
         void setMeanElectronEnergy(double) except +translate_exception
         double isotropicShapeFactor()
         double meanElectronEnergy()
-        size_t nElectronEnergyLevels() except +translate_exception
+        size_t nElectronEnergyLevels()
+        double electronPressure()
+        string electronSpeciesName()
+        double elasticPowerLoss() except +translate_exception
 
 
 cdef extern from "cantera/cython/thermo_utils.h":

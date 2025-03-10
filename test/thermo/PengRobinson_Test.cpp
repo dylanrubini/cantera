@@ -10,18 +10,18 @@ class PengRobinson_Test : public testing::Test
 {
 public:
     PengRobinson_Test() {
-        test_phase.reset(newPhase("../data/thermo-models.yaml", "CO2-PR"));
+        test_phase = newThermo("../data/thermo-models.yaml", "CO2-PR");
     }
 
     //vary the composition of a co2-h2 mixture:
     void set_r(const double r) {
-        vector_fp moleFracs(7);
+        vector<double> moleFracs(7);
         moleFracs[0] = r;
         moleFracs[2] = 1-r;
         test_phase->setMoleFractions(&moleFracs[0]);
     }
 
-    std::unique_ptr<ThermoPhase> test_phase;
+    shared_ptr<ThermoPhase> test_phase;
 };
 
 TEST_F(PengRobinson_Test, chem_potentials)
@@ -48,7 +48,7 @@ TEST_F(PengRobinson_Test, chem_potentials)
     double xmax = 0.9;
     int numSteps = 9;
     double dx = (xmax-xmin)/(numSteps-1);
-    vector_fp chemPotentials(7);
+    vector<double> chemPotentials(7);
     for(int i=0; i < numSteps; ++i)
     {
         set_r(xmin + i*dx);
@@ -139,7 +139,7 @@ TEST_F(PengRobinson_Test, getPressure)
     {
         const double temp = 296 + i * 50;
         set_r(1.0);
-        test_phase->setState_TR(temp, rho);
+        test_phase->setState_TD(temp, rho);
         const double Tcrit = test_phase->critTemperature();
         mv = 1 / rho * test_phase->meanMolecularWeight();
         //Calculate pressure using Peng-Robinson EoS
@@ -185,7 +185,7 @@ TEST(PengRobinson, lookupSpeciesProperties)
         "{name: test, species: [{gri30.yaml/species: [CO2, CH4, N2]}],"
         " thermo: Peng-Robinson}"
     );
-    unique_ptr<ThermoPhase> test(newPhase(phase_def));
+    shared_ptr<ThermoPhase> test(newThermo(phase_def));
 
     // Check for correspondence to values in critical properties "database"
     test->setState_TPX(330, 100 * OneAtm, "CH4: 1.0");
@@ -206,14 +206,14 @@ TEST(PengRobinson, lookupSpeciesPropertiesMissing)
 
     // CH3 is not in the critical properties database, so this should be
     // detected as an error
-    EXPECT_THROW(newPhase(phase_def), CanteraError);
+    EXPECT_THROW(newThermo(phase_def), CanteraError);
 }
 
 TEST(PengRobinson, localCritProperties)
 {
     // Test calculation based on critical properties stored in the YAML species
     // definition, in the "critical-parameters" field
-    unique_ptr<ThermoPhase> test(newPhase("thermo-models.yaml", "CO2-PR-params"));
+    shared_ptr<ThermoPhase> test(newThermo("thermo-models.yaml", "CO2-PR-params"));
     test->setState_TPX(400, 1.2e6, "CO2: 1.0");
     EXPECT_NEAR(test->critTemperature(), 304.128, 1e-5);
     EXPECT_NEAR(test->critPressure(), 7.3773e6, 1e-4);

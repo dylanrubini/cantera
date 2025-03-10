@@ -6,10 +6,9 @@
 
 namespace tpx
 {
-Substance* GetSub(int isub);
 
 //! Create a new Substance object corresponding to the specified name.
-/*
+/**
  * Currently valid substances are:
  *
  * - water

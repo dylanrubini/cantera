@@ -9,18 +9,18 @@ class cubicSolver_Test : public testing::Test
 {
 public:
     cubicSolver_Test() {
-        test_phase.reset(newPhase("../data/co2_PR_example.yaml"));
+        test_phase = newThermo("../data/co2_PR_example.yaml");
     }
 
     //vary the composition of a co2-h2 mixture
     void set_r(const double r) {
-        vector_fp moleFracs(7);
+        vector<double> moleFracs(7);
         moleFracs[0] = r;
         moleFracs[2] = 1-r;
         test_phase->setMoleFractions(&moleFracs[0]);
     }
 
-    std::unique_ptr<ThermoPhase> test_phase;
+    shared_ptr<ThermoPhase> test_phase;
 };
 
 #ifdef __MINGW32__
@@ -78,7 +78,7 @@ TEST_F(cubicSolver_Test, solve_cubic)
     // Obtain pressure using EoS and compare against the given pressure value
     set_r(1.0);
     rho = test_phase->meanMolecularWeight()/Vroot[0];
-    peng_robinson_phase->setState_TR(temp, rho);
+    peng_robinson_phase->setState_TD(temp, rho);
     p = peng_robinson_phase->pressure();
     EXPECT_NEAR(p, pres, 1);
 
@@ -95,7 +95,7 @@ TEST_F(cubicSolver_Test, solve_cubic)
     // Obtain pressure using EoS and compare against the given pressure value
     set_r(1.0);
     rho = test_phase->meanMolecularWeight()/Vroot[0];
-    peng_robinson_phase->setState_TR(temp, rho);
+    peng_robinson_phase->setState_TD(temp, rho);
     p = peng_robinson_phase->pressure();
     EXPECT_NEAR(p, pres, 1);
 
@@ -111,7 +111,7 @@ TEST_F(cubicSolver_Test, solve_cubic)
     // Obtain pressure using EoS and compare against the given pressure value
     set_r(1.0);
     rho = test_phase->meanMolecularWeight()/Vroot[0];
-    peng_robinson_phase->setState_TR(Tcrit, rho);
+    peng_robinson_phase->setState_TD(Tcrit, rho);
     p = peng_robinson_phase->pressure();
     EXPECT_NEAR(p, pCrit, 1);
 }

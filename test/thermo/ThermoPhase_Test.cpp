@@ -9,16 +9,16 @@ namespace Cantera
 class TestThermoMethods : public testing::Test
 {
 public:
-    std::unique_ptr<ThermoPhase> thermo;
+    shared_ptr<ThermoPhase> thermo;
     TestThermoMethods() {
-        thermo.reset(newPhase("h2o2.yaml"));
+        thermo = newThermo("h2o2.yaml", "");
     }
 };
 
 TEST_F(TestThermoMethods, getMoleFractionsByName)
 {
     thermo->setMoleFractionsByName("O2:0.2, H2:0.3, AR:0.5");
-    compositionMap X = thermo->getMoleFractionsByName();
+    Composition X = thermo->getMoleFractionsByName();
     EXPECT_DOUBLE_EQ(X["O2"], 0.2);
     EXPECT_DOUBLE_EQ(X["H2"], 0.3);
     EXPECT_DOUBLE_EQ(X["AR"], 0.5);
@@ -34,7 +34,7 @@ TEST_F(TestThermoMethods, getMoleFractionsByName)
 TEST_F(TestThermoMethods, getMassFractionsByName)
 {
     thermo->setMassFractionsByName("O2:0.2, H2:0.3, AR:0.5");
-    compositionMap Y = thermo->getMassFractionsByName();
+    Composition Y = thermo->getMassFractionsByName();
     EXPECT_DOUBLE_EQ(Y["O2"], 0.2);
     EXPECT_DOUBLE_EQ(Y["H2"], 0.3);
     EXPECT_DOUBLE_EQ(Y["AR"], 0.5);
@@ -55,7 +55,7 @@ TEST_F(TestThermoMethods, setState_nan)
     EXPECT_THROW(thermo->setState_TP(555, nan), CanteraError);
     EXPECT_THROW(thermo->setState_HP(nan, 55555), CanteraError);
     EXPECT_THROW(thermo->setState_SV(1234, nan), CanteraError);
-    EXPECT_THROW(thermo->setState_TR(555, nan), CanteraError);
+    EXPECT_THROW(thermo->setState_TD(555, nan), CanteraError);
 }
 
 TEST_F(TestThermoMethods, setState_AnyMap)
@@ -94,7 +94,7 @@ TEST_F(TestThermoMethods, setState_AnyMap)
 
 TEST_F(TestThermoMethods, setConcentrations)
 {
-    vector_fp C0(thermo->nSpecies());
+    vector<double> C0(thermo->nSpecies());
     double ctot = 0.0;
     for (size_t k = 0; k < thermo->nSpecies(); k++) {
         if (k == 2) {
@@ -121,7 +121,7 @@ class EquilRatio_MixFrac_Test : public testing::Test
 {
 public:
     void initSolution() {
-        m_sol = newSolution("gri30.yaml", "gri30", "None");
+        m_sol = newSolution("gri30.yaml", "gri30", "none");
     }
 
     void set_arbitrary_mixture(ThermoBasis basis) {
@@ -209,8 +209,8 @@ public:
 
     void test_pure_mixture(ThermoBasis basis, bool oxidizer, double phi, double mf) {
         auto& gas = *m_sol->thermo();
-        vector_fp v_ox(gas.nSpecies());
-        vector_fp v_fuel(gas.nSpecies());
+        vector<double> v_ox(gas.nSpecies());
+        vector<double> v_fuel(gas.nSpecies());
         v_ox[gas.speciesIndex("O2")] = 21.0;
         v_ox[gas.speciesIndex("N2")] = 79.0;
         v_fuel[gas.speciesIndex("CH4")] = 10.0;
@@ -238,8 +238,8 @@ public:
 
     void test_stoich_mixture(ThermoBasis basis, double mf, double AFR_st) {
         auto& gas = *m_sol->thermo();
-        std::string sfuel = "CH4";
-        std::string sox = "O2:21,N2:79";
+        string sfuel = "CH4";
+        string sox = "O2:21,N2:79";
         gas.setState_TP(300.0, 1e5);
         gas.setEquivalenceRatio(1.0, sfuel, sox, basis);
         gas.setMixtureFraction(gas.mixtureFraction(sfuel, sox, basis, "Bilger"), sfuel, sox, basis);
@@ -248,8 +248,8 @@ public:
     }
 
     shared_ptr<Solution> m_sol;
-    compositionMap m_fuel;
-    compositionMap m_ox;
+    Composition m_fuel;
+    Composition m_ox;
 };
 
 TEST_F(EquilRatio_MixFrac_Test, EquilRatio_MixFrac_Arbitrary_Mixture_Molar)

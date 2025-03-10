@@ -11,13 +11,6 @@
 namespace Cantera
 {
 
-SpeciesThermoInterpType::SpeciesThermoInterpType() :
-    m_lowT(0.0),
-    m_highT(0.0),
-    m_Pref(0.0)
-{
-}
-
 SpeciesThermoInterpType::SpeciesThermoInterpType(double tlow,
                                                  double thigh,
                                                  double pref) :
@@ -27,8 +20,8 @@ SpeciesThermoInterpType::SpeciesThermoInterpType(double tlow,
 {
 }
 
-void SpeciesThermoInterpType::updateProperties(const doublereal* tempPoly,
-        doublereal* cp_R, doublereal* h_RT, doublereal* s_R) const
+void SpeciesThermoInterpType::updateProperties(const double* tempPoly,
+        double* cp_R, double* h_RT, double* s_R) const
 {
     double T = tempPoly[0];
     updatePropertiesTemp(T, cp_R, h_RT, s_R);
@@ -69,13 +62,12 @@ void SpeciesThermoInterpType::getParameters(AnyMap& thermo) const
     }
 }
 
-doublereal SpeciesThermoInterpType::reportHf298(doublereal* const h298) const
+double SpeciesThermoInterpType::reportHf298(double* const h298) const
 {
     throw NotImplementedError("SpeciesThermoInterpType::reportHf298");
 }
 
-void SpeciesThermoInterpType::modifyOneHf298(const size_t k,
-                                             const doublereal Hf298New)
+void SpeciesThermoInterpType::modifyOneHf298(const size_t k, const double Hf298New)
 {
     throw NotImplementedError("SpeciesThermoInterpType::modifyOneHf298");
 }

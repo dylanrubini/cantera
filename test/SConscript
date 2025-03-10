@@ -5,22 +5,18 @@ from os.path import join as pjoin
 import time
 import sys
 
-from buildutils import *
+from buildutils import logger, test_results, multi_glob
 
 Import('env','build','install')
 localenv = env.Clone()
 
-# Where possible, link tests against the shared libraries to minimize the sizes
-# of the resulting binaries.
-if localenv['OS'] == 'Linux':
-    cantera_libs = localenv['cantera_shared_libs']
-else:
-    cantera_libs = localenv['cantera_libs']
-
 localenv.Prepend(CPPPATH=['#include'],
                  LIBPATH='#build/lib')
-localenv.Append(LIBS=cantera_libs,
+localenv.Append(LIBS=localenv['cantera_shared_libs'],
                 CCFLAGS=env['warning_flags'])
+
+if env['python_package'] != 'y':
+    localenv.Append(CPPDEFINES={'CT_SKIP_PYTHON': '1'})
 
 if env['googletest'] == 'submodule':
     localenv.Prepend(CPPPATH=['#ext/googletest/googletest/include',
@@ -35,7 +31,7 @@ for optimize_flag in ('-O3', '-O2', '/O2'):
         ccflags.remove(optimize_flag)
 localenv['CCFLAGS'] = ccflags
 
-localenv['ENV']['CANTERA_DATA'] = (Dir('#build/data').abspath + os.pathsep +
+localenv['ENV']['CANTERA_DATA'] = (Dir('#data').abspath + os.pathsep +
                                    Dir('#samples/data').abspath + os.pathsep +
                                    Dir('#test/data').abspath)
 
@@ -43,14 +39,6 @@ localenv['ENV']['CANTERA_DATA'] = (Dir('#build/data').abspath + os.pathsep +
 localenv.PrependENVPath('PYTHONPATH', Dir('#test/python').abspath)
 
 PASSED_FILES = {}
-
-# Add build/lib in order to find Cantera shared library
-if env["OS"] == "Windows":
-    localenv.PrependENVPath('PATH', Dir('#build/lib').abspath)
-elif env['OS'] == 'Darwin':
-    localenv.PrependENVPath('DYLD_LIBRARY_PATH', Dir('#build/lib').abspath)
-else:
-    localenv.PrependENVPath('LD_LIBRARY_PATH', Dir('#build/lib').abspath)
 
 def addTestProgram(subdir, progName, env_vars={}):
     """
@@ -105,7 +93,7 @@ def addTestProgram(subdir, progName, env_vars={}):
     testenv['ENV'].update(env_vars)
     if env["skip_slow_tests"]:
         testenv.Append(CPPDEFINES=["CT_SKIP_SLOW"])
-    if env["python_package"] == "none":
+    if env["python_package"] == "n":
         testenv.Append(CPPDEFINES=["CT_NO_PYTHON"])
     program = testenv.Program(pjoin(subdir, progName),
                               multi_glob(testenv, subdir, 'cpp'))
@@ -116,7 +104,10 @@ def addTestProgram(subdir, progName, env_vars={}):
         run_program = testenv.Command(passedFile, program, gtestRunner)
         env.Depends(run_program, env['build_targets'])
         env.Depends(env['test_results'], run_program)
-        Alias('test-%s' % progName, run_program)
+        Alias(f'test-{progName}', run_program)
+        Alias('test-gtest', run_program)
+        Alias(f'build-{progName}', program)
+        Alias('build-tests', program)
         env['testNames'].append(progName)
     else:
         test_results.failed['test-%s (googletest disabled)' % progName] = 1
@@ -216,90 +207,17 @@ def addPythonTest(testname, subset):
     return run_program
 
 
-def addMatlabTest(script, testName, dependencies=None, env_vars=()):
-    def matlabRunner(target, source, env):
-        passedFile = target[0]
-        del test_results.tests[passedFile.name]
-        workDir = Dir('#test/work').abspath
-        if not os.path.isdir(workDir):
-            os.mkdir(workDir)
-        outfile = pjoin(workDir, 'matlab-results.txt')
-        runCommand = "%s('%s'); exit" % (source[0].name[:-2], outfile)
-        if os.name == 'nt':
-            matlabOptions = ['-nojvm','-nosplash','-wait']
-        else:
-            matlabOptions = ['-nojvm','-nodisplay']
-        if os.path.exists(outfile):
-            os.remove(outfile)
-
-        environ = dict(os.environ)
-        environ.update(env['ENV'])
-        environ.update(env_vars)
-        code = subprocess.call([pjoin(env['matlab_path'], 'bin', 'matlab')] +
-                               matlabOptions + ['-r', runCommand],
-                               env=environ, cwd=Dir('#test/matlab').abspath)
-        if code and env["fast_fail_tests"]:
-            sys.exit(1)
-        try:
-            with open(outfile, "r") as output_file:
-                results = output_file.read()
-        except EnvironmentError: # TODO: replace with 'FileNotFoundError' after end of Python 2.7 support
-            test_results.failed['Matlab' +
-                ' ***no results for entire test suite***'] = 100
-            return
-
-        matlab_test_message = [
-            f"{' Matlab test results ':-^88}",
-            results,
-            f"{' end Matlab test results ':-^88}",
-        ]
-        logger.info("\n".join(matlab_test_message))
-
-        passed = True
-        for line in results.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            label = line.split()[0]
-            if 'seconds' not in line: # Headers for test suite sections
-                section = line
-            elif 'test' in line and 'matlab' in line: # skip overall summary line
-                continue
-            elif label == section: # skip summary line for each section
-                continue
-            elif 'FAILED' in line:
-                test_results.failed['.'.join(['Matlab', section, label])] = 1
-                passed = False
-            elif 'passed' in line:
-                test_results.passed['.'.join(['Matlab', section, label])] = 1
-
-        if passed:
-            open(target[0].path, 'w').write(time.asctime()+'\n')
-
-    testenv = localenv.Clone()
-    passedFile = File('matlab/%s.passed' % (script))
-    PASSED_FILES[testName] = str(passedFile)
-    test_results.tests[passedFile.name] = True
-    run_program = testenv.Command(passedFile, pjoin('matlab', script), matlabRunner)
-
-    dependencies = (dependencies or []) + localenv['matlab_extension']
-    for dep in dependencies:
-        if isinstance(dep, str):
-            dep = File(pjoin('matlab', dep))
-        testenv.Depends(run_program, dep)
-
-    testenv.Depends(testenv['test_results'], run_program)
-    if os.path.exists(passedFile.abspath):
-        Alias('test-reset', testenv.Command('reset-%s%s' % ('matlab', script),
-                                            [], [Delete(passedFile.abspath)]))
-
-    return run_program
-
 # Instantiate tests
-addTestProgram('general', 'general')
-addTestProgram('thermo', 'thermo')
+addTestProgram('clib', 'clib')
+if localenv['clib_experimental']:
+    addTestProgram('clib_experimental', 'clib-experimental')
 addTestProgram('equil', 'equil')
+addTestProgram('general', 'general')
 addTestProgram('kinetics', 'kinetics')
+addTestProgram('oneD', 'oneD')
+addTestProgram('thermo', 'thermo')
+addTestProgram('thermo_consistency', 'thermo-consistency',
+               env_vars={'GTEST_BRIEF': '0' if env['verbose_tests'] else '1'})
 addTestProgram('transport', 'transport')
 addTestProgram('zeroD', 'zeroD')
 
@@ -308,7 +226,7 @@ test_root = '#test/python'
 for f in multi_glob(localenv, test_root, '^test_*.py'):
     python_subtests.append(f.name[5:-3])
 
-if localenv['python_package'] == 'full':
+if localenv['python_package'] == 'y':
     # Create test aliases for individual test modules (such as test-python-thermo;
     # not run as part of the main suite) and a single test runner with all the
     # tests (test-python) for the main suite.
@@ -317,12 +235,6 @@ if localenv['python_package'] == 'full':
         pyTest = addPythonTest(name, subset=subset)
         localenv.Alias('test-' + name, pyTest)
         env['testNames'].append(name)
-
-if localenv['matlab_toolbox'] == 'y':
-    matlabTest = addMatlabTest('runCanteraTests.m', 'matlab',
-                               dependencies=multi_glob(localenv, 'matlab', 'm'))
-    localenv.Alias('test-matlab', matlabTest)
-    env['testNames'].append('matlab')
 
 # Force explicitly-named tests to run even if SCons thinks they're up to date
 for command in COMMAND_LINE_TARGETS:

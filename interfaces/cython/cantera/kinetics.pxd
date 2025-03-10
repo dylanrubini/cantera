@@ -24,7 +24,6 @@ cdef extern from "cantera/kinetics/Kinetics.h" namespace "Cantera":
         int nTotalSpecies()
         int nReactions()
         int nPhases()
-        int reactionPhaseIndex()
         int phaseIndex(string)
         int kineticsSpeciesIndex(int, int)
         int kineticsSpeciesIndex(string)
@@ -32,11 +31,11 @@ cdef extern from "cantera/kinetics/Kinetics.h" namespace "Cantera":
 
         CxxThermoPhase& thermo(int)
 
-        void addPhase(CxxThermoPhase&) except +translate_exception
+        void addThermo(shared_ptr[CxxThermoPhase]) except +translate_exception
         void init() except +translate_exception
         void skipUndeclaredThirdBodies(cbool)
-        void addReaction(shared_ptr[CxxReaction]) except +translate_exception
-        void addReaction(shared_ptr[CxxReaction], cbool) except +translate_exception
+        cbool addReaction(shared_ptr[CxxReaction]) except +translate_exception
+        cbool addReaction(shared_ptr[CxxReaction], cbool) except +translate_exception
         void modifyReaction(int, shared_ptr[CxxReaction]) except +translate_exception
         void invalidateCache() except +translate_exception
         void resizeReactions()
@@ -63,6 +62,14 @@ cdef extern from "cantera/kinetics/Kinetics.h" namespace "Cantera":
         CxxSparseMatrix creationRates_ddX() except +translate_exception
         CxxSparseMatrix destructionRates_ddX() except +translate_exception
         CxxSparseMatrix netProductionRates_ddX() except +translate_exception
+
+        CxxSparseMatrix fwdRatesOfProgress_ddCi() except +translate_exception
+        CxxSparseMatrix revRatesOfProgress_ddCi() except +translate_exception
+        CxxSparseMatrix netRatesOfProgress_ddCi() except +translate_exception
+
+        CxxSparseMatrix creationRates_ddCi() except +translate_exception
+        CxxSparseMatrix destructionRates_ddCi() except +translate_exception
+        CxxSparseMatrix netProductionRates_ddCi() except +translate_exception
 
 
 cdef extern from "cantera/kinetics/InterfaceKinetics.h":

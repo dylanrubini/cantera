@@ -1,7 +1,7 @@
 /**
  *  @file ThermoFactory.h
  *     Headers for the factory class that can create known ThermoPhase objects
- *     (see \ref thermoprops and class \link Cantera::ThermoFactory ThermoFactory\endlink).
+ *     (see @ref thermoprops and class @link Cantera::ThermoFactory ThermoFactory@endlink).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -16,13 +16,10 @@
 namespace Cantera
 {
 
-/*!
+/**
  * @addtogroup thermoprops
- *
- * Standard ThermoPhase objects may be instantiated by calling the main %Cantera
- * factory class for ThermoPhase objects; This class is called ThermoFactory.
  */
-//@{
+//! @{
 
 
 //! Factory class for thermodynamic property managers.
@@ -34,28 +31,10 @@ class ThermoFactory : public Factory<ThermoPhase>
 {
 public:
     //! Static function that creates a static instance of the factory.
-    static ThermoFactory* factory() {
-        std::unique_lock<std::mutex> lock(thermo_mutex);
-        if (!s_factory) {
-            s_factory = new ThermoFactory;
-        }
-        return s_factory;
-    }
+    static ThermoFactory* factory();
 
     //! delete the static instance of this factory
-    virtual void deleteFactory() {
-        std::unique_lock<std::mutex> lock(thermo_mutex);
-        delete s_factory;
-        s_factory = 0;
-    }
-
-    //! Create a new thermodynamic property manager.
-    /*!
-     * @param model  The name of the thermo model
-     * @returns a pointer to a new ThermoPhase object of the type specified. Throws a
-     *     CanteraError if the named model isn't registered with ThermoFactory.
-     */
-    virtual ThermoPhase* newThermoPhase(const std::string& model);
+    void deleteFactory() override;
 
 private:
     //! static member of a single instance
@@ -68,22 +47,14 @@ private:
     static std::mutex thermo_mutex;
 };
 
-//! @copydoc ThermoFactory::newThermoPhase
-inline ThermoPhase* newThermoPhase(const std::string& model)
-{
-    return ThermoFactory::factory()->create(model);
-}
-
 //! Create a new ThermoPhase instance.
-/*!
- * @param model   String to look up the model against
- * @returns a shared pointer to a new ThermoPhase instance matching the model string.
- */
-inline shared_ptr<ThermoPhase> newThermo(const std::string& model)
-{
-    ThermoPhase* tptr = ThermoFactory::factory()->create(model);
-    return shared_ptr<ThermoPhase> (tptr);
-}
+ /*!
+  * @param model   String to look up the model against
+  * @returns a shared pointer to a new ThermoPhase object of the type specified. Throws a
+  *     CanteraError if the named model is not registered with ThermoFactory.
+  * @since New in %Cantera 3.0. Replaces newThermo
+  */
+ shared_ptr<ThermoPhase> newThermoModel(const string& model);
 
 //! Create a new ThermoPhase object and initialize it
 /*!
@@ -92,13 +63,14 @@ inline shared_ptr<ThermoPhase> newThermo(const std::string& model)
  * @param rootNode   The root node of the tree containing the phase definition,
  *     which will be used as the default location from which to read species
  *     definitions.
+ * @since New in %Cantera 3.0.
  */
-unique_ptr<ThermoPhase> newPhase(const AnyMap& phaseNode,
-                                 const AnyMap& rootNode=AnyMap());
+shared_ptr<ThermoPhase> newThermo(const AnyMap& phaseNode,
+                                  const AnyMap& rootNode=AnyMap());
 
 //! Create and Initialize a ThermoPhase object from an input file.
 /*!
- * This function uses AnyMap::fromYamlFile() to read the input file, newThermoPhase()
+ * This function uses AnyMap::fromYamlFile() to read the input file, newThermo()
  * to create an empty ThermoPhase of the appropriate type, and setupPhase() to
  * initialize the phase.
  *
@@ -106,8 +78,10 @@ unique_ptr<ThermoPhase> newPhase(const AnyMap& phaseNode,
  * @param id     name (id) of the phase in the file.
  *               If this is blank, the first phase in the file is used.
  * @returns an initialized ThermoPhase object.
+ * @since Changed in %Cantera 3.0. Prior to %Cantera 3.0, the function used a single
+ *      argument specifying the thermo model, which is now deprecated.
  */
-ThermoPhase* newPhase(const std::string& infile, std::string id="");
+shared_ptr<ThermoPhase> newThermo(const string& infile, const string& id="");
 
 //! Initialize a ThermoPhase object
 /*!
@@ -121,7 +95,7 @@ ThermoPhase* newPhase(const std::string& infile, std::string id="");
 void setupPhase(ThermoPhase& phase, const AnyMap& phaseNode,
                 const AnyMap& rootNode=AnyMap());
 
-//@}
+//! @}
 
 }
 

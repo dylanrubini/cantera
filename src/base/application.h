@@ -11,21 +11,18 @@
 
 #include <boost/algorithm/string/join.hpp>
 
-#include <set>
 #include <thread>
 
 namespace Cantera
 {
 
-int get_modified_time(const std::string& path);
-
-/*!
+/**
  * @defgroup globalData Global Data
  *
- * Global data are available anywhere. There are two kinds. Cantera has an
+ * Global data are available anywhere. There are two kinds. %Cantera has an
  * assortment of constant values for physical parameters. Also, Cantera
  * maintains a collection of global data which is specific to each process that
- * invokes Cantera functions. This process-specific data is stored in the class
+ * invokes %Cantera functions. This process-specific data is stored in the class
  * Application.
  */
 
@@ -38,8 +35,8 @@ int get_modified_time(const std::string& path);
  * here. At most one instance is created, and it is not destroyed until the
  * process terminates.
  *
- * @ingroup textlogs
  * @ingroup globalData
+ * @ingroup debugGroup
  */
 class Application
 {
@@ -57,19 +54,19 @@ protected:
         //! throwing an exception.
         /*!
          * This routine adds an error message to the end of the stack of errors
-         * that Cantera accumulates in the Application class.
+         * that %Cantera accumulates in the Application class.
          * @param r    Procedure name which is generating the error condition
          * @param msg  Descriptive message of the error condition.
          *
          * If only one argument is specified, that string is used as the
          * entire message.
-         * @ingroup errorhandling
+         * @ingroup errGroup
          */
-        void addError(const std::string& r, const std::string& msg="");
+        void addError(const string& r, const string& msg="");
 
         //! Return the number of errors that have been encountered so far.
         /*!
-         * @ingroup errorhandling
+         * @ingroup errGroup
          */
         int getErrorCount();
 
@@ -79,7 +76,7 @@ protected:
          * Application class. This routine eliminates the last exception to be
          * added to that stack.
          *
-         * @ingroup errorhandling
+         * @ingroup errGroup
          */
         void popError();
 
@@ -88,21 +85,21 @@ protected:
          * This routine will retrieve the last error message and return it in
          * the return string.
          *
-         * @ingroup errorhandling
+         * @ingroup errGroup
          */
-        std::string lastErrorMessage();
+        string lastErrorMessage();
 
         //!  Prints all of the error messages to an ostream
         /*!
          * Write out all of the saved error messages to the ostream f using
-         * the function Logger::writelog. Cantera saves a stack of exceptions
+         * the function Logger::writelog. %Cantera saves a stack of exceptions
          * that it has caught in the Application class. This routine writes
          * out all of the error messages to the ostream and then clears them
          * from internal storage.
          *
          * @param f ostream which will receive the error messages
          *
-         * @ingroup errorhandling
+         * @ingroup errGroup
          */
         void getErrors(std::ostream& f);
 
@@ -113,24 +110,24 @@ protected:
          * class. This routine writes out all of the error messages and then
          * clears them from internal storage.
          *
-         * @ingroup errorhandling
+         * @ingroup errGroup
          */
         void logErrors();
 
         //!  Write a message to the screen.
         /*!
          * The string may be of any length, and may contain end-of-line
-         * characters. This method is used throughout Cantera to write log
+         * characters. This method is used throughout %Cantera to write log
          * messages. It can also be called by user programs.  The advantage of
          * using writelog over writing directly to the standard output is that
          * messages written with writelog will display correctly even when
-         * Cantera is used from MATLAB or other application that do not have a
+         * %Cantera is used from MATLAB or other application that do not have a
          * standard output stream.
          *
          * @param msg  c++ string to be written to the screen
-         * @ingroup textlogs
+         * @ingroup logGroup
          */
-        void writelog(const std::string& msg);
+        void writelog(const string& msg);
 
         //! Write an end of line character to the screen and flush output
         void writelogendl();
@@ -139,9 +136,9 @@ protected:
         /*!
          * @param warning  String specifying type of warning; see Logger::warn()
          * @param msg  String to be written to the screen
-         * @ingroup textlogs
+         * @ingroup logGroup
          */
-        void warnlog(const std::string& warning, const std::string& msg);
+        void warnlog(const string& warning, const string& msg);
 
         //! Install a logger.
         /*!
@@ -150,16 +147,16 @@ protected:
          *
          * @param logwriter Pointer to a logger object
          * @see Logger.
-         * @ingroup textlogs
+         * @ingroup logGroup
          */
         void setLogger(Logger* logwriter);
 
     protected:
         //! Current list of error messages
-        std::vector<std::string> errorMessage;
+        vector<string> errorMessage;
 
         //! Current pointer to the logwriter
-        std::unique_ptr<Logger> logwriter;
+        unique_ptr<Logger> logwriter;
     };
 
     //! Typedef for thread specific messages
@@ -183,7 +180,7 @@ protected:
         void removeThreadMessages();
 
         //! Typedef for map between a thread and the message
-        typedef std::map<std::thread::id, pMessages_t> threadMsgMap_t;
+        typedef map<std::thread::id, pMessages_t> threadMsgMap_t;
 
     private:
         //! Thread Msg Map
@@ -209,7 +206,7 @@ public:
     static void ApplicationDestroy();
 
     //! @copydoc Messages::addError
-    void addError(const std::string& r, const std::string& msg="") {
+    void addError(const string& r, const string& msg="") {
         pMessenger->addError(r, msg);
     }
 
@@ -224,7 +221,7 @@ public:
     }
 
     //! @copydoc Messages::lastErrorMessage
-    std::string lastErrorMessage() {
+    string lastErrorMessage() {
         return pMessenger->lastErrorMessage();
     }
 
@@ -240,11 +237,11 @@ public:
 
     //!  Add a directory to the data file search path.
     /*!
-     * @ingroup inputfiles
+     * @ingroup inputGroup
      *
      * @param dir  String name for the directory to be added to the search path
      */
-    void addDataDirectory(const std::string& dir);
+    void addDataDirectory(const string& dir);
 
     //! Find an input file.
     /*!
@@ -265,41 +262,47 @@ public:
      *
      * If the file is not found a CanteraError exception is thrown.
      *
-     * @ingroup inputfiles
+     * @ingroup inputGroup
      */
-    std::string findInputFile(const std::string& name);
+    string findInputFile(const string& name);
 
-    //! Get the Cantera data directories
+    //! Get the %Cantera data directories
     /*!
      * This routine returns a string including the names of all the
-     * directories searched by Cantera for data files.
+     * directories searched by %Cantera for data files.
      *
      * @param sep Separator to use between directories in the string
      * @return A string of directories separated by the input sep
      *
-     * @ingroup inputfiles
+     * @ingroup inputGroup
      */
-    std::string getDataDirectories(const std::string& sep) {
+    string getDataDirectories(const string& sep) {
         return boost::algorithm::join(inputDirs, sep);
     }
 
     //! Load an extension implementing user-defined models
     //! @param extType Specifies the interface / language of the extension, for example
     //!     "python"
-    //! @param extName Specifies the name of the extension. The meaning of this
+    //! @param name Specifies the name of the extension. The meaning of this
     //!     parameter depends on the specific extension interface. For example, for
     //!     Python extensions, this is the name of the Python module containing the
     //!     models.
-    //! @since New in Cantera 3.0
-    void loadExtension(const std::string& extType, const std::string& name);
+    //! @since New in %Cantera 3.0
+    void loadExtension(const string& extType, const string& name);
+
+    //! Set the versions of Python to try when loading user-defined extensions,
+    //! in order of preference. Separate multiple versions with commas, for example
+    //! `"3.11,3.10"`.
+    //! @since New in %Cantera 3.0
+    void searchPythonVersions(const string& versions);
 
 #ifdef _WIN32
-    long int readStringRegistryKey(const std::string& keyName, const std::string& valueName,
-                                   std::string& value, const std::string& defaultValue);
+    long int readStringRegistryKey(const string& keyName, const string& valueName,
+                                   string& value, const string& defaultValue);
 #endif
 
     //! @copydoc Messages::writelog
-    void writelog(const std::string& msg) {
+    void writelog(const string& msg) {
         pMessenger->writelog(msg);
     }
 
@@ -309,7 +312,7 @@ public:
     }
 
     //! @copydoc Messages::warnlog
-    void warnlog(const std::string& warning, const std::string& msg) {
+    void warnlog(const string& warning, const string& msg) {
         pMessenger->warnlog(warning, msg);
     }
 
@@ -317,7 +320,7 @@ public:
     //! information (removal version, alternatives) can be specified in
     //! *extra*. Deprecation warnings are printed once per method per
     //! invocation of the application.
-    void warn_deprecated(const std::string& method, const std::string& extra="");
+    void warn_deprecated(const string& method, const string& extra="");
 
     //! Globally disable printing of deprecation warnings. Used primarily to
     //! prevent certain tests from failing.
@@ -336,8 +339,7 @@ public:
     //! @param warning  Warning type; see Logger::warn()
     //! @param method  Name of method triggering the warning
     //! @param extra  Additional information printed for the warning
-    void warn(const std::string& warning,
-              const std::string& method, const std::string& extra="");
+    void warn(const string& warning, const string& method, const string& extra="");
 
     //! Globally disable printing of (user) warnings. Used primarily to
     //! prevent certain tests from failing.
@@ -351,7 +353,7 @@ public:
         return m_suppress_warnings;
     }
 
-    //! Turns Cantera warnings into exceptions. Activated within the test
+    //! Turns %Cantera warnings into exceptions. Activated within the test
     //! suite to make sure that your warning message are being raised.
     void make_warnings_fatal() {
         m_fatal_warnings = true;
@@ -371,17 +373,18 @@ public:
     //! Set definition used for rate constant calculation.
     //! @see Kinetics::getFwdRateConstants()
     /*!
-     * If set to 'false' (default value), rate constants of three-body reactions are
-     * consistent with conventional definitions (for example Eq. 9.75 in Kee, Coltrin
-     * and Glarborg, 'Chemically Reacting Flow', Wiley Interscience, 2003). If set to
-     * 'true', output for rate constants of three-body reactions is multiplied by
-     * third-body concentrations, consistent with Cantera's behavior prior to version 3.0.
+     * If set to `false` (default value), rate constants of three-body reactions are
+     * consistent with conventional definitions (for example Eq. 9.75 in Kee, et al.
+     * @cite kee2003).
+     * If set to `true`, output for rate constants of three-body reactions is
+     * multiplied by third-body concentrations, consistent with %Cantera's behavior
+     * prior to version 3.0.
      */
     void use_legacy_rate_constants(bool legacy=true) {
         m_use_legacy_rate_constants = legacy;
     }
 
-    //! Returns `true` if legacy rate constant definition should be used
+    //! Returns `true` if legacy rate constant definition is used
     bool legacy_rate_constants_used() {
         return m_use_legacy_rate_constants;
     }
@@ -395,7 +398,7 @@ public:
     /*!
      * Delete the memory allocated per thread by Cantera.  It should be called
      * from within the thread just before the thread terminates.  If your
-     * version of Cantera has not been specifically compiled for thread safety
+     * version of %Cantera has not been specifically compiled for thread safety
      * this function does nothing.
      */
     void thread_complete();
@@ -409,41 +412,41 @@ protected:
      * path. It is invoked at startup by appinit(), and never should need to
      * be called by user programs.
      *
-     * The current directory (".") is always searched first. Then, on Windows
-     * platforms, if environment variable COMMONPROGRAMFILES is set (which it
-     * should be on Win XP or Win 2000), then directories under this one will
-     * be added to the search path. The %Cantera Windows installer installs
-     * data files to this location.
+     * The current directory (".") is always searched first. Then, on Windows, the
+     * registry is checked to find the %Cantera installation directory, and the
+     * 'data' subdirectory of the installation directory will be added to the search
+     * path.
      *
-     * On the Mac, directory '/Applications/Cantera/data' is added to the
-     * search path.
-     *
-     * On any platform, if environment variable CANTERA_DATA is set to a
-     * directory name, then this directory is added to the search path.
+     * On any platform, if environment variable CANTERA_DATA is set to a directory
+     * name or a list of directory names separated with the OS-dependent path
+     * separator (that is, ";" on Windows, ":" elsewhere), then these directories will
+     * be added to the search path.
      *
      * Finally, the location where the data files were installed when
      * %Cantera was built is added to the search path.
      *
      * Additional directories may be added by calling function addDirectory.
-     * @ingroup inputfiles
+     * @ingroup inputGroup
      */
     void setDefaultDirectories();
 
     //! Current vector of input directories to search for input files
-    std::vector<std::string> inputDirs;
+    vector<string> inputDirs;
 
-    //! Vector of deprecation warnings that have been emitted (to suppress
-    //! duplicates)
-    std::set<std::string> warnings;
+    //! Versions of Python to consider when attempting to load user extensions
+    vector<string> m_pythonSearchVersions = {"3.14", "3.13", "3.12", "3.11", "3.10"};
 
-    bool m_suppress_deprecation_warnings;
-    bool m_fatal_deprecation_warnings;
-    bool m_suppress_thermo_warnings;
-    bool m_suppress_warnings;
-    bool m_fatal_warnings;
-    bool m_use_legacy_rate_constants;
+    //! Set of deprecation warnings that have been emitted (to suppress duplicates)
+    set<string> warnings;
 
-    std::set<std::pair<std::string, std::string>> m_loaded_extensions;
+    bool m_suppress_deprecation_warnings = false;
+    bool m_fatal_deprecation_warnings = false;
+    bool m_suppress_thermo_warnings = false;
+    bool m_suppress_warnings = false;
+    bool m_fatal_warnings = false;
+    bool m_use_legacy_rate_constants = false;
+
+    set<pair<string, string>> m_loaded_extensions;
 
     ThreadMessages pMessenger;
 

@@ -1,7 +1,7 @@
 /**
  * @file clockWC.h
  *    Declarations for a simple class that implements an Ansi C wall clock timer
- *   (see \ref Cantera::clockWC).
+ *   (see @ref Cantera::clockWC).
  */
 
 // This file is part of Cantera. See License.txt in the top-level directory or
@@ -13,6 +13,8 @@
 #include <time.h>
 namespace Cantera
 {
+
+//! @defgroup globalUtilFuncs Global Utility Functions
 
 //! The class provides the wall clock timer in seconds
 /*!
@@ -60,7 +62,7 @@ public:
      * machines clock() returns type unsigned long (HP) and on others (SUN)
      * it returns type long. An attempt to recover the actual time for clocks
      * which have rolled over is made also. However, it only works if this
-     * function is called fairly regularily during the solution procedure.
+     * function is called fairly regularly during the solution procedure.
      */
     double secondsWC();
 

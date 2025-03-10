@@ -7,14 +7,11 @@
 #include "cantera/numerics/Func1.h"
 #include "cantera/base/ctexceptions.h"
 #include <stdexcept>
-
-#define CANTERA_USE_INTERNAL
-#include "cantera/clib/clib_defs.h"
 #include "Python.h"
 
 typedef double(*callback_wrapper)(double, void*, void**);
 
-//! A class to hold information needed to call Python functions from delgated
+//! A class to hold information needed to call Python functions from delegated
 //! methods (see class Delegator).
 class PyFuncInfo {
 public:
@@ -103,7 +100,7 @@ public:
         Py_XDECREF(m_value);
     }
 
-    std::string getMessage() const {
+    std::string getMessage() const override {
         std::string msg;
 
         PyObject* name = PyObject_GetAttrString(m_type, "__name__");
@@ -133,7 +130,7 @@ public:
         return msg;
     }
 
-    virtual std::string getClass() const {
+    std::string getClass() const override {
         return "Exception";
     }
 
@@ -151,7 +148,7 @@ public:
         m_pyobj(pyobj) {
     }
 
-    double eval(double t) const {
+    double eval(double t) const override {
         void* err[2] = {0, 0};
         double y = m_callback(t, m_pyobj, err);
         if (err[0]) {
@@ -165,14 +162,18 @@ private:
     void* m_pyobj;
 };
 
+// @todo Remove the second case here when Cython 0.29.x is no longer supported
+#if defined(CYTHON_HEX_VERSION) && CYTHON_HEX_VERSION >= 0x001DFFFF
+extern PyObject* pyCanteraError;
+#else
 extern "C" {
-    CANTERA_CAPI PyObject* pyCanteraError;
+    extern PyObject* pyCanteraError;
 }
-
+#endif
 
 
 //! Take a function which requires Python function information (as a PyFuncInfo
-//! object) and capture that object to generate a function that does not reqire
+//! object) and capture that object to generate a function that does not require
 //! any Python-specific arguments.
 //!
 //! The inner function is responsible for catching Python exceptions and
@@ -224,6 +225,8 @@ inline int translate_exception()
         PyErr_SetObject(exn.m_type, exn.m_value);
     } catch (const std::out_of_range& exn) {
         PyErr_SetString(PyExc_IndexError, exn.what());
+    } catch (const Cantera::NotImplementedError& exn) {
+        PyErr_SetString(PyExc_NotImplementedError, exn.what());
     } catch (const Cantera::CanteraError& exn) {
         PyErr_SetString(pyCanteraError, exn.what());
     } catch (const std::exception& exn) {

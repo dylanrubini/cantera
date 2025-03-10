@@ -7,6 +7,7 @@
 from libcpp.unordered_map cimport unordered_map
 
 from .ctcxx cimport *
+from .units cimport UnitSystem, CxxUnits
 
 cdef extern from "cantera/base/AnyMap.h" namespace "Cantera":
     cdef cppclass CxxAnyValue "Cantera::AnyValue"
@@ -36,7 +37,8 @@ cdef extern from "cantera/base/AnyMap.h" namespace "Cantera":
         void clear()
         void update(CxxAnyMap& other, cbool)
         string keys_str()
-        void applyUnits()
+        void applyUnits() except +translate_exception
+        shared_ptr[CxxUnitSystem] unitsShared()
 
     cdef cppclass CxxAnyValue "Cantera::AnyValue":
         CxxAnyValue()
@@ -49,7 +51,11 @@ cdef extern from "cantera/base/AnyMap.h" namespace "Cantera":
         CxxAnyValue& operator=[T](vector[T]) except +translate_exception
         unordered_map[string, CxxAnyMap*] asMap(string) except +translate_exception
         CxxAnyMap& getMapWhere(string, string) except +translate_exception
+        void setQuantity(double, string&, cbool) except +translate_exception
+        void setQuantity(vector[double]&, string&) except +translate_exception
+        void setQuantity(double, CxxUnits&) except +translate_exception
         T& asType "as" [T]() except +translate_exception
+        vector[T]& asVector[T]() except +translate_exception
         string type_str()
         cbool empty()
         cbool isType "is" [T]()
@@ -72,17 +78,31 @@ cdef extern from "cantera/base/global.h" namespace "Cantera":
     cdef void Cxx_suppress_thermo_warnings "Cantera::suppress_thermo_warnings" (cbool)
     cdef void Cxx_use_legacy_rate_constants "Cantera::use_legacy_rate_constants" (cbool)
     cdef string CxxGitCommit "Cantera::gitCommit" ()
+    cdef string CxxVersion "Cantera::version" ()
+    cdef cbool CxxUsesHDF5 "Cantera::usesHDF5" ()
     cdef cbool CxxDebugModeEnabled "Cantera::debugModeEnabled" ()
+    cdef void CxxPrintStackTraceOnSegfault "Cantera::printStackTraceOnSegfault" ()
+
+
+cdef extern from "cantera/base/ctexceptions.h" namespace "Cantera":
+    cdef cppclass CxxCanteraError "Cantera::CanteraError":
+        CxxCanteraError()
+        @staticmethod
+        void setStackTraceDepth(int)
 
 
 cdef extern from "cantera/cython/utils_utils.h":
-    cdef string get_cantera_version()
-    cdef int get_sundials_version()
+    cdef string get_cantera_version_py()
+    cdef string get_cantera_git_commit_py()
+    cdef string get_sundials_version()
     cdef cppclass CxxPythonLogger "PythonLogger":
         pass
 
     cdef void CxxSetLogger "setLogger" (CxxPythonLogger*)
 
+cdef class AnyMap(dict):
+    cdef _set_CxxUnitSystem(self, shared_ptr[CxxUnitSystem] units)
+    cdef UnitSystem unitsystem
 
 cdef string stringify(x) except *
 cdef pystr(string x)
@@ -90,5 +110,8 @@ cdef pystr(string x)
 cdef comp_map_to_dict(Composition m)
 cdef Composition comp_map(X) except *
 
-cdef CxxAnyMap dict_to_anymap(dict data, cbool hyphenize=*) except *
-cdef anymap_to_dict(CxxAnyMap& m)
+cdef CxxAnyMap py_to_anymap(data, cbool hyphenize=*) except *
+cdef anymap_to_py(CxxAnyMap& m)
+
+cdef CxxAnyValue python_to_anyvalue(item, name=*) except *
+cdef anyvalue_to_python(string name, CxxAnyValue& v)

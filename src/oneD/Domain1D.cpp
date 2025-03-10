@@ -9,32 +9,36 @@
 #include "cantera/oneD/MultiJac.h"
 #include "cantera/oneD/refine.h"
 #include "cantera/base/AnyMap.h"
-
-#include <set>
-
-using namespace std;
+#include "cantera/base/Solution.h"
+#include "cantera/base/SolutionArray.h"
+#include "cantera/thermo/ThermoPhase.h"
 
 namespace Cantera
 {
 
-Domain1D::Domain1D(size_t nv, size_t points, double time) :
-    m_rdt(0.0),
-    m_nv(0),
-    m_container(0),
-    m_index(npos),
-    m_type(0),
-    m_iloc(0),
-    m_jstart(0),
-    m_left(0),
-    m_right(0),
-    m_bw(-1),
-    m_force_full_update(false)
+Domain1D::Domain1D(size_t nv, size_t points, double time)
 {
     resize(nv, points);
 }
 
 Domain1D::~Domain1D()
 {
+    if (m_solution) {
+        m_solution->thermo()->removeSpeciesLock();
+    }
+}
+
+void Domain1D::setSolution(shared_ptr<Solution> sol)
+{
+    if (!sol || !(sol->thermo())) {
+        throw CanteraError("Domain1D::setSolution",
+            "Missing or incomplete Solution object.");
+    }
+    if (m_solution) {
+        m_solution->thermo()->removeSpeciesLock();
+    }
+    m_solution = sol;
+    m_solution->thermo()->addSpeciesLock();
 }
 
 void Domain1D::resize(size_t nv, size_t np)
@@ -43,7 +47,7 @@ void Domain1D::resize(size_t nv, size_t np)
     // new grid refiner is required.
     if (nv != m_nv || !m_refiner) {
         m_nv = nv;
-        m_refiner.reset(new Refiner(*this));
+        m_refiner = make_unique<Refiner>(*this);
     }
     m_nv = nv;
     m_name.resize(m_nv,"");
@@ -60,7 +64,7 @@ void Domain1D::resize(size_t nv, size_t np)
     locate();
 }
 
-std::string Domain1D::componentName(size_t n) const
+string Domain1D::componentName(size_t n) const
 {
     if (m_name[n] != "") {
         return m_name[n];
@@ -69,7 +73,7 @@ std::string Domain1D::componentName(size_t n) const
     }
 }
 
-size_t Domain1D::componentIndex(const std::string& name) const
+size_t Domain1D::componentIndex(const string& name) const
 {
     for (size_t n = 0; n < nComponents(); n++) {
         if (name == componentName(n)) {
@@ -80,7 +84,7 @@ size_t Domain1D::componentIndex(const std::string& name) const
                        "no component named "+name);
 }
 
-void Domain1D::setTransientTolerances(doublereal rtol, doublereal atol, size_t n)
+void Domain1D::setTransientTolerances(double rtol, double atol, size_t n)
 {
     if (n == npos) {
         for (n = 0; n < m_nv; n++) {
@@ -93,7 +97,7 @@ void Domain1D::setTransientTolerances(doublereal rtol, doublereal atol, size_t n
     }
 }
 
-void Domain1D::setSteadyTolerances(doublereal rtol, doublereal atol, size_t n)
+void Domain1D::setSteadyTolerances(double rtol, double atol, size_t n)
 {
     if (n == npos) {
         for (n = 0; n < m_nv; n++) {
@@ -109,17 +113,17 @@ void Domain1D::setSteadyTolerances(doublereal rtol, doublereal atol, size_t n)
 void Domain1D::needJacUpdate()
 {
     if (m_container) {
-        m_container->jacobian().setAge(10000);
+        m_container->getJacobian()->setAge(10000);
         m_container->saveStats();
     }
 }
 
-AnyMap Domain1D::serialize(const double* soln) const
+AnyMap Domain1D::getMeta() const
 {
-    auto wrap_tols = [this](const vector_fp& tols) {
+    auto wrap_tols = [this](const vector<double>& tols) {
         // If all tolerances are the same, just store the scalar value.
         // Otherwise, store them by component name
-        std::set<double> unique_tols(tols.begin(), tols.end());
+        set<double> unique_tols(tols.begin(), tols.end());
         if (unique_tols.size() == 1) {
             return AnyValue(tols[0]);
         } else {
@@ -131,6 +135,7 @@ AnyMap Domain1D::serialize(const double* soln) const
         }
     };
     AnyMap state;
+    state["type"] = type();
     state["points"] = static_cast<long int>(nPoints());
     if (nComponents() && nPoints()) {
         state["tolerances"]["transient-abstol"] = wrap_tols(m_atol_ts);
@@ -141,9 +146,33 @@ AnyMap Domain1D::serialize(const double* soln) const
     return state;
 }
 
-void Domain1D::restore(const AnyMap& state, double* soln, int loglevel)
+shared_ptr<SolutionArray> Domain1D::toArray(bool normalize) const {
+    if (!m_state) {
+        throw CanteraError("Domain1D::toArray",
+            "Domain needs to be installed in a container before calling asArray.");
+    }
+    auto ret = asArray(m_state->data() + m_iloc);
+    if (normalize) {
+        ret->normalize();
+    }
+    return ret;
+}
+
+void Domain1D::fromArray(const shared_ptr<SolutionArray>& arr)
 {
-    auto set_tols = [&](const AnyValue& tols, const string& which, vector_fp& out)
+    if (!m_state) {
+        throw CanteraError("Domain1D::fromArray",
+            "Domain needs to be installed in a container before calling fromArray.");
+    }
+    resize(nComponents(), arr->size());
+    m_container->resize();
+    fromArray(*arr, m_state->data() + m_iloc);
+    _finalize(m_state->data() + m_iloc);
+}
+
+void Domain1D::setMeta(const AnyMap& meta)
+{
+    auto set_tols = [&](const AnyValue& tols, const string& which, vector<double>& out)
     {
         if (!tols.hasKey(which)) {
             return;
@@ -153,19 +182,19 @@ void Domain1D::restore(const AnyMap& state, double* soln, int loglevel)
             out.assign(nComponents(), tol.asDouble());
         } else {
             for (size_t i = 0; i < nComponents(); i++) {
-                std::string name = componentName(i);
+                string name = componentName(i);
                 if (tol.hasKey(name)) {
                     out[i] = tol[name].asDouble();
-                } else if (loglevel) {
-                    warn_user("Domain1D::restore", "No {} found for component '{}'",
+                } else {
+                    warn_user("Domain1D::setMeta", "No {} found for component '{}'",
                               which, name);
                 }
             }
         }
     };
 
-    if (state.hasKey("tolerances")) {
-        const auto& tols = state["tolerances"];
+    if (meta.hasKey("tolerances")) {
+        const auto& tols = meta["tolerances"];
         set_tols(tols, "transient-abstol", m_atol_ts);
         set_tols(tols, "transient-reltol", m_rtol_ts);
         set_tols(tols, "steady-abstol", m_atol_ss);
@@ -193,7 +222,7 @@ void Domain1D::locate()
     }
 }
 
-void Domain1D::setupGrid(size_t n, const doublereal* z)
+void Domain1D::setupGrid(size_t n, const double* z)
 {
     if (n > 1) {
         resize(m_nv, n);
@@ -203,7 +232,7 @@ void Domain1D::setupGrid(size_t n, const doublereal* z)
     }
 }
 
-void Domain1D::showSolution(const doublereal* x)
+void Domain1D::show(const double* x)
 {
     size_t nn = m_nv/5;
     for (size_t i = 0; i < nn; i++) {
@@ -239,7 +268,7 @@ void Domain1D::showSolution(const doublereal* x)
     writelog("\n");
 }
 
-void Domain1D::setProfile(const std::string& name, double* values, double* soln)
+void Domain1D::setProfile(const string& name, double* values, double* soln)
 {
     for (size_t n = 0; n < m_nv; n++) {
         if (name == componentName(n)) {
@@ -252,7 +281,7 @@ void Domain1D::setProfile(const std::string& name, double* values, double* soln)
     throw CanteraError("Domain1D::setProfile", "unknown component: "+name);
 }
 
-void Domain1D::_getInitialSoln(doublereal* x)
+void Domain1D::_getInitialSoln(double* x)
 {
     for (size_t j = 0; j < m_points; j++) {
         for (size_t n = 0; n < m_nv; n++) {
@@ -261,7 +290,7 @@ void Domain1D::_getInitialSoln(doublereal* x)
     }
 }
 
-doublereal Domain1D::initialValue(size_t n, size_t j)
+double Domain1D::initialValue(size_t n, size_t j)
 {
     throw NotImplementedError("Domain1D::initialValue");
 }

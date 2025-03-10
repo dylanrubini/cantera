@@ -19,6 +19,7 @@ cdef enum ThermoBasisType:
     molar_basis = 1
 
 ctypedef CxxPlasmaPhase* CxxPlasmaPhasePtr
+ctypedef CxxSurfPhase* CxxSurfPhasePtr
 
 class ThermoModelMethodError(Exception):
     """Exception raised for an invalid method used by a thermo model
@@ -59,7 +60,7 @@ cdef class Species:
         tran = ct.GasTransportData()
         tran.set_customary_units('nonlinear', 3.75, 141.40, 0.0, 2.60, 13.00)
         ch4.transport = tran
-        gas = ct.Solution(thermo='IdealGas', species=[ch4])
+        gas = ct.Solution(thermo='ideal-gas', species=[ch4])
 
     The static methods `list_from_file` and `list_from_yaml` can be used to create
     `Species` objects from existing definitions in the YAML format. Either of the
@@ -119,7 +120,7 @@ cdef class Species:
         :param data:
             A dictionary corresponding to the YAML representation.
         """
-        cdef CxxAnyMap any_map = dict_to_anymap(data)
+        cdef CxxAnyMap any_map = py_to_anymap(data)
         cxx_species = CxxNewSpecies(any_map)
         species = Species(init=False)
         species._assign(cxx_species)
@@ -229,7 +230,7 @@ cdef class Species:
         """
         def __get__(self):
             cdef CxxThermoPhase* phase = self._phase.thermo if self._phase else NULL
-            return anymap_to_dict(self.species.parameters(phase))
+            return anymap_to_py(self.species.parameters(phase))
 
     def update_user_data(self, data):
         """
@@ -237,7 +238,7 @@ cdef class Species:
         YAML phase definition files with `Solution.write_yaml` or in the data returned
         by `input_data`. Existing keys with matching names are overwritten.
         """
-        self.species.input.update(dict_to_anymap(data), False)
+        self.species.input.update(py_to_anymap(data), False)
 
     def clear_user_data(self):
         """
@@ -268,7 +269,10 @@ cdef class ThermoPhase(_SolutionBase):
             self.thermo_basis = mass_basis
         # In composite objects, the ThermoPhase constructor needs to be called first
         # to prevent instantiation of stand-alone 'Kinetics' or 'Transport' objects.
-        # The following is used as a sentinel.
+        # The following is used as a sentinel. After initialization, the _references
+        # object is used to track whether the ThermoPhase is being used by other
+        # objects that require the number of species to remain constant and do not
+        # have C++ implementations (e.g. Quantity objects).
         self._references = weakref.WeakKeyDictionary()
         # validate plasma phase
         self._enable_plasma = False
@@ -298,6 +302,13 @@ cdef class ThermoPhase(_SolutionBase):
 
         >>> phase()
         >>> print(phase.report())
+
+        :param show_thermo:
+            A Boolean argument specifying whether to show phase thermodynamic
+            information in the ouptut.
+        :param threshold:
+            The threshold used to clip data in the output. Values below the threshold
+            are not displayed.
         """
         return pystr(self.thermo.report(bool(show_thermo), threshold))
 
@@ -325,6 +336,11 @@ cdef class ThermoPhase(_SolutionBase):
         """
         def __get__(self):
             return self.thermo.isCompressible()
+
+    @property
+    def _native_mode(self):
+        """  Return string acronym representing native state """
+        return pystr(self.thermo.nativeMode())
 
     property _native_state:
         """
@@ -565,8 +581,8 @@ cdef class ThermoPhase(_SolutionBase):
         automatically.
         """
         if self._references:
-            raise CanteraError('Cannot add species to ThermoPhase object if it'
-                ' is linked to a Reactor, Domain1D (flame), or Mixture object.')
+            raise CanteraError('Cannot add species to ThermoPhase object because it'
+                ' is being used by a Quantity object.')
         self.thermo.addUndefinedElements()
         self.thermo.addSpecies(species._species)
         species._phase = self
@@ -733,8 +749,8 @@ cdef class ThermoPhase(_SolutionBase):
         ``basis='mass'`` means mass fractions. The fuel/oxidizer mixture can be
         be diluted by a ``diluent`` based on a mixing ``fraction``. The amount of
         diluent is quantified as a fraction of fuel, oxidizer or the fuel/oxidizer
-        mixture. For more information, see `Python example
-        <https://cantera.org/examples/python/thermo/equivalenceRatio.py.html>`_ ::
+        mixture. For more information, see the :doc:`Python example
+        </examples/python/thermo/equivalenceRatio>` ::
 
             >>> gas.set_equivalence_ratio(0.5, 'CH4', 'O2:1.0, N2:3.76', basis='mole')
             >>> gas.mass_fraction_dict()
@@ -832,7 +848,7 @@ cdef class ThermoPhase(_SolutionBase):
         if Z_fuel == 0.0 and fraction_type == "fuel":
             raise ValueError("No fuel in the fuel/oxidizer mixture")
 
-        if Z_fuel == 1.0 and fraction_type == "oxidzer":
+        if Z_fuel == 1.0 and fraction_type == "oxidizer":
             raise ValueError("No oxidizer in the fuel/oxidizer mixture")
 
         if basis == "mass": # for mass basis, it is straight forward
@@ -876,9 +892,8 @@ cdef class ThermoPhase(_SolutionBase):
         H to H2O and S to SO2. Other elements are assumed not to participate in
         oxidation (that is, N ends up as N2). The ``basis`` determines the composition
         of fuel and oxidizer: ``basis='mole'`` (default) means mole fractions,
-        ``basis='mass'`` means mass fractions. For more information, see `Python
-        example
-        <https://cantera.org/examples/python/thermo/equivalenceRatio.py.html>`_ ::
+        ``basis='mass'`` means mass fractions. For more information, see the
+        :doc:`Python example </examples/python/thermo/equivalenceRatio>` ::
 
             >>> gas.set_mixture_fraction(0.5, 'CH4', 'O2:1.0, N2:3.76')
             >>> gas.mass_fraction_dict()
@@ -931,8 +946,8 @@ cdef class ThermoPhase(_SolutionBase):
         In case certain species like inert diluents should be ignored, a
         list of species can be provided with ``include_species``. This means that
         only these species are considered for the computation of the equivalence
-        ratio. For more information, see `Python example
-        <https://cantera.org/examples/python/thermo/equivalenceRatio.py.html>`_ ::
+        ratio. For more information, see the
+        :doc:`Python example </examples/python/thermo/equivalenceRatio>` ::
 
             >>> gas.set_equivalence_ratio(0.5, fuel='CH3:0.5, CH3OH:.5, N2:0.125', oxidizer='O2:0.21, N2:0.79, NO:0.01')
             >>> gas.equivalence_ratio(fuel='CH3:0.5, CH3OH:.5, N2:0.125', oxidizer='O2:0.21, N2:0.79, NO:0.01')
@@ -995,8 +1010,7 @@ cdef class ThermoPhase(_SolutionBase):
         and :math:`Z_{\mathrm{mass},\mathrm{fuel}}` are the elemental mass fractions of
         the oxidizer and fuel, or from the Bilger mixture fraction
         (``element="Bilger"``), which considers the elements C, S, H and O
-        (R. W. Bilger, "Turbulent jet diffusion flames," Prog. Energy Combust. Sci.,
-        109-131 (1979)). The Bilger mixture fraction is computed by default:
+        :cite:p:`bilger1979`. The Bilger mixture fraction is computed by default:
 
         .. math:: Z_m = Z_{\mathrm{Bilger}} = \frac{\beta-\beta_{\mathrm{ox}}}
             {\beta_{\mathrm{fuel}}-\beta_{\mathrm{ox}}}
@@ -1007,8 +1021,8 @@ cdef class ThermoPhase(_SolutionBase):
             - \frac{Z_O}{M_O}
 
         and :math:`M_m` the atomic weight of element :math:`m`.
-        For more information, see `Python example
-        <https://cantera.org/examples/python/thermo/equivalenceRatio.py.html>`_.::
+        For more information, see the
+        :doc:`Python example </examples/python/thermo/equivalenceRatio>` ::
 
             >>> gas.set_mixture_fraction(0.5, 'CH3:0.5, CH3OH:0.5, N2:0.125', 'O2:0.21, N2:0.79, NO:0.01')
             >>> gas.mixture_fraction('CH3:0.5, CH3OH:0.5, N2:0.125', 'O2:0.21, N2:0.79, NO:.01')
@@ -1154,6 +1168,7 @@ cdef class ThermoPhase(_SolutionBase):
         cdef pair[string,double] item
         X = self.thermo.getMoleFractionsByName(threshold)
         return {pystr(item.first):item.second for item in X}
+
 
     ######## Read-only thermodynamic properties ########
 
@@ -1318,6 +1333,15 @@ cdef class ThermoPhase(_SolutionBase):
         def __get__(self):
             return self.thermo.satTemperature(self.P)
 
+    property auxiliary_data:
+        """
+        Intermediate or model-specific parameters used by particular
+        derived classes.
+        """
+        def __get__(self):
+            cdef CxxAnyMap values = self.thermo.getAuxiliaryData()
+            return anymap_to_py(values)
+
     ######## Methods to get/set the complete thermodynamic state ########
 
     property state_size:
@@ -1351,7 +1375,7 @@ cdef class ThermoPhase(_SolutionBase):
             assert len(values) == 2, 'incorrect number of values'
             T = values[0] if values[0] is not None else self.T
             D = values[1] if values[1] is not None else self.density
-            self.thermo.setState_TR(T, D * self._mass_factor())
+            self.thermo.setState_TD(T, D * self._mass_factor())
 
     property TDX:
         """
@@ -1365,7 +1389,7 @@ cdef class ThermoPhase(_SolutionBase):
             T = values[0] if values[0] is not None else self.T
             D = values[1] if values[1] is not None else self.density
             self.X = values[2]
-            self.thermo.setState_TR(T, D * self._mass_factor())
+            self.thermo.setState_TD(T, D * self._mass_factor())
 
     property TDY:
         """
@@ -1379,7 +1403,7 @@ cdef class ThermoPhase(_SolutionBase):
             T = values[0] if values[0] is not None else self.T
             D = values[1] if values[1] is not None else self.density
             self.Y = values[2]
-            self.thermo.setState_TR(T, D * self._mass_factor())
+            self.thermo.setState_TD(T, D * self._mass_factor())
 
     property TP:
         """Get/Set temperature [K] and pressure [Pa]."""
@@ -1465,7 +1489,7 @@ cdef class ThermoPhase(_SolutionBase):
             assert len(values) == 2, 'incorrect number of values'
             D = values[0] if values[0] is not None else self.density
             P = values[1] if values[1] is not None else self.P
-            self.thermo.setState_RP(D*self._mass_factor(), P)
+            self.thermo.setState_DP(D*self._mass_factor(), P)
 
     property DPX:
         """Get/Set density [kg/m^3], pressure [Pa], and mole fractions."""
@@ -1476,7 +1500,7 @@ cdef class ThermoPhase(_SolutionBase):
             D = values[0] if values[0] is not None else self.density
             P = values[1] if values[1] is not None else self.P
             self.X = values[2]
-            self.thermo.setState_RP(D*self._mass_factor(), P)
+            self.thermo.setState_DP(D*self._mass_factor(), P)
 
     property DPY:
         """Get/Set density [kg/m^3], pressure [Pa], and mass fractions."""
@@ -1487,7 +1511,7 @@ cdef class ThermoPhase(_SolutionBase):
             D = values[0] if values[0] is not None else self.density
             P = values[1] if values[1] is not None else self.P
             self.Y = values[2]
-            self.thermo.setState_RP(D*self._mass_factor(), P)
+            self.thermo.setState_DP(D*self._mass_factor(), P)
 
     property HP:
         """Get/Set enthalpy [J/kg or J/kmol] and pressure [Pa]."""
@@ -1702,6 +1726,11 @@ cdef class ThermoPhase(_SolutionBase):
         def __get__(self):
             return self.thermo.thermalExpansionCoeff()
 
+    property sound_speed:
+        """Speed of sound [m/s]."""
+        def __get__(self):
+            return self.thermo.soundSpeed()
+
     property min_temp:
         """
         Minimum temperature for which the thermodynamic data for the phase are
@@ -1746,6 +1775,13 @@ cdef class ThermoPhase(_SolutionBase):
             if not self._enable_plasma:
                 raise ThermoModelMethodError(self.thermo_model)
             self.plasma.setElectronTemperature(value)
+
+    property Pe:
+        """Get electron Pressure [Pa]."""
+        def __get__(self):
+            if not self._enable_plasma:
+                raise ThermoModelMethodError(self.thermo_model)
+            return self.plasma.electronPressure()
 
     def set_discretized_electron_energy_distribution(self, levels, distribution):
         """
@@ -1826,7 +1862,7 @@ cdef class ThermoPhase(_SolutionBase):
         def __set__(self, distribution_type):
             if not self._enable_plasma:
                 raise ThermoModelMethodError(self.thermo_model)
-            self.plasma.setElectronEnergyDistributionType(distribution_type)
+            self.plasma.setElectronEnergyDistributionType(stringify(distribution_type))
 
     property mean_electron_energy:
         """ Mean electron energy [eV] """
@@ -1851,7 +1887,7 @@ cdef class ThermoPhase(_SolutionBase):
             self.plasma.setQuadratureMethod(stringify(method))
 
     property normalize_electron_energy_distribution_enabled:
-        """ Automatically normalize electron energy distribuion """
+        """ Automatically normalize electron energy distribution """
         def __get__(self):
             if not self._enable_plasma:
                 raise ThermoModelMethodError(self.thermo_model)
@@ -1861,13 +1897,29 @@ cdef class ThermoPhase(_SolutionBase):
                 raise ThermoModelMethodError(self.thermo_model)
             self.plasma.enableNormalizeElectronEnergyDist(enable)
 
+    property electron_species_name:
+        """ Electron species name """
+        def __get__(self):
+            if not self._enable_plasma:
+                raise ThermoModelMethodError(self.thermo_model)
+            return pystr(self.plasma.electronSpeciesName())
+
+    property elastic_power_loss:
+        """
+        Elastic power loss (J/s/m3)
+        .. versionadded:: 3.2
+        """
+        def __get__(self):
+            if not self._enable_plasma:
+                raise ThermoModelMethodError(self.thermo_model)
+            return self.plasma.elasticPowerLoss()
 
 cdef class InterfacePhase(ThermoPhase):
-    """ A class representing a surface or edge phase"""
+    """ A class representing a surface, edge phase """
     def __cinit__(self, *args, **kwargs):
         if not kwargs.get("init", True):
             return
-        if pystr(self.thermo.type()) not in ("Surf", "Edge"):
+        if not dynamic_cast[CxxSurfPhasePtr](self.thermo):
             raise TypeError('Underlying ThermoPhase object is of the wrong type.')
         self.surf = <CxxSurfPhase*>(self.thermo)
 
@@ -1942,7 +1994,7 @@ cdef class PureFluid(ThermoPhase):
         def __set__(self, Q):
             if (self.P >= self.critical_pressure or
                 abs(self.P-self.P_sat)/self.P > 1e-4):
-                raise ValueError('Cannot set vapor quality outside the'
+                raise ValueError('Cannot set vapor quality outside the '
                                  'two-phase region')
             self.thermo.setState_Psat(self.P, Q)
 
@@ -2103,9 +2155,8 @@ cdef class PureFluid(ThermoPhase):
         def __get__(self):
             return self.s, self.v, self.Q
 
-# TODO: Remove these helper methods when support for Python 3.8 is dropped. Python 3.9
-# allows the classmethod and property decorators to be chained, so these can be
-# implemented as properties in the Element class.
+# Helper methods for the implementation of properties of class Element.
+# @todo These can be inlined once Support for Cython 0.29 is dropped.
 def _element_symbols():
     syms = elementSymbols()
     return tuple(pystr(s) for s in syms)
@@ -2160,12 +2211,10 @@ class Element:
     #: The number of named elements (not isotopes) defined in Cantera
     num_elements_defined = numElementsDefined()
 
-    #: A list of the symbols of all the elements (not isotopes) defined
-    #: in Cantera
+    #: A list of the symbols of all the elements (not isotopes) defined in Cantera
     element_symbols = _element_symbols()
 
-    #: A list of the names of all the elements (not isotopes) defined
-    #: in Cantera
+    #: A list of the names of all the elements (not isotopes) defined in Cantera
     element_names = _element_names()
 
     def __init__(self, arg):
