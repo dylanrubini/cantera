@@ -137,6 +137,7 @@ void FlowReactor::getStateDae(double* y, double* ydot)
         for (size_t i = 0; i < m_nsp; ++i) {
             ydot[3] -= m_hk[i] * (m_wdot[i] + hydraulic * m_sdot[i]);
         }
+        ydot[3] += m_Qdot;
     } else {
         ydot[3] = 0;
     }
@@ -201,6 +202,8 @@ void FlowReactor::updateState(double* y)
     m_thermo->setMassFractions_NoNorm(mss);
     m_thermo->setState_TP(m_T, m_P);
 
+    // walls get updated
+    updateConnected(false);
     // update surface
     updateSurfaceState(y + m_nsp + m_offset_Y);
 
@@ -247,6 +250,9 @@ void FlowReactor::evalDae(double time, double* y, double* ydot, double* residual
 {
     m_thermo->restoreState(m_state);
 
+    // In reality "time" is actually distance for FlowReactor()s
+    evalWalls(time);
+
     evalSurfaces(ydot + m_nsp + 4, m_sdot.data());
     const vector<double>& mw = m_thermo->molecularWeights();
     double sk_wk = 0;
@@ -291,6 +297,7 @@ void FlowReactor::evalDae(double time, double* y, double* ydot, double* residual
         for (size_t i = 0; i < m_nsp; ++i) {
             residual[3] += m_hk[i] * (m_wdot[i] + hydraulic * m_sdot[i]);
         }
+        residual[3] -= m_Qdot;
     } else {
         residual[3] = dTdz;
     }
